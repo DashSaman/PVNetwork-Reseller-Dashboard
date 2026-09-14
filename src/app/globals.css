@@ -1,0 +1,283 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Vazirmatn", system-ui, sans-serif;
+  --font-mono: "Vazirmatn", ui-monospace, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  /* رنگ‌های برند — نارنجی و فیروزه‌ای همراه اول */
+  --color-brand: var(--brand);
+  --color-brand-deep: var(--brand-deep);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-orange: var(--brand-orange);
+  --color-brand-orange-soft: var(--brand-orange-soft);
+}
+
+/* تم روشن حرفه‌ای — نارنجی + فیروزه‌ای (همراه اول) */
+:root {
+  --radius: 0.85rem;
+
+  --brand: #0f9e99;          /* فیروزه‌ای همراه اول */
+  --brand-deep: #0b7f7b;
+  --brand-soft: #e6f7f6;
+  --brand-orange: #f37021;   /* نارنجی همراه اول */
+  --brand-orange-soft: #fef0e6;
+
+  --background: #f4f6f8;
+  --foreground: #1c2430;
+  --card: #ffffff;
+  --card-foreground: #1c2430;
+  --popover: #ffffff;
+  --popover-foreground: #1c2430;
+  --primary: #0f9e99;
+  --primary-foreground: #ffffff;
+  --secondary: #eef1f4;
+  --secondary-foreground: #24303e;
+  --muted: #eef1f4;
+  --muted-foreground: #64748b;
+  --accent: #e6f7f6;
+  --accent-foreground: #0b7f7b;
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --border: #e3e8ee;
+  --input: #e3e8ee;
+  --ring: #0f9e99;
+  --chart-1: #0f9e99;
+  --chart-2: #f37021;
+  --chart-3: #6366f1;
+  --chart-4: #f59e0b;
+  --chart-5: #8b5cf6;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #1c2430;
+  --sidebar-primary: #0f9e99;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef1f4;
+  --sidebar-accent-foreground: #1c2430;
+  --sidebar-border: #e3e8ee;
+  --sidebar-ring: #0f9e99;
+  --grid-line: #e3e8ee;      /* خطوط شبکه نمودارها */
+  --tick-text: #64748b;      /* متن محور نمودارها */
+}
+
+/* تم تاریک (دارک مود) — سرمه‌ای عمیق با نارنجی/فیروزه‌ای درخشان */
+.dark {
+  --brand: #2dd4bf;          /* فیروزه‌ای روشن‌تر برای خوانایی در تاریکی */
+  --brand-deep: #5eead4;
+  --brand-soft: rgba(45, 212, 191, 0.12);
+  --brand-orange: #fb8b3c;   /* نارنجی روشن‌تر */
+  --brand-orange-soft: rgba(251, 139, 60, 0.14);
+
+  --background: #0b1119;
+  --foreground: #e6ecf3;
+  --card: #101927;
+  --card-foreground: #e6ecf3;
+  --popover: #101927;
+  --popover-foreground: #e6ecf3;
+  --primary: #2dd4bf;
+  --primary-foreground: #06231f;
+  --secondary: #1a2534;
+  --secondary-foreground: #d4dde8;
+  --muted: #1a2534;
+  --muted-foreground: #8b98a9;
+  --accent: rgba(45, 212, 191, 0.12);
+  --accent-foreground: #5eead4;
+  --destructive: #f2555a;
+  --destructive-foreground: #ffffff;
+  --border: #223047;
+  --input: #223047;
+  --ring: #2dd4bf;
+  --chart-1: #2dd4bf;
+  --chart-2: #fb8b3c;
+  --chart-3: #818cf8;
+  --chart-4: #fbbf24;
+  --chart-5: #a78bfa;
+  --sidebar: #101927;
+  --sidebar-foreground: #e6ecf3;
+  --sidebar-primary: #2dd4bf;
+  --sidebar-primary-foreground: #06231f;
+  --sidebar-accent: #1a2534;
+  --sidebar-accent-foreground: #d4dde8;
+  --sidebar-border: #223047;
+  --sidebar-ring: #2dd4bf;
+  --grid-line: #223047;
+  --tick-text: #8b98a9;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  ::selection {
+    background: rgba(15, 158, 153, 0.22);
+  }
+}
+
+/* اسکرول‌بار سفارشی */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #2c3d57;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3d5273;
+}
+
+/* اعداد لاتین در ورودی‌ها */
+.latin-input {
+  direction: ltr;
+  text-align: left;
+}
+
+/* گرادیان برند: نارنجی → فیروزه‌ای */
+.brand-gradient {
+  background: linear-gradient(120deg, #0f9e99 0%, #0d8a8f 35%, #f37021 100%);
+}
+.dark .brand-gradient {
+  background: linear-gradient(120deg, #14b8a6 0%, #0d9488 35%, #f97316 100%);
+}
+.brand-gradient-text {
+  background: linear-gradient(100deg, #0f9e99 20%, #f37021 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.dark .brand-gradient-text {
+  background: linear-gradient(100deg, #2dd4bf 20%, #fb8b3c 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* کارت با سایه لطیف */
+.card-soft {
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.04),
+    0 8px 24px -12px rgba(16, 24, 40, 0.1);
+}
+.dark .card-soft {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 8px 24px -12px rgba(0, 0, 0, 0.55);
+}
+
+/* لکه‌های رنگی پس‌زمینه صفحه ورود */
+.bg-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.35;
+  pointer-events: none;
+}
+.dark .bg-blob {
+  opacity: 0.18;
+}
+
+/* کلاس‌های کمکی رنگ وضعیت — سازگار با هر دو تم */
+.tone-ok {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.dark .tone-ok {
+  color: #34d399;
+}
+.tone-warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+  border-color: rgba(245, 158, 11, 0.28);
+}
+.dark .tone-warn {
+  color: #fbbf24;
+}
+.tone-danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.25);
+}
+.dark .tone-danger {
+  color: #f87171;
+}
+.tone-muted {
+  background: rgba(100, 116, 139, 0.1);
+  color: #64748b;
+  border-color: rgba(100, 116, 139, 0.25);
+}
+.dark .tone-muted {
+  color: #94a3b8;
+}
+.tone-brand {
+  background: var(--brand-soft);
+  color: var(--brand-deep);
+  border-color: color-mix(in srgb, var(--brand) 30%, transparent);
+}
+.tone-orange {
+  background: var(--brand-orange-soft);
+  color: var(--brand-orange);
+  border-color: color-mix(in srgb, var(--brand-orange) 30%, transparent);
+}
+
+/* انیمیشن ورود ملایم */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-rise {
+  animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}

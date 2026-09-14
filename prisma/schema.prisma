@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// اکانت ادمین سامانه نمایندگی
+model AdminUser {
+  id          String   @id @default(cuid())
+  username    String   @unique
+  password    String // hashed
+  totpSecret  String? // رمز TOTP (encrypted) برای ورود دومرحله‌ای
+  totpEnabled Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+// اطلاعات اتصال به پنل‌های ثنایی (3x-ui) — پشتیبانی از چند پنل
+model PanelConfig {
+  id          String  @id @default(cuid())
+  name        String  @default("پنل اصلی")
+  baseUrl     String  @unique // مثل https://1.2.3.4:2053
+  username    String
+  password    String // encrypted
+  apiToken    String? // API Token پنل 3x-ui 3.7+ (encrypted) — اولویت با این است
+  subBase     String? // آدرس پایه سابسکریپشن مثل https://sub.example.com
+  subPath     String? // مسیر ساب مثل sub (پیش‌فرض)
+  active      Boolean @default(true)
+  sortOrder   Int     @default(0) // ۰ = پنل اصلی
+  updatedAt   DateTime @updatedAt
+}
+
+// نماینده (ایجنت)
+model Reseller {
+  id             String   @id @default(cuid())
+  username       String   @unique
+  password       String // hashed
+  name           String?
+  active         Boolean  @default(true)
+  // ---- دسترسی‌ها و محدودیت‌ها ----
+  multiLocation  Boolean  @default(false) // اجازه انتخاب چند اینباند برای یک کاربر
+  // ---- مدل پول ترافیک: ادمین فقط سهمیه کل می‌دهد، نماینده خودش بین کاربران تقسیم می‌کند ----
+  trafficPoolGB  Int      @default(0) // پول ترافیک کل نماینده به گیگ — 0 = نامحدود
+  // فیلدهای قدیمی (دیگر اعمال نمی‌شوند — فقط برای سازگاری داده)
+  maxUsers       Int      @default(0)
+  maxTrafficGB   Int      @default(0)
+  maxExpiryDays  Int      @default(0)
+  allowIpLimit   Boolean  @default(true) // اجازه تعیین محدودیت دستگاه
+  maxIpLimit     Int      @default(0)
+  // ---- وایت‌لیبل (برند اختصاصی) ----
+  allowWhitelabel Boolean @default(true) // اجازه استفاده از برند و دامنه اختصاصی
+  brandName      String?  // نام برند نماینده (مثلا فروشگاه X)
+  customDomain   String?  // دامنه اختصاصی برای سابسکریپشن (مثلا sub.myshop.com)
+  domainVerified Boolean  @default(false) // وضعیت تأیید دامنه
+  verifyToken    String?  // توکن تأیید DNS (رکورد TXT)
+  // ---- اعلان تلگرام (بات خود نماینده) ----
+  tgBotToken String?  // توکن بات تلگرام (encrypted)
+  tgChatId   String?  // شناسه چت/کانال مقصد
+  tgEnabled  Boolean  @default(false)
+  // ---- ورود دومرحله‌ای (TOTP) ----
+  totpSecret  String? // رمز TOTP (encrypted)
+  totpEnabled Boolean @default(false)
+  inbounds       ResellerInbound[]
+  users          ResellerUser[]
+  logs           ActivityLog[]
+  createdAt      DateTime @default(now())
+}
+
+// تنظیمات کلی سامانه (key/value)
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// اینباندهای مجاز برای هر نماینده (از پنل‌های مختلف)
+model ResellerInbound {
+  id         String   @id @default(cuid())
+  resellerId String
+  reseller   Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  panelId    String   @default("") // شناسه پنل مرجع — خالی = پنل اصلی
+  inboundId  Int
+  inboundTag String
+  protocol   String
+  port       Int
+  remark     String?
+
+  @@unique([resellerId, panelId, inboundId])
+}
+
+// کاربران ساخته‌شده توسط نماینده (ردیابی مالکیت)
+model ResellerUser {
+  id         String   @id @default(cuid())
+  resellerId String
+  reseller   Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  email      String // شناسه یکتای کاربر در پنل ثنایی
+  name       String? // نام/یادداشت دلخواه نماینده
+  subId      String?
+  inboundIds String // JSON آرایه‌ای از {panelId, inboundId} — مولتی‌لوکیشن بین پنل‌ها
+  panelId    String   @default("") // پنل مرجع کاربر — خالی = پنل اصلی
+  trafficGB  Int      @default(0) // سهمیه تخصیص‌یافته از پول (گیگ) — 0 = نامحدود
+  createdAt  DateTime @default(now())
+
+  @@unique([resellerId, email])
+  @@index([email])
+}
+
+// لاگ فعالیت‌ها
+model ActivityLog {
+  id        String    @id @default(cuid())
+  actorType String // ADMIN | RESELLER
+  actorName String
+  action    String
+  detail    String?
+  createdAt DateTime  @default(now())
+  resellerId String?
+  reseller  Reseller? @relation(fields: [resellerId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+}

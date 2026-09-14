@@ -1,0 +1,14 @@
+# کوچک نگه داشتن کانتکست بیلد
+node_modules
+.next
+.git
+.env
+.env.local
+*.db
+*.db.bak*
+docs/screenshots
+scripts/.env.local
+*.log
+tsconfig.tsbuildinfo
+dev.log
+server.log
