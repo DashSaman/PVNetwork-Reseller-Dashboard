@@ -146,7 +146,10 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
           {tabs.map((t) => (
             <button
               key={t.id}
-              onClick={() => setTab(t.id)}
+              onClick={() => {
+                setTab(t.id);
+                if (t.id === "resellers") void loadInbounds();
+              }}
               className={`flex items-center gap-2 px-4 py-3 text-sm whitespace-nowrap border-b-2 font-medium transition-colors ${
                 tab === t.id
                   ? "border-[var(--brand)] text-[var(--brand-deep)]"
