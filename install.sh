@@ -411,8 +411,12 @@ site_file_is_adoptable() {
   local file="$1" domain="$2"
   [[ ! -e "$file" ]] && return 0
   grep -Fq '# Managed by PVNetwork Reseller Dashboard installer' "$file" && return 0
-  grep -Eq "^[[:space:]]*ServerName[[:space:]]+$domain([[:space:]]|$)" "$file" || return 1
-  grep -Eq "127\\.0\\.0\\.1:${APP_PORT}|/etc/letsencrypt/live/${domain}/|/\\.well-known/acme-challenge/" "$file"
+  awk -v d="$domain" '$1 == "ServerName" && $2 == d { found=1 } END { exit !found }' "$file" || return 1
+  grep -Fq "127.0.0.1:${APP_PORT}" "$file" && return 0
+  if grep -Fq '/.well-known/acme-challenge/' "$file" && grep -Fq "https://$domain" "$file"; then
+    return 0
+  fi
+  return 1
 }
 
 assert_site_file_safe() {
