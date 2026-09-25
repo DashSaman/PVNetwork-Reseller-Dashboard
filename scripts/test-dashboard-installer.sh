@@ -33,22 +33,38 @@ write_installer_metadata
 [[ -f "$INSTALL_DIR/.installer-env" ]] || fail "installer metadata not written"
 grep -F 'PANEL_DOMAIN=npanel.softarg.ir' "$INSTALL_DIR/.installer-env" >/dev/null || fail "domain missing from installer metadata"
 grep -F "APP_PORT=$APP_PORT" "$INSTALL_DIR/.installer-env" >/dev/null || fail "app port missing from installer metadata"
-if grep -Eq 'APP_SECRET|ADMIN_PASSWORD' "$INSTALL_DIR/.installer-env"; then fail "installer metadata leaked secrets"; fi
-if grep -Eqi 'systemctl[[:space:]]+restart|ufw|iptables|(^|[[:space:]])nft([[:space:]]|$)' "$INSTALLER"; then fail "installer contains broad service/firewall restart logic"; fi
-if grep -Eqi 'ghcr\.io/mhsanaei/3x-ui|network_mode:[[:space:]]*host|caddy:2|x-ui setting|in-10000|XRAY_VMESS' "$INSTALLER"; then fail "default installer contains 3x-ui/Xray/Caddy provisioning"; fi
+if grep -Eq 'APP_SECRET|ADMIN_PASSWORD' "$INSTALL_DIR/.installer-env"; then
+  fail "installer metadata leaked secrets"
+fi
+
+if grep -Eqi 'systemctl[[:space:]]+restart|ufw|iptables|(^|[[:space:]])nft([[:space:]]|$)' "$INSTALLER"; then
+  fail "installer contains broad service/firewall restart logic"
+fi
+if grep -Eqi 'ghcr\.io/mhsanaei/3x-ui|network_mode:[[:space:]]*host|caddy:2|x-ui setting|in-10000|XRAY_VMESS' "$INSTALLER"; then
+  fail "default installer contains 3x-ui/Xray/Caddy provisioning"
+fi
 grep -F '127.0.0.1:${APP_PORT}:3000' "$INSTALLER" >/dev/null || fail "loopback Docker publish invariant missing"
-for fn in preflight backup_existing_install sync_repository build_dashboard_image run_dashboard_container local_health_check rollback_dashboard; do declare -F "$fn" >/dev/null || fail "missing lifecycle function: $fn"; done
+
+for fn in preflight backup_existing_install sync_repository build_dashboard_image run_dashboard_container local_health_check rollback_dashboard; do
+  declare -F "$fn" >/dev/null || fail "missing lifecycle function: $fn"
+done
 pass "safe lifecycle surface checks"
 
-for fn in site_file_is_adoptable install_http_vhost issue_certificate install_https_vhost origin_https_health_check configure_apache_tls; do declare -F "$fn" >/dev/null || fail "missing Apache/TLS function: $fn"; done
+for fn in site_file_is_adoptable install_http_vhost issue_certificate install_https_vhost origin_https_health_check configure_apache_tls; do
+  declare -F "$fn" >/dev/null || fail "missing Apache/TLS function: $fn"
+done
+
 grep -F 'RewriteRule ^ https://npanel.softarg.ir%{REQUEST_URI} [R=301,L]' "$TMP/http.conf" >/dev/null || fail "HTTP vhost missing HTTPS redirect"
 if grep -F 'ProxyPass        / http://' "$TMP/http.conf" >/dev/null; then fail "HTTP vhost should not proxy application traffic"; fi
+
 grep -F 'SSLCertificateFile /etc/letsencrypt/live/npanel.softarg.ir/fullchain.pem' "$TMP/https.conf" >/dev/null || fail "HTTPS vhost missing Lets Encrypt certificate"
 grep -F 'SSLCertificateKeyFile /etc/letsencrypt/live/npanel.softarg.ir/privkey.pem' "$TMP/https.conf" >/dev/null || fail "HTTPS vhost missing Lets Encrypt key"
+
 cat > "$TMP/adoptable.conf" <<'VHOST'
 <VirtualHost *:80>
 ServerName npanel.softarg.ir
 Alias /.well-known/acme-challenge/ /var/www/letsencrypt/.well-known/acme-challenge/
+RewriteRule ^ https://npanel.softarg.ir%{REQUEST_URI} [R=301,L]
 </VirtualHost>
 VHOST
 site_file_is_adoptable "$TMP/adoptable.conf" "npanel.softarg.ir" || fail "existing compatible vhost was not adoptable"
@@ -59,10 +75,20 @@ DocumentRoot /var/www/other
 </VirtualHost>
 VHOST
 if site_file_is_adoptable "$TMP/unrelated.conf" "npanel.softarg.ir"; then fail "unrelated vhost considered adoptable"; fi
+cat > "$TMP/same-domain-unrelated-ssl.conf" <<'VHOST'
+<VirtualHost *:443>
+ServerName npanel.softarg.ir
+SSLCertificateFile /etc/letsencrypt/live/npanel.softarg.ir/fullchain.pem
+DocumentRoot /var/www/unrelated-app
+</VirtualHost>
+VHOST
+if site_file_is_adoptable "$TMP/same-domain-unrelated-ssl.conf" "npanel.softarg.ir"; then fail "same-domain unrelated SSL vhost considered adoptable"; fi
 pass "Apache/TLS additive safety checks"
 
 UPDATE_SCRIPT="$ROOT/update.sh"
-if grep -Eqi 'docker[[:space:]]+compose|/opt/pvnet|pvnet-panel' "$UPDATE_SCRIPT"; then fail "update.sh still uses legacy full-stack paths/Compose"; fi
+if grep -Eqi 'docker[[:space:]]+compose|/opt/pvnet|pvnet-panel' "$UPDATE_SCRIPT"; then
+  fail "update.sh still uses legacy full-stack paths/Compose"
+fi
 grep -F 'raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh' "$UPDATE_SCRIPT" >/dev/null || fail "update.sh does not delegate to latest one-line installer"
 grep -F 'INSTALL_DIR="${INSTALL_DIR:-/opt/pv-reseller}"' "$UPDATE_SCRIPT" >/dev/null || fail "update.sh missing dashboard install dir"
 pass "update wrapper safety checks"
@@ -90,6 +116,7 @@ pass "HTTPS vhost prevents stale dashboard caching"
 declare -F validate_admin_username >/dev/null || fail "missing validate_admin_username"
 for u in admin pv_admin admin.user user-01; do validate_admin_username "$u" || fail "valid admin username rejected: $u"; done
 for u in '' 'ab' 'bad user' 'bad@user'; do if validate_admin_username "$u"; then fail "invalid admin username accepted: $u"; fi; done
+
 grep -F '/etc/letsencrypt/renewal-hooks/deploy/pv-reseller-apache-reload.sh' "$INSTALLER" >/dev/null || fail "Certbot deploy hook path missing"
 grep -F 'install_certbot_deploy_hook' "$INSTALLER" >/dev/null || fail "Certbot deploy hook function missing"
 pass "admin validation and certificate renewal hook checks"
