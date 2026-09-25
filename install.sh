@@ -1,292 +1,563 @@
 #!/usr/bin/env bash
-# ============================================================================
-#  PVNetWork Reseller System — نصب تک‌خطی روی سرور تازه (Ubuntu/Debian)
-#
-#  استفاده:
-#    bash <(curl -fsSL <raw-url>/install.sh)
-#  یا با پارامتر (غیرتعاملی):
-#    PANEL_DOMAIN=panel.example.com ROOT_DOMAIN=example.com GITHUB_TOKEN=... \
-#      bash install.sh
-#
-#  کاری که انجام می‌دهد:
-#    1) Docker + Compose  2) کلون مخزن  3) ساخت ایمیج از سورس
-#    4) پنل نمایندگی + 3x-ui + Caddy (پورت 2053)  5) اینباند پیش‌فرض
-#    6) گواهی واقعی (در صورت دادن CF_API_TOKEN) یا self-signed
-#    7) بکاپ روزانه دیتابیس + ذخیره رمزها در /opt/pvnet/CREDENTIALS.txt
-#    سایر سرویس‌های سرور دست‌نخورده می‌مانند (فقط پورت 2053/2087)
-# ============================================================================
 set -euo pipefail
 
-BASE_DIR="/opt/pvnet"
-REPO_DIR="$BASE_DIR/repo"
-PANEL_PORT="2053"        # پورت HTTPS عمومی (Caddy)
-XUI_WEB_PORT="2087"      # پورت وب 3x-ui (فقط لوکال از طریق Caddy)
-SUB_PORT="2096"          # پورت سرویس ساب 3x-ui (روی host)
-REPO_URL_DEFAULT="https://github.com/DashSaman/PVNetwork-Reseller-Dashboard.git"
+PVNET_INSTALL_DIR_FROM_ENV="${INSTALL_DIR+x}"
+PVNET_APP_PORT_FROM_ENV="${APP_PORT+x}"
+PVNET_PANEL_DOMAIN_FROM_ENV="${PANEL_DOMAIN+x}"
 
-c_g="⬢"; c_y="⚠"; c_ok="✔"; c_no="✖"
-log()  { echo -e "\033[1;36m[$c_g]\033[0m $*"; }
-warn() { echo -e "\033[1;33m[$c_y]\033[0m $*"; }
-err()  { echo -e "\033[1;31m[$c_no]\033[0m $*" >&2; }
-trap 'err "نصب در خط $LINENO متوقف شد"; exit 1' ERR
+INSTALL_DIR="${INSTALL_DIR:-/opt/pv-reseller}"
+REPO_DIR="$INSTALL_DIR/app"
+DATA_DIR="$INSTALL_DIR/data"
+BACKUP_DIR="$INSTALL_DIR/backup"
+APP_PORT="${APP_PORT:-31080}"
+CONTAINER_NAME="pv-reseller-dashboard"
+IMAGE_NAME="pv-reseller-dashboard:local"
+NETWORK_NAME="pv_reseller_net"
+REPO_URL="https://github.com/DashSaman/PVNetwork-Reseller-Dashboard.git"
+ACME_WEBROOT="/var/www/letsencrypt"
+APACHE_SITE_BASENAME="pv-reseller"
 
-# ---------- ورودی‌ها (env یا پرامپت از tty) ----------
-ask() { # ask VAR "prompt" "default"
-  local __var=$1 __prompt=$2 __def=${3:-} __val=""
-  if [ -n "${!__var:-}" ]; then return; fi
-  if [ -r /dev/tty ]; then
-    read -r -p "$__prompt [$__def]: " __val </dev/tty || true
-  fi
-  export "$__var=${__val:-$__def}"
+log() { printf '\033[1;36m[PVNetwork]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+
+validate_domain() {
+  local d="${1:-}"
+  [[ "$d" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
 }
 
-[ "$(id -u)" -eq 0 ] || { err "با root اجرا کنید"; exit 1; }
+validate_admin_username() {
+  local u="${1:-}"
+  [[ "$u" =~ ^[A-Za-z0-9._-]{3,32}$ ]]
+}
 
-ask GITHUB_TOKEN   "GitHub Personal Access Token (فقط اگر مخزن خصوصی است؛ مخزن عمومی = خالی)" ""
-ask PANEL_DOMAIN   "دامنه پنل نمایندگی (مثلاً panel.example.com)" ""
-ask ROOT_DOMAIN    "دامنه ریشه برای وایلدکارد *. (خالی = همان دامنه پنل)" ""
-ask XUI_SUBDOMAIN  "زیردامنه 3x-ui (پیش‌فرض: 3xpanel)" "3xpanel"
-ask CF_API_TOKEN   "کلودفلر API Token (برای گواهی وایلدکارد؛ خالی = self-signed)" ""
-ask ADMIN_USERNAME "نام کاربری ادمین پنل" "admin"
+read_env_value() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 1
+  awk -F= -v k="$key" '$1==k {sub(/^[^=]*=/, ""); print; exit}' "$file"
+}
 
-[ -n "$PANEL_DOMAIN" ] || { err "دامنه پنل الزامی است"; exit 1; }
-[ -n "$ROOT_DOMAIN" ] || ROOT_DOMAIN="${PANEL_DOMAIN#*.}"
-XUI_DOMAIN="${XUI_SUBDOMAIN}.${ROOT_DOMAIN}"
-
-# ---------- رمزهای تصادفی ----------
-rnd() { openssl rand -hex "$1"; }
-APP_SECRET="pvnetwork-$(rnd 24)"
-ADMIN_PASSWORD="Pv$(rnd 5)A9!"
-XUI_USER="pvadmin"
-XUI_PASSWORD="Px$(rnd 10)K7"
-XUI_BASEPATH="/pv$(rnd 3)-k$(rnd 2)/"
-
-log "دامنه‌ها: پنل=$PANEL_DOMAIN | 3x-ui=$XUI_DOMAIN | وایلدکارد=*.$ROOT_DOMAIN"
-
-# ---------- ۱) Docker ----------
-if ! command -v docker >/dev/null 2>&1; then
-  log "نصب Docker..."
-  curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
-fi
-docker compose version >/dev/null 2>&1 || { err "docker compose plugin یافت نشد"; exit 1; }
-log "Docker آماده است: $(docker --version)"
-
-# ---------- ۲) کلون مخزن ----------
-mkdir -p "$BASE_DIR"
-if [ ! -d "$REPO_DIR/.git" ]; then
-  log "کلون مخزن..."
-  CLONE_URL="$REPO_URL_DEFAULT"
-  if [ -n "${GITHUB_TOKEN:-}" ]; then
-    CLONE_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/DashSaman/PVNetwork-Reseller-Dashboard.git"
+load_or_create_secrets() {
+  mkdir -p "$INSTALL_DIR"
+  if [[ -f "$INSTALL_DIR/.env" ]]; then
+    APP_SECRET="$(read_env_value "$INSTALL_DIR/.env" APP_SECRET || true)"
+    ADMIN_USERNAME="$(read_env_value "$INSTALL_DIR/.env" ADMIN_USERNAME || true)"
+    ADMIN_PASSWORD="$(read_env_value "$INSTALL_DIR/.env" ADMIN_PASSWORD || true)"
+    [[ -n "$APP_SECRET" ]] || die "Existing .env is missing APP_SECRET"
+    [[ -n "$ADMIN_USERNAME" ]] || ADMIN_USERNAME="admin"
+    [[ -n "$ADMIN_PASSWORD" ]] || die "Existing .env is missing ADMIN_PASSWORD"
+    chmod 600 "$INSTALL_DIR/.env"
+    export APP_SECRET ADMIN_USERNAME ADMIN_PASSWORD
+    return 0
   fi
-  git clone --depth 1 "$CLONE_URL" "$REPO_DIR" \
-    || { err "کلون ناموفق — اگر مخزن خصوصی است GITHUB_TOKEN را بررسی کنید"; exit 1; }
-fi
-cd "$REPO_DIR"
 
-# ---------- ۳) فایل‌های اجرایی در /opt/pvnet ----------
-mkdir -p "$BASE_DIR"/{panel-data,3xui,3xui-cert,certs}
-
-cat > "$BASE_DIR/.env" <<ENV
-APP_SECRET="$APP_SECRET"
+  command -v openssl >/dev/null 2>&1 || die "openssl is required before generating secrets"
+  APP_SECRET="$(openssl rand -hex 32)"
+  ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+  ADMIN_PASSWORD="PV$(openssl rand -hex 12)A9!"
+  SECRETS_CREATED=1
+  export SECRETS_CREATED
+  umask 077
+  cat > "$INSTALL_DIR/.env" <<ENV
+APP_SECRET=$APP_SECRET
 ADMIN_USERNAME=$ADMIN_USERNAME
 ADMIN_PASSWORD=$ADMIN_PASSWORD
-CF_API_TOKEN=$CF_API_TOKEN
 ENV
-chmod 600 "$BASE_DIR/.env"
-
-# Caddyfile: پنل + 3x-ui + catch-all (دامنه اختصاصی نماینده‌ها)
-CERT_LINE="tls internal"
-if [ -f "$BASE_DIR/certs/wildcard.$ROOT_DOMAIN.pem" ]; then
-  CERT_LINE="tls /certs/wildcard.$ROOT_DOMAIN.pem /certs/wildcard.$ROOT_DOMAIN-key.pem"
-fi
-cat > "$BASE_DIR/Caddyfile" <<CADDY
-{
-  admin off
+  chmod 600 "$INSTALL_DIR/.env"
+  export APP_SECRET ADMIN_USERNAME ADMIN_PASSWORD
 }
 
-# پنل نمایندگی
-https://$PANEL_DOMAIN:$PANEL_PORT {
-  $CERT_LINE
-  reverse_proxy pvnet-panel:3000
+render_http_vhost() {
+  local domain="$1" webroot="$2" output="$3"
+  cat > "$output" <<EOFV
+# Managed by PVNetwork Reseller Dashboard installer
+<VirtualHost *:80>
+    ServerName $domain
+
+    Alias /.well-known/acme-challenge/ $webroot/.well-known/acme-challenge/
+    <Directory "$webroot/.well-known/acme-challenge/">
+        Options None
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/\\.well-known/acme-challenge/
+    RewriteRule ^ https://$domain%{REQUEST_URI} [R=301,L]
+
+    ErrorLog \${APACHE_LOG_DIR}/${APACHE_SITE_BASENAME}-$domain-error.log
+    CustomLog \${APACHE_LOG_DIR}/${APACHE_SITE_BASENAME}-$domain-access.log combined
+</VirtualHost>
+EOFV
 }
 
-# 3x-ui (وب فقط از مسیر basePath در دسترس است)
-https://$XUI_DOMAIN:$PANEL_PORT {
-  $CERT_LINE
-  reverse_proxy /$XUI_BASEPATH/* http://host.docker.internal:$XUI_WEB_PORT
-  reverse_proxy /$XUI_BASEPATH http://host.docker.internal:$XUI_WEB_PORT
+render_https_vhost() {
+  local domain="$1" port="$2" output="$3"
+  cat > "$output" <<EOFV
+# Managed by PVNetwork Reseller Dashboard installer
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerName $domain
+
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/$domain/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/$domain/privkey.pem
+
+    ProxyRequests Off
+    ProxyPreserveHost On
+    ProxyAddHeaders On
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-Port "443"
+    Header always set Cache-Control "no-store, no-cache, must-revalidate"
+
+    ProxyPass        / http://127.0.0.1:$port/ retry=0 timeout=60
+    ProxyPassReverse / http://127.0.0.1:$port/
+
+    ErrorLog \${APACHE_LOG_DIR}/${APACHE_SITE_BASENAME}-$domain-ssl-error.log
+    CustomLog \${APACHE_LOG_DIR}/${APACHE_SITE_BASENAME}-$domain-ssl-access.log combined
+</VirtualHost>
+</IfModule>
+EOFV
 }
 
-# دامنه‌های اختصاصی نماینده‌ها (ساب کاربران) — catch-all SNI
-https://:$PANEL_PORT {
-  $CERT_LINE
-  reverse_proxy pvnet-panel:3000
-}
-CADDY
-
-cat > "$BASE_DIR/docker-compose.yml" <<'COMPOSE'
-services:
-  pvnet-caddy:
-    image: caddy:2-alpine
-    container_name: pvnet-caddy
-    restart: unless-stopped
-    depends_on: [pvnet-panel]
-    ports: ["2053:2053"]
-    extra_hosts: ["host.docker.internal:host-gateway"]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./certs:/certs:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    networks: [pvnet]
-
-  pvnet-panel:
-    build:
-      context: ./repo
-      dockerfile: docker/Dockerfile
-    image: pvnet-panel:local
-    container_name: pvnet-panel
-    restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      HOSTNAME: 0.0.0.0
-      DATABASE_URL: file:/app/data/custom.db
-      APP_SECRET: ${APP_SECRET:?required}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?required}
-    volumes:
-      - ./panel-data:/app/data
-    ports:
-      - "127.0.0.1:3001:3000"
-    extra_hosts: ["host.docker.internal:host-gateway"]
-    networks: [pvnet]
-
-  pvnet-3xui:
-    image: ghcr.io/mhsanaei/3x-ui:latest
-    container_name: pvnet-3xui
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      XRAY_VMESS_AEAD_FORCED: "false"
-      X_UI_ENABLE_FAIL2BAN: "true"
-    volumes:
-      - ./3xui:/etc/x-ui
-      - ./3xui-cert:/root/cert
-
-volumes:
-  caddy_data:
-  caddy_config:
-networks:
-  pvnet:
-    name: pvnet
-COMPOSE
-
-# ---------- ۴) گواهی وایلدکارد (اختیاری؛ کلودفلر) ----------
-if [ -n "$CF_API_TOKEN" ]; then
-  log "صدور گواهی وایلدکارد با acme.sh (DNS-01)..."
-  curl -fsSL https://get.acme.sh | sh -s email="admin@$ROOT_DOMAIN" >/dev/null 2>&1 || true
-  ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-  if ~/.acme.sh/acme.sh --issue --dns dns_cf -d "*.$ROOT_DOMAIN" -d "$ROOT_DOMAIN" \
-       --keylength ec-256 >/var/log/acme-pvnet.log 2>&1; then
-    ~/.acme.sh/acme.sh --install-cert -d "*.$ROOT_DOMAIN" --ecc \
-      --key-file "$BASE_DIR/certs/wildcard.$ROOT_DOMAIN-key.pem" \
-      --fullchain-file "$BASE_DIR/certs/wildcard.$ROOT_DOMAIN.pem" \
-      --reloadcmd "docker restart pvnet-caddy" >/dev/null 2>&1 || true
-    CERT_LINE="tls /certs/wildcard.$ROOT_DOMAIN.pem /certs/wildcard.$ROOT_DOMAIN-key.pem"
-    # تزریق خط tls واقعی به Caddyfile
-    sed -i "s|^  tls internal$|  $CERT_LINE|" "$BASE_DIR/Caddyfile"
-    log "گواهی وایلدکارد صادر شد (تمدید خودکار فعال است)"
-  else
-    warn "صدور گواهی ناموفق بود — موقتاً self-signed استفاده می‌شود (لاگ: /var/log/acme-pvnet.log)"
+load_installer_metadata() {
+  local f="$INSTALL_DIR/.installer-env" v
+  [[ -f "$f" ]] || return 0
+  if [[ -z "$PVNET_PANEL_DOMAIN_FROM_ENV" ]]; then
+    v="$(read_env_value "$f" PANEL_DOMAIN || true)"
+    [[ -n "$v" ]] && PANEL_DOMAIN="$v"
   fi
-else
-  warn "بدون CF_API_TOKEN: گواهی self-signed ساخته می‌شود (مرورگر هشدار می‌دهد)"
+  if [[ -z "$PVNET_APP_PORT_FROM_ENV" ]]; then
+    v="$(read_env_value "$f" APP_PORT || true)"
+    [[ -n "$v" ]] && APP_PORT="$v"
+  fi
+}
+
+write_installer_metadata() {
+  mkdir -p "$INSTALL_DIR"
+  umask 077
+  cat > "$INSTALL_DIR/.installer-env" <<META
+PANEL_DOMAIN=$PANEL_DOMAIN
+APP_PORT=$APP_PORT
+INSTALL_DIR=$INSTALL_DIR
+META
+  chmod 600 "$INSTALL_DIR/.installer-env"
+}
+
+prompt_value() {
+  local var="$1" prompt="$2" default="${3:-}" val=""
+  [[ -n "${!var:-}" ]] && return 0
+  if [[ -r /dev/tty ]]; then
+    read -r -p "$prompt${default:+ [$default]}: " val </dev/tty || true
+  fi
+  printf -v "$var" '%s' "${val:-$default}"
+}
+
+resolve_inputs() {
+  PANEL_DOMAIN="${PANEL_DOMAIN:-}"
+  APP_PORT="${APP_PORT:-31080}"
+  load_installer_metadata
+  prompt_value PANEL_DOMAIN "Panel domain (e.g. npanel.example.com)" ""
+  if [[ ! -f "$INSTALL_DIR/.env" ]]; then
+    prompt_value ADMIN_USERNAME "Admin username" "admin"
+  fi
+}
+
+port_is_listening() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntH 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {found=1} END{exit !found}'
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {found=1} END{exit !found}'
+  else
+    local hex
+    hex="$(printf '%04X' "$port")"
+    awk -v p=":$hex" '$2 ~ p"$" && $4 == "0A" {found=1} END{exit !found}' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+  fi
+}
+
+recognized_container_owns_port() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker inspect "$CONTAINER_NAME" >/dev/null 2>&1 || return 1
+  local binding
+  binding="$(docker inspect --format '{{with (index .HostConfig.PortBindings "3000/tcp")}}{{(index . 0).HostIp}}:{{(index . 0).HostPort}}{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+  [[ "$binding" == "127.0.0.1:$APP_PORT" ]]
+}
+
+port_is_available_for_install() {
+  local rc
+  if port_is_listening "$APP_PORT"; then
+    recognized_container_owns_port
+    return $?
+  else
+    rc=$?
+    [[ $rc -eq 1 ]] && return 0
+    [[ $rc -eq 2 ]] && die "Neither ss nor netstat is available for port preflight"
+    return 1
+  fi
+}
+
+free_bytes_for_path() {
+  local probe="$1"
+  while [[ ! -e "$probe" && "$probe" != "/" ]]; do probe="$(dirname "$probe")"; done
+  df -PB1 "$probe" | awk 'NR==2 {print $4}'
+}
+
+preflight() {
+  [[ "$(id -u)" -eq 0 ]] || die "Run as root"
+  [[ -r /etc/os-release ]] || die "Cannot identify OS"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  case "${ID:-}" in ubuntu|debian) ;; *) die "Only Ubuntu/Debian are supported" ;; esac
+  PANEL_DOMAIN="${PANEL_DOMAIN,,}"
+  validate_domain "$PANEL_DOMAIN" || die "Invalid PANEL_DOMAIN: $PANEL_DOMAIN"
+  if [[ ! -f "$INSTALL_DIR/.env" ]]; then
+    validate_admin_username "${ADMIN_USERNAME:-admin}" || die "Invalid ADMIN_USERNAME (3-32 chars: letters, numbers, dot, underscore, hyphen)"
+  fi
+  [[ "$APP_PORT" =~ ^[0-9]+$ ]] && (( APP_PORT >= 1024 && APP_PORT <= 65535 )) || die "Invalid APP_PORT: $APP_PORT"
+  [[ "$INSTALL_DIR" == /* ]] || die "INSTALL_DIR must be an absolute path"
+
+  if [[ -e "$INSTALL_DIR" && ! -d "$REPO_DIR/.git" && ! -f "$INSTALL_DIR/.env" && ! -f "$INSTALL_DIR/.installer-env" ]]; then
+    die "$INSTALL_DIR exists but is not recognized as a PVNetwork dashboard installation"
+  fi
+
+  local free
+  free="$(free_bytes_for_path "$INSTALL_DIR")"
+  if [[ ! -d "$REPO_DIR/.git" ]] && (( free < 4294967296 )); then
+    die "At least 4 GiB free disk space is required for the first build"
+  fi
+
+  port_is_available_for_install || die "127.0.0.1:$APP_PORT is already owned by another process"
+
+  if ! command -v apache2ctl >/dev/null 2>&1; then
+    if port_is_listening 80 || port_is_listening 443; then
+      die "Apache is not installed, but port 80 or 443 is already in use"
+    fi
+  fi
+}
+
+prepare_dependencies() {
+  local pkgs=() cmd pkg
+  while IFS=: read -r cmd pkg; do
+    command -v "$cmd" >/dev/null 2>&1 || pkgs+=("$pkg")
+  done <<'PKGS'
+git:git
+curl:curl
+openssl:openssl
+apache2ctl:apache2
+certbot:certbot
+sqlite3:sqlite3
+PKGS
+  [[ -s /etc/ssl/certs/ca-certificates.crt ]] || pkgs+=(ca-certificates)
+  if ((${#pkgs[@]})); then
+    log "Installing missing host packages: ${pkgs[*]}"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    log "Installing Docker"
+    curl -fsSL https://get.docker.com | sh
+  fi
+  docker info >/dev/null 2>&1 || die "Docker is installed but not operational"
+  a2enmod proxy proxy_http headers ssl rewrite >/dev/null
+}
+
+backup_existing_install() {
+  [[ -e "$INSTALL_DIR" ]] || return 0
+  local stamp dest f
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  dest="$BACKUP_DIR/$stamp"
+  mkdir -p "$dest"
+  chmod 700 "$BACKUP_DIR" "$dest"
+  [[ -f "$INSTALL_DIR/.env" ]] && cp -a "$INSTALL_DIR/.env" "$dest/.env"
+  [[ -f "$INSTALL_DIR/.installer-env" ]] && cp -a "$INSTALL_DIR/.installer-env" "$dest/.installer-env"
+  if [[ -f "$DATA_DIR/custom.db" ]]; then
+    if command -v sqlite3 >/dev/null 2>&1; then
+      sqlite3 "$DATA_DIR/custom.db" ".backup '$dest/custom.db'"
+    else
+      cp -a "$DATA_DIR/custom.db" "$dest/custom.db"
+    fi
+  fi
+  if [[ -n "${PANEL_DOMAIN:-}" ]]; then
+    for f in "/etc/apache2/sites-available/$PANEL_DOMAIN.conf" "/etc/apache2/sites-available/$PANEL_DOMAIN-ssl.conf"; do
+      [[ -f "$f" ]] && cp -a "$f" "$dest/$(basename "$f")"
+    done
+  fi
+  LAST_BACKUP_DIR="$dest"
+  export LAST_BACKUP_DIR
+}
+
+sync_repository() {
+  mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$BACKUP_DIR"
+  chmod 700 "$DATA_DIR" "$BACKUP_DIR"
+  if [[ ! -d "$REPO_DIR/.git" ]]; then
+    log "Cloning dashboard repository"
+    git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+    return 0
+  fi
+  if [[ -n "$(git -C "$REPO_DIR" status --porcelain)" ]]; then
+    die "Repository has local changes; refusing to overwrite $REPO_DIR"
+  fi
+  log "Updating dashboard source"
+  git -C "$REPO_DIR" fetch --depth 1 origin main
+  git -C "$REPO_DIR" merge --ff-only FETCH_HEAD
+}
+
+current_container_image_id() {
+  docker inspect --format '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null || true
+}
+
+build_dashboard_image() {
+  BUILD_STAMP="$(date +%Y%m%d%H%M%S)"
+  CANDIDATE_IMAGE="pv-reseller-dashboard:candidate-$BUILD_STAMP"
+  OLD_IMAGE_ID="$(current_container_image_id)"
+  ROLLBACK_IMAGE=""
+  if [[ -n "$OLD_IMAGE_ID" ]]; then
+    ROLLBACK_IMAGE="pv-reseller-dashboard:rollback-$BUILD_STAMP"
+    docker tag "$OLD_IMAGE_ID" "$ROLLBACK_IMAGE"
+  fi
+  export BUILD_STAMP CANDIDATE_IMAGE OLD_IMAGE_ID ROLLBACK_IMAGE
+  log "Building dashboard image"
+  docker build -f "$REPO_DIR/docker/Dockerfile" -t "$CANDIDATE_IMAGE" "$REPO_DIR"
+}
+
+ensure_network() {
+  docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create "$NETWORK_NAME" >/dev/null
+}
+
+remove_dashboard_container_if_present() {
+  if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+    docker stop -t 20 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  fi
+}
+
+run_dashboard_container() {
+  local image="$1"
+  ensure_network
+  remove_dashboard_container_if_present
+  docker run -d \
+    --name "$CONTAINER_NAME" \
+    --restart unless-stopped \
+    --network "$NETWORK_NAME" \
+    --env-file "$INSTALL_DIR/.env" \
+    -e NODE_ENV=production \
+    -e PORT=3000 \
+    -e HOSTNAME=0.0.0.0 \
+    -e DATABASE_URL=file:/app/data/custom.db \
+    -v "$DATA_DIR:/app/data" \
+    -p "127.0.0.1:${APP_PORT}:3000" \
+    "$image" >/dev/null
+}
+
+local_health_check() {
+  local tries="${1:-30}" i body
+  for ((i=1; i<=tries; i++)); do
+    if curl -fsS --max-time 4 "http://127.0.0.1:$APP_PORT/" >/dev/null 2>&1; then
+      body="$(curl -fsS --max-time 4 "http://127.0.0.1:$APP_PORT/api/auth/me" 2>/dev/null || true)"
+      [[ "$body" == *'"user"'* ]] && return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+rollback_dashboard() {
+  [[ -n "${ROLLBACK_IMAGE:-}" ]] || return 1
+  warn "New dashboard failed health checks; restoring previous image"
+  run_dashboard_container "$ROLLBACK_IMAGE"
+  local_health_check 30 || die "Rollback container also failed health checks"
+  return 0
+}
+
+deploy_dashboard() {
+  build_dashboard_image
+  if ! run_dashboard_container "$CANDIDATE_IMAGE"; then
+    rollback_dashboard || die "Failed to start dashboard container"
+    die "New image could not be started; previous version restored"
+  fi
+  if ! local_health_check 45; then
+    docker logs --tail 80 "$CONTAINER_NAME" >&2 || true
+    rollback_dashboard || die "New dashboard failed health check and no rollback image was available"
+    die "New dashboard failed health check; previous version restored"
+  fi
+  docker tag "$CANDIDATE_IMAGE" "$IMAGE_NAME"
+  log "Dashboard passed local health checks"
+}
+
+write_initial_credentials_if_needed() {
+  local f="$INSTALL_DIR/INITIAL_CREDENTIALS.txt"
+  [[ "${SECRETS_CREATED:-0}" == "1" ]] || return 0
+  [[ -f "$f" ]] && return 0
+  umask 077
+  cat > "$f" <<CREDS
+PVNetwork Reseller Dashboard - initial credentials
+Panel domain: $PANEL_DOMAIN
+Username: $ADMIN_USERNAME
+Initial password: $ADMIN_PASSWORD
+
+IMPORTANT: this file records the initial credential only. If the password is
+changed later inside the Dashboard, the current password is NOT written back here.
+CREDS
+  chmod 600 "$f"
+  INITIAL_CREDENTIALS_CREATED=1
+}
+
+http_site_path() { printf '/etc/apache2/sites-available/%s.conf' "$PANEL_DOMAIN"; }
+https_site_path() { printf '/etc/apache2/sites-available/%s-ssl.conf' "$PANEL_DOMAIN"; }
+
+site_file_is_adoptable() {
+  local file="$1" domain="$2"
+  [[ ! -e "$file" ]] && return 0
+  grep -Fq '# Managed by PVNetwork Reseller Dashboard installer' "$file" && return 0
+  grep -Eq "^[[:space:]]*ServerName[[:space:]]+$domain([[:space:]]|$)" "$file" || return 1
+  grep -Eq "127\\.0\\.0\\.1:${APP_PORT}|/etc/letsencrypt/live/${domain}/|/\\.well-known/acme-challenge/" "$file"
+}
+
+assert_site_file_safe() {
+  local file="$1"
+  site_file_is_adoptable "$file" "$PANEL_DOMAIN" || die "Refusing to overwrite unrelated Apache vhost: $file"
+}
+
+apache_validate_and_reload() {
+  apache2ctl configtest
+  systemctl reload apache2
+}
+
+install_http_vhost() {
+  local site
+  site="$(http_site_path)"
+  assert_site_file_safe "$site"
+  mkdir -p "$ACME_WEBROOT/.well-known/acme-challenge"
+  render_http_vhost "$PANEL_DOMAIN" "$ACME_WEBROOT" "$site"
+  a2ensite "$PANEL_DOMAIN.conf" >/dev/null
+  apache_validate_and_reload
+}
+
+acme_path_is_reachable() {
+  local token="pvnet-$(openssl rand -hex 6)" expected="PVNETWORK-ACME-$RANDOM" got=""
+  printf '%s' "$expected" > "$ACME_WEBROOT/.well-known/acme-challenge/$token"
+  got="$(curl -fsSL --max-time 20 "http://$PANEL_DOMAIN/.well-known/acme-challenge/$token" 2>/dev/null || true)"
+  rm -f "$ACME_WEBROOT/.well-known/acme-challenge/$token"
+  [[ "$got" == "$expected" ]]
+}
+
+certificate_is_usable() {
+  local cert="/etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem" key="/etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem"
+  [[ -s "$cert" && -s "$key" ]] || return 1
+  openssl x509 -checkend 2592000 -noout -in "$cert" >/dev/null 2>&1
+}
+
+issue_certificate() {
+  if certificate_is_usable; then
+    log "Existing Let's Encrypt certificate is still valid"
+    return 0
+  fi
+  acme_path_is_reachable || die "ACME challenge URL is not reachable. Check DNS/Cloudflare and ensure HTTP reaches this server."
+  log "Requesting Let's Encrypt certificate for $PANEL_DOMAIN"
+  certbot certonly \
+    --webroot -w "$ACME_WEBROOT" \
+    -d "$PANEL_DOMAIN" \
+    --preferred-challenges http \
+    --agree-tos --non-interactive --register-unsafely-without-email
+  certificate_is_usable || die "Certificate was issued but files are not usable"
+}
+
+install_https_vhost() {
+  local site
+  site="$(https_site_path)"
+  assert_site_file_safe "$site"
+  render_https_vhost "$PANEL_DOMAIN" "$APP_PORT" "$site"
+  a2ensite "$PANEL_DOMAIN-ssl.conf" >/dev/null
+  apache_validate_and_reload
+}
+
+install_certbot_deploy_hook() {
+  local hook="/etc/letsencrypt/renewal-hooks/deploy/pv-reseller-apache-reload.sh"
+  mkdir -p "$(dirname "$hook")"
+  cat > "$hook" <<'HOOK'
+#!/bin/sh
+set -eu
+apache2ctl configtest >/dev/null
+systemctl reload apache2
+HOOK
+  chmod 755 "$hook"
+}
+
+origin_https_health_check() {
+  local code body
+  code="$(curl -sS --max-time 15 --resolve "$PANEL_DOMAIN:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$PANEL_DOMAIN/" 2>/dev/null || true)"
+  [[ "$code" == "200" ]] || return 1
+  body="$(curl -fsS --max-time 15 --resolve "$PANEL_DOMAIN:443:127.0.0.1" "https://$PANEL_DOMAIN/api/auth/me" 2>/dev/null || true)"
+  [[ "$body" == *'"user"'* ]]
+}
+
+public_https_health_check() {
+  local code
+  code="$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "https://$PANEL_DOMAIN/" 2>/dev/null || true)"
+  [[ "$code" == "200" ]]
+}
+
+print_cloudflare_guidance() {
+  local headers
+  headers="$(curl -sSI --max-time 15 "https://$PANEL_DOMAIN/" 2>/dev/null || true)"
+  if grep -Eqi '^server:[[:space:]]*cloudflare' <<<"$headers"; then
+    cat <<'CF'
+
+Cloudflare detected. Recommended settings for this dashboard:
+  - Proxy status: Proxied (orange cloud)
+  - SSL/TLS encryption mode: Full (strict)
+  - Always Use HTTPS: On (after origin HTTPS is healthy)
+  - Cache Rule for this hostname: Bypass cache
+  - Rocket Loader: Off for this hostname if it causes UI/JS issues
+CF
+  fi
+}
+
+configure_apache_tls() {
+  install_http_vhost
+  issue_certificate
+  install_https_vhost
+  install_certbot_deploy_hook
+  origin_https_health_check || die "Origin HTTPS health check failed"
+  if public_https_health_check; then
+    log "Public HTTPS health check passed"
+  else
+    warn "Origin HTTPS is healthy, but public HTTPS is not reachable yet. DNS/Cloudflare propagation may still be pending."
+  fi
+  print_cloudflare_guidance
+}
+
+main() {
+  resolve_inputs
+  preflight
+  prepare_dependencies
+  mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$BACKUP_DIR"
+  chmod 700 "$DATA_DIR" "$BACKUP_DIR"
+  load_or_create_secrets
+  write_initial_credentials_if_needed
+  backup_existing_install
+  sync_repository
+  write_installer_metadata
+  deploy_dashboard
+  configure_apache_tls
+
+  echo
+  log "Installation/update completed successfully"
+  printf 'Panel:    https://%s\n' "$PANEL_DOMAIN"
+  printf 'Username: %s\n' "$ADMIN_USERNAME"
+  if [[ "${SECRETS_CREATED:-0}" == "1" && "${INITIAL_CREDENTIALS_CREATED:-0}" == "1" ]]; then
+    printf 'Initial password: %s\n' "$ADMIN_PASSWORD"
+    printf 'Credentials file: %s/INITIAL_CREDENTIALS.txt\n' "$INSTALL_DIR"
+  else
+    printf 'Password: unchanged (use the current password stored in the Dashboard)\n'
+  fi
+  printf 'Data:     %s\n' "$DATA_DIR"
+  printf 'Backups:  %s\n' "$BACKUP_DIR"
+  [[ -n "${LAST_BACKUP_DIR:-}" ]] && printf 'Latest backup: %s\n' "$LAST_BACKUP_DIR"
+}
+
+if [[ "${PVNET_INSTALLER_LIB_ONLY:-0}" != "1" ]]; then
+  main "$@"
 fi
-
-# ---------- swap برای بیلد روی VPS کوچک ----------
-if [ "$(free -m | awk '/^Swap:/{print $2}')" -lt 1024 ] && [ "$(free -m | awk '/^Mem:/{print $2}')" -lt 3000 ] && [ ! -f /swapfile ]; then
-  log "RAM کم — ساخت ۲GB swap (مهم برای بیلد)..."
-  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
-  echo '/swapfile none swap sw 0 0' >> /etc/fstab
-fi
-
-# ---------- ۵) بیلد و بالا آوردن ----------
-log "بیلد ایمیج پنل از سورس (۵ تا ۱۵ دقیقه — فقط بار اول)..."
-cd "$BASE_DIR"
-docker compose build pvnet-panel >/dev/null 2>&1 || docker compose build pvnet-panel | tail -5
-docker compose up -d 2>&1 | tail -2
-
-# ---------- ۶) تنظیم 3x-ui (رمز + پورت + basePath) ----------
-log "پیکربندی 3x-ui..."
-sleep 5
-docker exec pvnet-3xui x-ui setting -username "$XUI_USER" -password "$XUI_PASSWORD" >/dev/null 2>&1 \
-  || warn "تنظیم رمز 3x-ui ناموفق — دستی انجام دهید"
-docker exec pvnet-3xui x-ui setting -webPort "$XUI_WEB_PORT" >/dev/null 2>&1 || true
-docker exec pvnet-3xui x-ui setting -webBasePath "$XUI_BASEPATH" >/dev/null 2>&1 || true
-docker restart pvnet-3xui >/dev/null 2>&1 && sleep 5 || true
-
-# ---------- ۷) اتصال پنل به 3x-ui + اینباند پیش‌فرض ----------
-log "اتصال پنل به 3x-ui و ساخت اینباند پیش‌فرض..."
-COOKIE=$(curl -sk -c - -X POST "http://127.0.0.1:3001/api/auth/login" \
-  -H 'Content-Type: application/json' \
-  -d "{\"username\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}" \
-  | grep rp_session | awk '{print $NF}' || true)
-if [ -n "$COOKIE" ]; then
-  curl -sk -X PUT "http://127.0.0.1:3001/api/admin/panel-config" \
-    -H 'Content-Type: application/json' -b "rp_session=$COOKIE" \
-    -d "{\"baseUrl\":\"http://host.docker.internal:$XUI_WEB_PORT$XUI_BASEPATH\",\"username\":\"$XUI_USER\",\"password\":\"$XUI_PASSWORD\",\"apiToken\":\"\",\"subBase\":\"https://$PANEL_DOMAIN:$PANEL_PORT\",\"subPath\":\"sub\"}" >/dev/null || true
-  curl -sk -X POST "http://127.0.0.1:3001/api/admin/panel-test-saved" -b "rp_session=$COOKIE" >/dev/null || true
-  # اینباند پیش‌فرض VLESS روی پورت 10000 (اگر هیچ اینباندی نیست)
-  CSRF=$(curl -sk "http://host.docker.internal:$XUI_WEB_PORT$XUI_BASEPATH/csrf-token" | sed -n 's/.*"csrfToken":"\([^"]*\)".*/\1/p' || true)
-  curl -sk -c /tmp/xui-cookie -X POST "http://host.docker.internal:$XUI_WEB_PORT$XUI_BASEPATH/login" \
-    -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-    -d "{\"username\":\"$XUI_USER\",\"password\":\"$XUI_PASSWORD\"}" >/dev/null || true
-  curl -sk -b /tmp/xui-cookie -X POST "http://host.docker.internal:$XUI_WEB_PORT$XUI_BASEPATH/panel/api/inbounds/add" \
-    -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-    -d '{"up":0,"down":0,"total":0,"remark":"DE-VLESS-10000","enable":true,"expiryTime":0,"listen":"","port":10000,"protocol":"vless","sniffing":{"enabled":true,"destOverride":["http","tls"]},"settings":{"clients":[],"decryption":"none","fallbacks":[]},"streamSettings":{"network":"tcp","security":"none","tcpSettings":{"acceptProxyProtocol":false,"header":{"type":"none"}}},"tag":"in-10000-tcp"}' >/dev/null || true
-  rm -f /tmp/xui-cookie
-else
-  warn "لاگین ادمین پنل ناموفق — پیکربندی 3x-ui را از تنظیمات پنل انجام دهید"
-fi
-
-# ---------- ۸) بکاپ روزانه ----------
-cat > "$BASE_DIR/backup-db.sh" <<'BK'
-#!/bin/bash
-D=/opt/pvnet/panel-data
-F=$D/custom.db.bak-$(date +%Y%m%d-%H%M)
-sqlite3 $D/custom.db ".backup $F" 2>/dev/null || cp $D/custom.db $F
-ls -1t $D/custom.db.bak-* 2>/dev/null | tail -n +8 | xargs -r rm -f
-BK
-chmod +x "$BASE_DIR/backup-db.sh"
-(crontab -l 2>/dev/null | grep -v backup-db.sh; echo "30 4 * * * $BASE_DIR/backup-db.sh >> /var/log/pvnet-backup.log 2>&1") | crontab -
-
-# ---------- ۹) CREDENTIALS + خلاصه ----------
-cat > "$BASE_DIR/CREDENTIALS.txt" <<CRED
-=== PVNetWork — CREDENTIALS (confidential) ===
-Panel URL      : https://$PANEL_DOMAIN:$PANEL_PORT
-Panel admin    : $ADMIN_USERNAME / $ADMIN_PASSWORD
-3x-ui URL      : https://$XUI_DOMAIN:$PANEL_PORT$XUI_BASEPATH
-3x-ui login    : $XUI_USER / $XUI_PASSWORD
-3x-ui basePath : $XUI_BASEPATH
-Sub service    : https://$PANEL_DOMAIN:$PANEL_PORT/sub/<subId>
-Wildcard cert  : $BASE_DIR/certs/wildcard.$ROOT_DOMAIN.pem
-DB backups     : $BASE_DIR/panel-data/custom.db.bak-* (daily 04:30, keep 7)
-CRED
-chmod 600 "$BASE_DIR/CREDENTIALS.txt"
-
-sleep 3
-PANEL_HTTP=$(curl -sk -o /dev/null -w "%{http_code}" "https://$PANEL_DOMAIN:$PANEL_PORT/" || echo 000)
-echo ""
-log "=============================================================="
-log " نصب کامل شد! $c_ok"
-log " پنل نمایندگی : https://$PANEL_DOMAIN:$PANEL_PORT   (HTTP $PANEL_HTTP)"
-log " ادمین        : $ADMIN_USERNAME / $ADMIN_PASSWORD"
-log " 3x-ui        : https://$XUI_DOMAIN:$PANEL_PORT$XUI_BASEPATH"
-log " رمزها        : $BASE_DIR/CREDENTIALS.txt (chmod 600)"
-log " بکاپ روزانه  : ۰۴:۳۰ — آخرین ۷ نسخه"
-log "--------------------------------------------------------------"
-log " قدم بعدی: وارد پنل شوید → نماینده بسازید → نماینده کاربر می‌سازد"
-log " تغییر رمز ادمین: پنل → تنظیمات و پنل‌ها → حساب مدیر اصلی"
-log "=============================================================="
