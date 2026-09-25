@@ -1,409 +1,289 @@
-# PVNetwork — سامانه نمایندگی و فروش کانفیگ روی 3x-ui
+# PVNetwork — Reseller Dashboard for 3x-ui
 
-پنل مدیریت **نمایندگی فروش (Reseller)** برای هسته [3x-ui](https://github.com/MHSanaei/3x-ui): چند سرور همزمان، پول ترافیک مشترک، وایت‌لیبل کامل با دامنه اختصاصی، پورتال اختصاصی برای هر کاربر نهایی و ساخت گروهی کاربران — همه با یک خط نصب.
+PVNetwork is a self-hosted reseller dashboard for one or more existing 3x-ui servers. It gives the system owner a central admin panel for resellers, traffic pools, inbound permissions, users, white-label domains, 2FA, activity logs, subscription links, QR codes and related operations.
 
-> 🌐 این پروژه کاملاً **خودمیزبان (self-hosted)** است؛ هیچ سرویس بیرونی و هیچ اعتبارنامه پیش‌فرضی ندارد. همه دامنه‌ها و رمزها در زمان نصب توسط خودتان تعیین می‌شوند.
+> The default one-line installer is **dashboard-only**. It does not install 3x-ui, Xray, or Caddy, and it does not replace unrelated services already running on the server.
 
----
+## Quick start
 
-## 🇬🇧 Quick Start (English)
-
-**PVNetwork** is a self-hosted reseller dashboard for [3x-ui](https://github.com/MHSanaei/3x-ui) (Xray core): manage multiple 3x-ui servers, allocate traffic pools to resellers, and give every reseller a white-labeled panel with its own brand, domain and user portal.
+Run as `root` on Ubuntu or Debian:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
 ```
 
-Requirements: a fresh **Ubuntu/Debian** server with root access and a domain whose `A` record points to it. The installer sets up Docker, builds the panel from source, configures 3x-ui + HTTPS reverse proxy, and prints all credentials. Full documentation (with screenshots) is in Persian below — or ask your questions in [Issues](../../issues).
+The installer asks for the panel hostname, for example:
 
----
-
-## ✨ قابلیت‌ها
-
-- **چندپنلی** — چند سرور 3x-ui را همزمان وصل کنید؛ اینباندهای هر کدام را به هر نماینده اختصاص دهید
-- **پول ترافیک** — سهمیه گیگابایتی مشترک برای هر نماینده؛ ساخت کاربر جدید از پول کم می‌شود و از دسترسی خارج می‌شود
-- **وایت‌لیبل کامل** — نام برند + دامنه اختصاصی برای هر نماینده، با تأیید مالکیت از طریق رکورد TXT
-- **پورتال کاربر نهایی** — صفحه اختصاصی `/s/<subId>` با برند نماینده: مصرف، انقضا، QR و لینک‌ها بدون لاگین
-- **ساخت گروهی** — تا ۵۰ کاربر یکجا با نام‌گذاری خودکار و لیست ساب‌لینک‌های آماده کپی
-- **آنلاین‌های لحظه‌ای** — دات سبز آنلاین کنار هر کاربر + مشاهده IPهای متصل هر کاربر
-- **سرعت زنده سرور** — ↑↓ شبکه، CPU، اتصال‌های TCP و وضعیت Xray با به‌روزرسانی ۳ ثانیه‌ای
-- **هشدار ۸۰٪** — هشدار مصرف بالای ۸۰٪ و نزدیکی انقضا (+ ارسال خودکار اعلان تلگرام)
-- **تلگرام** — بات اختصاصی هر نماینده برای اعلان ساخت کاربر و هشدارهای مصرف
-- **ورود دومرحله‌ای (2FA)** — Google Authenticator برای ادمین و هر نماینده
-- **ضدبشکن ورود** — قفل خودکار پس از تلاش‌های ناموفق پشت‌سرهم
-- **ابطال لینک اشتراک** — تعویض subId با یک کلیک؛ لینک قبلی فوراً از کار می‌افتد
-- **مرتب‌سازی، جستجو، صفحه‌بندی و خروجی CSV** در لیست کاربران
-- **بکاپ خودکار روزانه دیتابیس** با نگهداری ۷ نسخه آخر
-
----
-
-## 🧭 معماری
-
-```
-                  کاربر نهایی (اپ موبایل/PC)
-                          │  ساب subscription
-                          ▼
-      ┌───────────  Caddy (پورت 2053)  ───────────┐
-      │  panel.example.com    →  پنل نمایندگی      │
-      │  3xpanel.example.com  →  3x-ui (basePath)  │
-      │  دامنه اختصاصی نماینده →  پورتال /s/<subId> │
-      └────────────────────┬──────────────────────┘
-                           ▼
-               ┌──  pvnet-panel (Next.js)  ──┐      ┌──  pvnet-3x-ui (Xray)  ──┐
-               │  ادمین / نماینده‌ها / کاربران │ ───► │  اینباندها و کلاینت‌ها     │
-               │  SQLite: panel-data/        │ API  │  vless/vmess/trojan/ss    │
-               └─────────────────────────────┘      └───────────────────────────┘
+```text
+npanel.example.com
 ```
 
-| جزء | نقش | پورت |
+and optionally the admin username. It then:
+
+- checks the target port and existing installation state before destructive changes;
+- installs only missing host dependencies;
+- reuses an existing working Docker installation, or installs Docker if it is absent;
+- clones the application to `/opt/pv-reseller/app`;
+- stores persistent SQLite data in `/opt/pv-reseller/data`;
+- stores backups in `/opt/pv-reseller/backup`;
+- creates one Docker container named `pv-reseller-dashboard`;
+- publishes the app only on `127.0.0.1:31080`;
+- reuses Apache when it already exists, or installs Apache when it is absent;
+- adds a dedicated Apache vhost without disabling unrelated vhosts;
+- obtains a Let's Encrypt certificate with Certbot webroot validation;
+- redirects HTTP to HTTPS after keeping the ACME challenge path reachable;
+- verifies local HTTP, origin HTTPS and API health before reporting completion.
+
+No Docker Compose plugin is required.
+
+## Requirements
+
+- Ubuntu or Debian
+- root access
+- at least 4 GiB free disk space for the first image build
+- a hostname such as `npanel.example.com`
+- DNS for that hostname must reach this server, directly or through Cloudflare
+- ports 80 and 443 must be available to Apache, or already be owned by the existing Apache service
+
+The application itself is not published directly to the Internet. Docker binds only:
+
+```text
+127.0.0.1:31080 -> pv-reseller-dashboard:3000
+```
+
+Apache is the public HTTPS entry point.
+
+## Architecture
+
+```text
+Browser / Cloudflare
+        |
+        v
+   Apache :80/:443
+        |
+        v
+ 127.0.0.1:31080
+        |
+        v
+ pv-reseller-dashboard
+        |
+        +---- API ----> existing external 3x-ui server(s)
+        |
+        +---- SQLite --> /opt/pv-reseller/data/custom.db
+```
+
+The dashboard does not manage the lifecycle of your 3x-ui/Xray servers. Add them from the dashboard after installation.
+
+## Cloudflare
+
+Cloudflare proxying is supported and no Cloudflare API token is required by the installer.
+
+Recommended settings for the dashboard hostname after origin HTTPS is healthy:
+
+- Proxy status: **Proxied** (orange cloud)
+- SSL/TLS encryption mode: **Full (strict)**
+- Always Use HTTPS: On
+- Cache rule for the dashboard hostname: **Bypass cache**
+- Rocket Loader: Off for this hostname if it interferes with dashboard JavaScript
+
+If certificate issuance fails while the hostname is proxied, verify that HTTP requests to `/.well-known/acme-challenge/` can reach the origin. A Cloudflare configuration that redirects the ACME request into an unavailable strict-HTTPS origin can block HTTP-01 validation.
+
+## First-login credentials
+
+On first install the script generates a cryptographically random `APP_SECRET` and admin password.
+
+They are stored in:
+
+```text
+/opt/pv-reseller/.env
+```
+
+with mode `0600`. The initial credential is also recorded in:
+
+```text
+/opt/pv-reseller/INITIAL_CREDENTIALS.txt
+```
+
+That file is historical only. If the admin password is later changed inside the dashboard, the current UI password is **not** written back into `INITIAL_CREDENTIALS.txt` or `.env`.
+
+## Update
+
+Re-run the same one-line installer:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
+```
+
+or, from an existing installation:
+
+```bash
+bash /opt/pv-reseller/app/update.sh
+```
+
+An update preserves:
+
+- `/opt/pv-reseller/.env`
+- `APP_SECRET`
+- the initial installer password value
+- the SQLite database
+- the selected panel domain and app port
+
+Before replacing the running dashboard, the installer backs up the database and installer configuration. It builds the candidate image while the current container is still running, then replaces only `pv-reseller-dashboard`. If the new container fails local health checks and a previous image exists, the installer restores the previous dashboard image.
+
+It does not restart unrelated Docker containers, Xray, 3x-ui, databases, or VPN services.
+
+## Backup and rollback
+
+Backups are created under:
+
+```text
+/opt/pv-reseller/backup/YYYYMMDD-HHMMSS/
+```
+
+They can contain:
+
+- `custom.db`
+- `.env`
+- `.installer-env`
+- the dashboard Apache vhost files
+
+To restore a database manually, stop only the dashboard container, replace `/opt/pv-reseller/data/custom.db` with the desired backup, and start/recreate the dashboard container with the same `.env` and loopback binding.
+
+## Connect an external 3x-ui server
+
+After logging in to the dashboard:
+
+1. Open **Settings / Panels**.
+2. Choose **Add panel**.
+3. Enter a display name for the server.
+4. Enter the complete existing 3x-ui web address, including its base path when one is configured.
+5. Enter either the 3x-ui API token or its administrator username/password.
+6. Optionally set the subscription base URL and subscription path.
+7. Run **Test connection**.
+8. Save the panel.
+9. Open **Resellers** and create/edit a reseller. The inbound list is refreshed when the Resellers tab is opened, so newly connected panel inbounds are available without requiring a manual dashboard refresh.
+
+Multiple external 3x-ui servers can be added. The API endpoint `/api/admin/inbounds` aggregates their inbounds and the reseller dialog groups them by panel.
+
+## Main features
+
+- multiple 3x-ui panels
+- inbound permissions per reseller
+- reseller traffic pools
+- multi-location user creation
+- white-label brand and domain settings
+- end-user subscription portal and QR codes
+- bulk user creation
+- traffic and expiry visibility
+- CSV export
+- reseller Telegram notifications
+- admin and reseller TOTP 2FA
+- login rate limiting
+- activity logs
+
+## Install layout
+
+```text
+/opt/pv-reseller/
+├── app/                    # Git checkout
+├── data/
+│   └── custom.db           # persistent SQLite database
+├── backup/                 # timestamped update backups
+├── .env                    # APP_SECRET/admin bootstrap values (0600)
+├── .installer-env          # non-secret installer metadata
+└── INITIAL_CREDENTIALS.txt # first-install record (0600)
+```
+
+Docker resources created by the default installer:
+
+```text
+container: pv-reseller-dashboard
+network:   pv_reseller_net
+image:     pv-reseller-dashboard:local
+bind:      127.0.0.1:31080:3000
+```
+
+## Non-interactive install
+
+For automation, provide values as environment variables:
+
+```bash
+PANEL_DOMAIN=npanel.example.com \
+ADMIN_USERNAME=admin \
+APP_PORT=31080 \
+bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
+```
+
+Supported installer overrides:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `PANEL_DOMAIN` | prompted | public dashboard hostname |
+| `ADMIN_USERNAME` | `admin` | initial admin username on first install |
+| `APP_PORT` | `31080` | loopback-only Docker host port |
+| `INSTALL_DIR` | `/opt/pv-reseller` | installation root |
+
+## Application environment
+
+| Variable | Default | Meaning |
 |---|---|---|
-| `pvnet-caddy` | ورودی HTTPS همه چیز با SNI + گواهی وایلدکارد | 2053 |
-| `pvnet-panel` | پنل نمایندگی (Next.js standalone + Prisma/SQLite) | 3001 (فقط لوکال) |
-| `pvnet-3xui` | هسته 3x-ui و Xray (شبکه host) | 2087 وب + اینباندها |
+| `DATABASE_URL` | `file:/app/data/custom.db` | SQLite database inside the container |
+| `APP_SECRET` | generated | session/secret encryption key |
+| `ADMIN_USERNAME` | `admin` | bootstrap admin username |
+| `ADMIN_PASSWORD` | generated | bootstrap password used only when the first admin row is created |
+| `PORT` | `3000` | internal Next.js port |
 
----
+## Troubleshooting
 
-## 🚀 نصب تک‌خطی
+### Dashboard is healthy locally but public URL fails
 
-**پیش‌نیاز:** سرور Ubuntu/Debian تازه با دسترسی root + یک دامنه که رکورد `A` آن به سرور اشاره می‌کند.
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
-```
-
-حالت غیرتعاملی (همه‌چیز از env — مناسب اتوماسیون):
+Check:
 
 ```bash
-PANEL_DOMAIN=panel.example.com \
-ROOT_DOMAIN=example.com \
-CF_API_TOKEN=cfut_xxx \
-bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
+curl -I http://127.0.0.1:31080/
+apache2ctl configtest
+curl -I https://your-panel-hostname.example/
 ```
 
-نصب‌کننده به‌ترتیب این کارها را انجام می‌دهد:
+Also verify DNS and Cloudflare SSL mode.
 
-1. **Docker + Compose** — اگر نبود نصب می‌کند
-2. **کلون مخزن** به `/opt/pvnet/repo`
-3. **تولید رمزهای تصادفی** برای ادمین، 3x-ui و کلید رمزنگاری
-4. **بیلد ایمیج پنل از سورس** (مرحله‌ای؛ فقط بار اول ۵–۱۵ دقیقه — روی سرورهای کم‌رم خودکار swap می‌سازد)
-5. **پیکربندی 3x-ui**: رمز تصادفی + پورت 2087 + basePath تصادفی (مسیر مخفی پنل 3x-ui)
-6. **اتصال پنل به 3x-ui** + ساخت اینباند پیش‌فرض `DE-VLESS-10000` (vless/tcp)
-7. **گواهی**: با `CF_API_TOKEN` گواهی وایلدکارد واقعی Let's Encrypt با تمدید خودکار؛ بدون آن self-signed
-8. **بکاپ روزانه دیتابیس** (۰۴:۳۰ — نگهداری ۷ نسخه)
-9. چاپ همه آدرس‌ها و رمزها در `/opt/pvnet/CREDENTIALS.txt`
+### Panel connection succeeds but inbounds are not shown for resellers
 
-پس از نصب:
+Open the **Resellers** tab again. Current versions refresh `/api/admin/inbounds` whenever that tab is entered. If the list is still empty, test the saved 3x-ui panel from **Settings / Panels** and check the dashboard container logs.
 
-| آدرس | توضیح |
-|---|---|
-| `https://panel.example.com:2053` | پنل نمایندگی (ورود ادمین) |
-| `https://3xpanel.example.com:2053/pvxxxxx/` | پنل 3x-ui (basePath تصادفی) |
-| `https://panel.example.com:2053/s/<subId>` | پورتال هر کاربر نهایی |
-| `https://panel.example.com:2053/apps` | مرکز دانلود اپ کاربران |
+### Existing port conflict
 
-> **آپدیت نسخه‌های بعدی:** `bash /opt/pvnet/repo/update.sh` — خودکار بکاپ می‌گیرد، pull و بیلد و ری‌استارت می‌کند.
-
----
-
-## 📖 راهنمای کامل پنل — همه منوها و دکمه‌ها
-
-پنل دو نقش دارد: **ادمین** (مالک سامانه) و **نماینده** (فروشنده). هر دو از یک صفحه وارد می‌شوند و منوها بر اساس نقش نشان داده می‌شوند.
-
-### ۱) صفحه ورود
-
-هر دو نقش از همین صفحه وارد می‌شوند؛ سامانه خودش نقش را تشخیص می‌دهد. اگر ورود دومرحله‌ای فعال باشد، بعد از رمز، کد Authenticator هم پرسیده می‌شود. پنل حالت تاریک/روشن دارد (دکمه ماه در بالا-چپ) و انتخاب شما ذخیره می‌شود.
-
-![صفحه ورود](docs/screenshots/01-login.png)
-
-| عنصر | کارکرد |
-|---|---|
-| نام کاربری / رمز عبور | ورود ادمین یا نماینده — رمز را با دکمه «نمایش رمز» می‌بینید |
-| ورود به پنل | ارسال فرم؛ در صورت قفل شدن ضدبشکن، پیام «دقیقه‌های باقی‌مانده» نشان داده می‌شود |
-| دکمه ماه | تغییر حالت تاریک/روشن |
-
-### ۲) داشبورد ادمین
-
-نمای کلی سامانه: وضعیت هسته، آمار کلی، روند ساخت کاربران، ترافیک به تفکیک لوکیشن/اینباند و جریان زنده فعالیت‌ها.
-
-![داشبورد ادمین](docs/screenshots/02-admin-overview.png)
-
-| بخش / دکمه | کارکرد |
-|---|---|
-| کارت «پنل ثابتی متصل است» | وضعیت اتصال به هسته 3x-ui (تعداد اینباند و کلاینت) |
-| **به‌روزرسانی** | خواندن دوباره اینباندها و آمار از هسته |
-| نماینده‌ها / کل کاربران / ترافیک کل (آپلود/دانلود) | چهار کارت آمار کلی |
-| روند ساخت کاربران (۱۴ روز اخیر) | نمودار روزانه ساخت کاربر |
-| ترافیک به تفکیک لوکیشن / اینباند / نماینده | نمودارهای توزیع مصرف |
-| اینباندهای پنل | کارت هر اینباند با پروتکل و پورت + دکمه «پنل اصلی» |
-| آخرین فعالیت‌ها | جریان زنده عملیات ادمین و نماینده‌ها (ورود، ساخت، حذف، تغییر رمز و…) |
-
-### ۳) مدیریت نماینده‌ها (منوی «نماینده‌ها»)
-
-ادمین برای هر فروشگاه/فروشنده یک «نماینده» می‌سازد. نماینده فقط داخل مرزی که ادمین تعیین می‌کند کار می‌کند: اینباندهای مجاز، پول ترافیک و قابلیت‌های مجاز.
-
-![مدیریت نماینده‌ها](docs/screenshots/03-admin-resellers.png)
-
-| ستون / دکمه | کارکرد |
-|---|---|
-| **+ نماینده جدید** | باز کردن فرم ساخت نماینده |
-| کاربر | نام کاربری و نام نمایشی نماینده |
-| وضعیت | بج «فعال» یا «معلق» |
-| اینباندهای مجاز | اینباندهایی که نماینده اجازه ساخت کاربر روی آن‌ها را دارد |
-| پول ترافیک | نوار مصرف پول (مصرف / سهمیه گیگابایت) + تعداد کاربران |
-| وایت‌لیبل | برند و وضعیت دامنه اختصاصی نماینده |
-| عملیات — ✏️ ویرایش | باز کردن دیالوگ ویرایش (بخش بعدی) |
-| عملیات — ⏻ فعال‌سازی/غیرفعال‌سازی | سوییچ سریع وضعیت؛ نماینده معلق نمی‌تواند وارد شود |
-| عملیات — 🗑 حذف | حذف قطعی نماینده و کاربرانش (با تأیید) |
-
-### ۴) ویرایش نماینده
-
-از همین دیالوگ، همه مرزهای یک نماینده کنترل می‌شود.
-
-![ویرایش نماینده](docs/screenshots/04-admin-reseller-edit.png)
-
-| فیلد / دکمه | کارکرد |
-|---|---|
-| نام کاربری (غیرقابل تغییر) | شناسه ورود نماینده |
-| رمز جدید (اختیاری) | اگر خالی بماند رمز قبلی می‌ماند |
-| نام/عنوان نماینده (اختیاری) | نام نمایشی در لیست و پیش‌نمایش برند |
-| **پول ترافیک (گیگابایت)** | سهمیه مشترک؛ خالی/۰ = نامحدود. چیپ‌های سریع ۵۱۲/۱۰۲۴/۲۰۴۸/۴۰۹۶/۱۰۲۴۰ گیگ |
-| مولتی‌لوکیشن | اجازه انتخاب چند اینباند (چند لوکیشن) برای هر کاربر |
-| اجازه محدودیت دستگاه | نمایش فیلد «تعداد دستگاه» برای نماینده |
-| وایت‌لیبل (دامنه اختصاصی) | اجازه تنظیم برند و دامنه اختصاصی توسط نماینده |
-| حسب فعال | سوییچ فعال/معلق کردن نماینده |
-| اینباندهای مجاز | تیک زدن اینباندها به تفکیک پنل |
-| **خاموش‌سازی اضطراری ورود دومرحله‌ای** | اگر نماینده اپ Authenticator را از دست داده باشد، ادمین از همین‌جا 2FA او را خاموش می‌کند |
-| ذخیره | اعمال تغییرات |
-
-### ۵) تنظیمات سامانه (منوی «تنظیمات و پنل‌ها»)
-
-حساب ادمین، 2FA، نام سامانه و پنل‌های متصل — همه از همین صفحه.
-
-![تنظیمات سامانه](docs/screenshots/05-admin-panels.png)
-
-| کارت / فیلد | کارکرد |
-|---|---|
-| **حساب مدیر اصلی** | تغییر نام کاربری و رمز ادمین — برای امنیت، رمز فعلی دوباره پرسیده می‌شود؛ بعد از ذخیره، نشست تازه صادر می‌شود |
-| **ورود دومرحله‌ای ادمین** | فعال‌سازی با اسکن QR در Google Authenticator؛ بعد از فعال‌سازی دکمه غیرفعال‌سازی جای آن را می‌گیرد |
-| **نام سامانه** | برندی که در صفحه ورود، هدر پنل و صفحات عمومی دیده می‌شود + دکمه «ذخیره نام» و پیش‌نمایش زنده |
-| ورود دومرحله‌ای (بج «غیرفعال/فعال») | وضعیت فعلی 2FA ادمین |
-
-### ۶) پنل‌های 3x-ui متصل
-
-پایین صفحه تنظیمات: لیست پنل‌های 3x-ui متصل. چند پنل = چند سرور؛ اولین پنل «پنل اصلی» است.
-
-![پنل‌های متصل](docs/screenshots/06-admin-panels-list.png)
-
-| فیلد / دکمه | کارکرد |
-|---|---|
-| **+ افزودن پنل جدید** | باز کردن فرم اتصال پنل تازه |
-| نام پنل (برای نمایش) | مثلاً «سروور آلمان» — در لیست اینباندها و انتخاب نماینده‌ها دیده می‌شود |
-| آدرس پنل | آدرس کامل وب 3x-ui با basePath، مثل `https://1.2.3.4:2053/pvxxxxx/` |
-| نام کاربری / رمز عبور ادمین پنل | همان ورود مدیر 3x-ui |
-| API Token (پیشنهادی) | اگر در 3x-ui ساخته‌اید؛ اتصال پایدارتر از نشست می‌شود |
-| آدرس پایه سابسکریپشن (اختیاری) | پایه لینک ساب کاربران، مثل `https://sub.example.com` |
-| مسیر سابسکریپشن | پیش‌فرض `sub` — مسیر انتهایی لینک ساب |
-| **تست اتصال** | بررسی زنده اعتبارنامه‌ها قبل از ذخیره |
-| **ذخیره پنل جدید** | ذخیره پنل در سامانه |
-| سوییچ «فعال» | خاموش/روشن کردن موقت پنل بدون حذف |
-| ✏️ ویرایش / 🗑 حذف | تغییر مشخصات یا حذف قطعی پنل |
-| **تست همه پنل‌های ذخیره‌شده** | بررسی سلامت همه پنل‌ها یکجا |
-
-### ۷) گزارش فعالیت‌ها (منوی «گزارش‌ها»)
-
-تمام عملیات ادمین و نماینده‌ها با زمان و جزئیات: ورودها، ساخت/حذف کاربر و نماینده، تغییر رمز، تلاش‌های مسدودشده ضدبشکن و…
-
-![گزارش‌ها](docs/screenshots/07-admin-reports.png)
-
-| ستون | محتوا |
-|---|---|
-| زمان | تاریخ و ساعت دقیق |
-| عامل | ادمین یا نماینده انجام‌دهنده (با بج نقش) |
-| عملیات | نوع عمل (ورود ادمین، ایجاد کاربر، حذف نماینده و…) |
-| جزئیات | توضیح عمل؛ مثل «Sara-Shop-8283 \| سهمیه: 30GB \| اینباندها: …» |
-
-### ۸) پنل نماینده — کاربران من (منوی «کاربران من»)
-
-نماینده فقط کاربران خودش را می‌بیند. بالای صفحه: تعداد کاربران، تعداد آنلاین همین لحظه و هشدار «مصرف بالای ۸۰٪».
-
-![کاربران نماینده](docs/screenshots/08-reseller-users.png)
-
-| عنصر / دکمه | کارکرد |
-|---|---|
-| **+ کاربر جدید** | باز کردن فرم ساخت کاربر (بخش ۱۰) |
-| **CSV** | دانلود خروجی CSV کل لیست (سازگار با اکسل — UTF-8 با BOM) |
-| جستجو… | جستجوی زنده در نام و شناسه کاربر |
-| بج «N آنلاین» | تعداد کاربران متصل همین لحظه (به‌روزرسانی هر ۳۰ ثانیه) |
-| بج «مصرف بالای ۸۰٪» | تعداد کاربرانی که از ۸۰٪ سهمیه گذشته‌اند |
-| دات سبز/خاکستری کنار کاربر | آنلاین / آفلاین — با کلیک، IPهای متصل کاربر را می‌بینید |
-| سرستون‌های ⭥ کاربر/ترافیک/انقضا/وضعیت | مرتب‌سازی صعودی/نزولی با کلیک |
-| صفحه‌بندی «قبلی / بعدی» | ۲۰ کاربر در هر صفحه |
-| 🔗 لینک‌ها و QR کاربر | باز کردن دیالوگ لینک‌ها (بخش ۱۱) |
-| ⧉ کپی لینک ساب | کپی فوری لینک سابسکریپشن |
-| ↺ ریست ترافیک | صفر کردن مصرف کاربر در هسته |
-| 👤 دیدن IPها | لیست IPهای اخیراً متصل کاربر |
-| ✏️ ویرایش / ⏻ فعال‌سازی / 🗑 حذف | تغییر سهمیه و انقضا، قطع/وصل سرویس، حذف کاربر |
-
-### ۹) آمار و مصرف — منوی «آمار و مصرف»
-
-![آمار و مصرف](docs/screenshots/09-reseller-stats.png)
-
-| بخش | کارکرد |
-|---|---|
-| کارت‌های آمار | کاربران من، فعال، منقضی/پر، مصرف کل (از سهمیه) |
-| **سرعت لحظه‌ای شبکه** | ↑ آپلود / ↓ دانلود زنده، CPU، اتصال‌های TCP و وضعیت Xray — به‌روزرسانی هر ۳ ثانیه با دکمه ♻ برای خواندن دوباره |
-| پول ترافیک شما | نوار مصرف پول مشترک + باقی‌مانده |
-| وضعیت کاربران | نمودار دایره‌ای فعال/غیرفعال |
-| مصرف ترافیک به تفکیک لوکیشن | نمودار میله‌ای اینباندها |
-| برترین مصرف‌کننده‌ها | کاربران با بیشترین مصرف + نوار نسبت به سهمیه |
-| دسترسی‌های حساب شما | خلاصه دسترسی‌های نماینده: مولتی‌لوکیشن، پول ترافیک، تخصیص‌یافته |
-
-### ۱۰) ساخت کاربر — تکی یا گروهی
-
-فقط نام + سهمیه + انقضا کافی است؛ بقیه کارها خودکار انجام می‌شود.
-
-![ساخت کاربر](docs/screenshots/10-reseller-create-user.png)
-
-| فیلد / دکمه | کارکرد |
-|---|---|
-| باقیمانده پول ترافیک شما | یادآوری زنده سهمیه قابل استفاده |
-| **تعداد (بیشتر از ۱ = ساخت گروهی)** | مثلاً ۱۰ = ده کاربر یکجا با نام‌های `Ali-Shop-1` تا `Ali-Shop-10` |
-| نام کاربر | فقط حروف انگلیسی، عدد، `-` و `_` — پایین صفحه ساخت، گروهی خودش شماره می‌گذارد |
-| سهمیه ترافیک (گیگ) | خالی = نامحدود |
-| تعداد دستگاه | فقط اگر ادمین «اجازه محدودیت دستگاه» داده باشد؛ ۰ = نامحدود |
-| تاریخ انقضا + چیپ‌های سریع ۱/۲/۳/۶ ماه | خالی = بدون انقضا |
-| اینباندها (لوکیشن‌ها) — چندگانه | انتخاب لوکیشن‌ها؛ اگر «مولتی‌لوکیشن» داشته باشید چند لوکیشن یکجا |
-| **ساخت کاربر** | ساخت + باز شدن خودکار دیالوگ لینک‌ها (در حالت گروهی: لیست همه ساب‌لینک‌ها با کپی یکجا) |
-| انصراف | بستن فرم |
-
-### ۱۱) لینک‌ها و QR کاربر
-
-![لینک‌ها](docs/screenshots/11-reseller-links.png)
-
-| دکمه | کارکرد |
-|---|---|
-| لینک سابسکریپشن + ⧉ کپی | لینک خودبه‌روزشونده؛ در اپ کاربر یک بار وارد می‌شود و همه لوکیشن‌ها را می‌آورد |
-| **QR** | نمایش کد QR لینک ساب برای اسکن با اپ |
-| 👤 صفحه کاربر | باز کردن پورتال اختصاصی کاربر `/s/<subId>` در تب جدید |
-| 🔄 **لینک جدید** | اگر لینک قبلی لو رفته: subId عوض می‌شود، لینک قبلی فوراً از کار می‌افتد |
-| لینک‌های اتصال (V2Ray) | لینک مستقیم هر لوکیشن (vless/vmess/…) با کپی و QR جداگانه |
-| ⧉ کپی همه | کپی همه لینک‌های اتصال یکجا |
-
-### ۱۲) تنظیمات حساب نماینده — منوی «تنظیمات حساب»
-
-![تنظیمات حساب](docs/screenshots/12-reseller-account.png)
-
-| کارت | کارکرد |
-|---|---|
-| **تغییر رمز عبور** | رمز فعلی + رمز جدید (حداقل ۶ کاراکتر) + تکرار رمز → «تغییر رمز عبور» |
-| **ورود دومرحله‌ای (Google Authenticator)** | «فعال‌سازی ورود دومرحله‌ای» → QR اسکن می‌شود → کد ۶ رقمی تأیید → از این پس بعد از رمز، کد پرسیده می‌شود |
-| **اعلان‌های تلگرام** | سوییچ فعال‌سازی + «توکن بات» از [@BotFather](https://t.me/BotFather) + «شناسه چت» (از [@userinfobot](https://t.me/userinfobot) بگیرید) → «ذخیره تنظیمات» → «ارسال پیام تست» |
-
-اعلان‌های تلگرام: ساخت کاربر (تکی/گروهی)، عبور کاربر از ۸۰٪ سهمیه و نزدیکی انقضا — با محدودیت ارسال تا اسپم نشود.
-
-### ۱۳) برند و دامنه اختصاصی — منوی «برند و دامنه»
-
-نماینده نام برند خودش را می‌گذارد و (در صورت داشتن دسترسی وایت‌لیبل) دامنه اختصاصی می‌بندد؛ پورتال کاربرانش با برند خودش بالا می‌آید.
-
-![برند و دامنه](docs/screenshots/13-reseller-brand.png)
-
-| فیلد / دکمه | کارکرد |
-|---|---|
-| نام برند پنل شما | مثلاً «فروشگاه نمونه» — در پورتال کاربران، صفحه ورود و مرکز اپ‌ها دیده می‌شود + پیش‌نمایش زنده |
-| دامنه اختصاصی سابسکریپشن | مثلاً `sub.myshop.ir` — رکورد `A` آن باید به سرور پنل اشاره کند |
-| **ذخیره تنظیمات برند** | ذخیره برند/دامنه + نمایش توکن تأیید |
-
-تأیید مالکیت دامنه با رکورد TXT انجام می‌شود؛ در DNS دامنه بسازید:
-
-```
-_pvnet.<نام‌دامنه>  TXT  "pvnet-verify=<توکن از پنل>"
-```
-
-سپس وضعیت را از «دامنه‌ای ثبت نشده» به تأییدشده تغییر می‌دهد. بهترین نتیجه: پروکسی نارنجی Cloudflare + حالت SSL = Full.
-
-### ۱۴) پورتال کاربر — `/s/<subId>`
-
-صفحه‌ای که کاربر نهایی می‌بیند: بدون لاگین، با برند نماینده.
-
-![پورتال کاربر](docs/screenshots/14-public-portal.png)
-
-| بخش | کارکرد |
-|---|---|
-| کارت کاربر | نام، بج «فعال»، مصرف ترافیک با نوار درصد، روزهای مانده، لوکیشن‌ها |
-| لینک اشتراک | لینک ساب + «کپی» + «نمایش QR» — در اپ وارد کنید تا همه لوکیشن‌ها خودکار بیایند و به‌روزرسانی هم خودکار است |
-| کانفیگ‌های مستقیم | لینک‌های vless/vmess هر لوکیشن با کپی و QR (برای اپ‌هایی که ساب را قبول نمی‌کنند) |
-| دانلود اپ‌های پیشنهادی | لینک اپ سازگار با هر پلتفرم |
-
-همچنین خروجی ساب در سه فرمت در دسترس است: `?format=clash` (YAML کلش) و `?format=json`.
-
-### ۱۵) مرکز دانلود اپ — `/apps`
-
-راهنمای دانلود اپ‌های سازگار به تفکیک پلتفرم: v2rayNG، Hiddify، Streisand، V2Box، v2rayN، NekoBox، V2rayXS.
-
-![مرکز اپ‌ها](docs/screenshots/15-public-apps.png)
-
-### ۱۶) هسته 3x-ui
-
-هسته واقعی Xray که همه چیز روی آن سوار است؛ پنل نمایندگی همه‌چیز را از API همین هسته می‌خواند/می‌نویسد (اینباندها، کلاینت‌ها، آنلاین‌ها، ترافیک). نصب‌کننده به‌صورت خودکار 3x-ui را با رمز و basePath تصادفی راه می‌اندازد و به پنل وصل می‌کند.
-
-![3x-ui](docs/screenshots/16-3xui-login.png)
-
----
-
-## 🔐 امنیت
-
-- رمزها hashed و سکرت‌های 2FA/تلگرام encrypted ذخیره می‌شوند
-- **ضدبشکن ورود**: ۱۰ خطای رمز در ۱۵ دقیقه برای هر نام کاربری و ۳۰ خطا برای هر IP = مسدودی ۱۵ دقیقه‌ای (HTTP 429) با ثبت در گزارش فعالیت‌ها
-- رمز پیش‌فرض وجود ندارد — رمز ادمین تصادفی تولید و یک‌بار چاپ می‌شود
-- 3x-ui با basePath تصادفی (مسیر مخفی) و رمز تصادفی نصب و پیکربندی می‌شود
-- هیچ سرتیتی در مخزن نیست؛ همه اعتبارنامه‌ها از env/فایل‌های گیت‌ایگنورشده خوانده می‌شوند
-- کلید رمزنگاری (`APP_SECRET`) در زمان نصب تصادفی ساخته می‌شود
-
-## ⚙️ متغیرهای محیطی
-
-| متغیر | پیش‌فرض | توضیح |
-|---|---|---|
-| `DATABASE_URL` | `file:/app/data/custom.db` | مسیر فایل دیتابیس SQLite |
-| `APP_SECRET` | — (الزامی) | کلید رمزنگاری سکرت‌ها و نشست‌ها — رشته تصادفی طولانی |
-| `ADMIN_USERNAME` | `admin` | نام کاربری ادمین (فقط بار اول؛ بعداً از پنل تغییر کنید) |
-| `ADMIN_PASSWORD` | — | رمز ادمین؛ اگر خالی باشد تصادفی تولید و یک‌بار چاپ می‌شود |
-| `PORT` | `3000` | پورت داخلی Next.js |
-
-## 💾 بکاپ و نگهداری
+The installer refuses to kill the owner of `APP_PORT`. Choose another loopback port instead:
 
 ```bash
-/opt/pvnet/backup-db.sh                                # بکاپ فوری دستی
-/opt/pvnet/panel-data/custom.db.bak-*                  # بکاپ‌ها (روزانه ۰۴:۳۰، نگهداری ۷ نسخه)
-bash /opt/pvnet/repo/update.sh                         # آپدیت از مخزن (بکاپ خودکار قبل از آپدیت)
-cd /opt/pvnet && docker compose logs -f pvnet-panel    # لاگ زنده پنل
+APP_PORT=31081 bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
 ```
 
-برای بازیابی: پنل را متوقف کنید، فایل بکاپ را روی `panel-data/custom.db` کپی کنید و دوباره بالا بیاورید.
+### Logs
 
-## 📁 ساختار مخزن
-
-```
-├── install.sh                 ← نصب تک‌خطی روی سرور تازه
-├── update.sh                  ← آپدیت (pull + بیلد + ری‌استارت)
-├── docker/Dockerfile          ← بیلد چندمرحله‌ای از سورس (bun → node:22-slim)
-├── docker/entrypoint.sh       ← آماده‌سازی دیتابیس و اجرا
-├── src/app/api/...            ← API ادمین/نماینده/عمومی (ساب، پورتال، لینک‌ها)
-├── src/components/panel/...   ← UI پنل (ادمین + نماینده)
-├── src/lib/                   ← هسته: اتصال 3x-ui، لینک‌ساز، TOTP، تلگرام، clash، ضدبشکن
-├── prisma/schema.prisma       ← اسکیمای SQLite
-├── docs/screenshots/          ← اسکرین‌شات‌های همین راهنما
-└── scripts/connect_panel.sh   ← ابزار اتصال دوباره پنل به 3x-ui (روی سرور)
+```bash
+docker logs -f pv-reseller-dashboard
 ```
 
-## ❓ عیب‌یابی سریع
+## Legacy full-stack installer
 
-| مشکل | راه‌حل |
-|---|---|
-| هشدار گواهی در مرورگر | `CF_API_TOKEN` بدهید تا وایلدکارد واقعی صادر شود، یا یک‌بار هشدار self-signed را بپذیرید |
-| «هیچ پنلی در دسترس نیست» | تنظیمات و پنل‌ها → تست اتصال → آدرس (با basePath)، رمز و basePath 3x-ui را چک کنید |
-| کاربر ساخته نمی‌شود (۴۰۳) | پول ترافیک نماینده پر شده یا اینباندی انتخاب نشده است |
-| دامنه اختصاصی تأیید نمی‌شود | رکورد TXT `_pvnet.<دامنه>` را بسازید + پروکسی نارنجی Cloudflare + SSL Full، بعد دکمه ذخیره را دوباره بزنید |
-| فراموشی رمز ادمین | رمز را در `/opt/pvnet/.env` عوض کنید و `docker compose up -d pvnet-panel` را اجرا کنید — یا رمز تصادفی بار اول از `CREDENTIALS.txt` |
-| ورود با 429 مسدود شد | ۱۵ دقیقه صبر کنید — ضدبشکن خودش باز می‌کند (جزئیات در گزارش‌ها) |
-| اعلان تلگرام نمی‌آید | توکن بات و Chat ID را با «ارسال پیام تست» چک کنید؛ سوییچ اعلان‌ها روشن باشد |
+The old installer that provisioned Caddy, a local 3x-ui/Xray instance and related resources is preserved only for historical/manual use at:
 
+```text
+scripts/install-full-stack-legacy.sh
+```
+
+It is **not** the recommended installer for a server that already has infrastructure and is not used by the one-line command above.
+
+## Development
+
+The production image is built from `docker/Dockerfile` using Bun for dependency/build stages and Node.js for the standalone runtime. Prisma uses SQLite for dashboard state.
+
+Useful checks before release:
+
+```bash
+bash scripts/test-dashboard-installer.sh
+node scripts/test-inbound-refresh.mjs
+bash -n install.sh
+bash -n update.sh
+```
