@@ -18,7 +18,7 @@ import {
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/hooks/use-toast";
-import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo } from "./shared";
+import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput } from "./shared";
 import { ThemeToggle } from "./theme";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
 import {
@@ -49,6 +49,7 @@ import {
   KeyRound,
   Send,
   Activity,
+  Bot,
   Send as SendIcon2,
 } from "lucide-react";
 import QRCode from "react-qr-code";
@@ -610,9 +611,9 @@ function BrandTab({ whitelabel, reload }: { whitelabel: WhitelabelInfo | null; r
 // ---------- کاربران ----------
 type EditForm = {
   name: string;
-  trafficGB: number;
+  trafficGB: string; // رشته‌ای برای تایپ روان در موبایل — هنگام ذخیره به عدد تبدیل می‌شود
   expiryDate: string;
-  ipLimit: number;
+  ipLimit: string;
   enable: boolean;
   inbounds: InboundRefForm[];
 };
@@ -704,20 +705,20 @@ function UsersTab({
 
   // آنلاین‌ها، ساخت گروهی و IPهای کاربر
   const [onlineSet, setOnlineSet] = useState<Set<string>>(new Set());
-  const [count, setCount] = useState(1); // ۱ = تک‌کاربره؛ بیشتر = ساخت گروهی
+  const [count, setCount] = useState("1"); // ۱ = تک‌کاربره؛ بیشتر = ساخت گروهی (رشته‌ای برای تایپ روان در موبایل)
   const [bulkResult, setBulkResult] = useState<{ created: { email: string; subLink: string | null }[]; failed: { name: string; error: string }[] } | null>(null);
   const [ipsUser, setIpsUser] = useState<{ email: string; name: string | null } | null>(null);
   const [ipsList, setIpsList] = useState<string[] | null>(null);
 
-  // فرم ساخت کاربر
+  // فرم ساخت کاربر — مقادیر عددی به‌صورت رشته نگه‌داری می‌شوند تا تایپ در موبایل درست کار کند
   const [name, setName] = useState("");
   const poolLimited = permissions.trafficPoolGB > 0;
   const [trafficGB, setTrafficGB] = useState(() => {
-    if (poolLimited) return Math.max(1, Math.min(20, permissions.remainingGB));
-    return 20;
+    if (poolLimited) return String(Math.max(1, Math.min(20, permissions.remainingGB)));
+    return "20";
   });
   const [expiryDate, setExpiryDate] = useState("");
-  const [ipLimit, setIpLimit] = useState(permissions.allowIpLimit ? 2 : 0);
+  const [ipLimit, setIpLimit] = useState(permissions.allowIpLimit ? "2" : "0");
   const [selectedInbounds, setSelectedInbounds] = useState<InboundRefForm[]>([]);
 
   // فرم ویرایش
@@ -755,9 +756,9 @@ function UsersTab({
     setEditing(u);
     setEditForm({
       name: u.name || u.email.split("-")[0],
-      trafficGB: u.trafficGB || u.totalGB,
+      trafficGB: String(u.trafficGB || u.totalGB || 0),
       expiryDate: u.expiryTime > 0 ? new Date(u.expiryTime).toISOString().slice(0, 10) : "",
-      ipLimit: 0,
+      ipLimit: "0",
       enable: u.enable,
       inbounds: currentRefs,
     });
@@ -772,16 +773,19 @@ function UsersTab({
       toast({ title: "خطا", description: "حداقل یک اینباند (لوکیشن) انتخاب کنید", variant: "destructive" });
       return;
     }
-    if (poolLimited && trafficGB <= 0) {
+    const nCount = Math.min(50, Math.max(1, Math.floor(Number(count) || 1)));
+    const nTraffic = Math.max(0, Math.floor(Number(trafficGB) || 0));
+    const nIpLimit = Math.max(0, Math.floor(Number(ipLimit) || 0));
+    if (poolLimited && nTraffic <= 0) {
       toast({ title: "خطا", description: "پول ترافیک شما محدود است — سهمیه کاربر باید عددی مثبت باشد", variant: "destructive" });
       return;
     }
-    if (poolLimited && trafficGB > permissions.remainingGB) {
+    if (poolLimited && nTraffic > permissions.remainingGB) {
       toast({ title: "خطا", description: `باقیمانده پول شما ${faNum(permissions.remainingGB)} گیگ است`, variant: "destructive" });
       return;
     }
     // ---- ساخت گروهی (تعداد > ۱) ----
-    if (count > 1) {
+    if (nCount > 1) {
       setBusy(true);
       const rb = await api<{
         createdCount: number;
@@ -790,7 +794,7 @@ function UsersTab({
         failed: { name: string; error: string }[];
       }>("/api/reseller/users/bulk", {
         method: "POST",
-        body: JSON.stringify({ prefix: name, count, trafficGB, expiryDate, ipLimit, inbounds: selectedInbounds }),
+        body: JSON.stringify({ prefix: name, count: nCount, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds }),
       });
       setBusy(false);
       if (rb.ok && rb.data) {
@@ -812,7 +816,7 @@ function UsersTab({
     setBusy(true);
     const r = await api<{ ok: boolean; email: string; subLink: string | null }>("/api/reseller/users", {
       method: "POST",
-      body: JSON.stringify({ name, trafficGB, expiryDate, ipLimit, inbounds: selectedInbounds }),
+      body: JSON.stringify({ name, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds }),
     });
     setBusy(false);
     if (r.ok && r.data) {
@@ -837,7 +841,11 @@ function UsersTab({
     setBusy(true);
     const r = await api<{ ok: boolean }>(`/api/reseller/users/${encodeURIComponent(editing.email)}`, {
       method: "PUT",
-      body: JSON.stringify(editForm),
+      body: JSON.stringify({
+        ...editForm,
+        trafficGB: Math.max(0, Math.floor(Number(editForm.trafficGB) || 0)),
+        ipLimit: Math.max(0, Math.floor(Number(editForm.ipLimit) || 0)),
+      }),
     });
     setBusy(false);
     if (r.ok) {
@@ -1206,23 +1214,18 @@ function UsersTab({
             )}
             <div className="space-y-2">
               <Label>تعداد — بیشتر از ۱ یعنی ساخت گروهی (تا ۵۰)</Label>
-              <Input
-                dir="ltr"
-                className="latin-input"
-                type="number"
-                min={1}
-                max={50}
+              <NumberInput
                 value={count}
-                onChange={(e) => setCount(Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
+                onValueChange={(v) => setCount(v === "" ? "1" : String(Math.min(50, Math.max(1, Math.floor(Number(v) || 1)))))}
               />
-              {count > 1 && (
+              {Number(count) > 1 && (
                 <p className="text-xs text-muted-foreground" dir="ltr">
                   {name || "shop"}01 … {name || "shop"}{faNum(count)} — شماره خودکار اضافه می‌شود
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <Label>{count > 1 ? "پیشوند نام کاربرها (حروف انگلیسی)" : "نام کاربر (حروف انگلیسی، عدد، - و _)"}</Label>
+              <Label>{Number(count) > 1 ? "پیشوند نام کاربرها (حروف انگلیسی)" : "نام کاربر (حروف انگلیسی، عدد، - و _)"}</Label>
               <Input
                 dir="ltr"
                 className="latin-input"
@@ -1235,31 +1238,28 @@ function UsersTab({
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>سهمیه ترافیک (گیگ) {poolLimited ? "— الزامی" : "— ۰ = نامحدود"}</Label>
-                <Input
-                  dir="ltr"
-                  className="latin-input"
-                  type="number"
-                  min={poolLimited ? 1 : 0}
-                  max={poolLimited ? permissions.remainingGB : undefined}
+                <NumberInput
+                  placeholder="مثلاً ۳۰"
                   value={trafficGB}
-                  onChange={(e) => setTrafficGB(Number(e.target.value))}
+                  onValueChange={setTrafficGB}
                 />
+                <div className="flex flex-wrap gap-1.5">
+                  {[5, 10, 15, 20, 30, 40, 50, 100]
+                    .filter((g) => !poolLimited || g <= permissions.remainingGB)
+                    .map((g) => (
+                      <Button key={g} type="button" size="sm" variant="outline" onClick={() => setTrafficGB(String(g))}>
+                        {faNum(g)} گیگ
+                      </Button>
+                    ))}
+                </div>
                 {poolLimited && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {[5, 10, 20, 50, 100]
-                      .filter((g) => g <= permissions.remainingGB)
-                      .map((g) => (
-                        <Button key={g} type="button" size="sm" variant="outline" onClick={() => setTrafficGB(g)}>
-                          {faNum(g)} گیگ
-                        </Button>
-                      ))}
-                  </div>
+                  <p className="text-xs text-muted-foreground">حداکثر مجاز: {faNum(permissions.remainingGB)} گیگ (باقیمانده پول شما)</p>
                 )}
               </div>
               {permissions.allowIpLimit && (
                 <div className="space-y-2">
                   <Label>تعداد دستگاه — ۰ = نامحدود</Label>
-                  <Input dir="ltr" className="latin-input" type="number" min={0} value={ipLimit} onChange={(e) => setIpLimit(Number(e.target.value))} />
+                  <NumberInput value={ipLimit} onValueChange={setIpLimit} />
                 </div>
               )}
             </div>
@@ -1325,7 +1325,7 @@ function UsersTab({
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>انصراف</Button>
             <Button onClick={createUser} disabled={busy} className="brand-gradient text-white hover:opacity-90 font-bold">
-              {busy && <Spinner className="h-4 w-4" />} {count > 1 ? `ساخت ${faNum(count)} کاربر` : "ساخت کاربر"}
+              {busy && <Spinner className="h-4 w-4" />} {Number(count) > 1 ? `ساخت ${faNum(count)} کاربر` : "ساخت کاربر"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1448,14 +1448,17 @@ function UsersTab({
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>سهمیه ترافیک (گیگ) {poolLimited ? "— الزامی" : "— ۰ = نامحدود"}</Label>
-                  <Input
-                    dir="ltr"
-                    className="latin-input"
-                    type="number"
-                    min={poolLimited ? 1 : 0}
+                  <NumberInput
                     value={editForm.trafficGB}
-                    onChange={(e) => setEditForm({ ...editForm, trafficGB: Number(e.target.value) })}
+                    onValueChange={(v) => setEditForm({ ...editForm, trafficGB: v })}
                   />
+                  <div className="flex flex-wrap gap-1.5">
+                    {[10, 20, 30, 40, 50, 100].map((g) => (
+                      <Button key={g} type="button" size="sm" variant="outline" onClick={() => setEditForm({ ...editForm, trafficGB: String(g) })}>
+                        {faNum(g)} گیگ
+                      </Button>
+                    ))}
+                  </div>
                   {poolLimited && (
                     <p className="text-xs text-muted-foreground">
                       سهمیه فعلی این کاربر: {faNum(editing?.trafficGB || 0)} گیگ — باقیمانده پول بدون این کاربر: {faNum(Math.max(0, permissions.remainingGB + (editing?.trafficGB || 0)))} گیگ
@@ -1465,13 +1468,9 @@ function UsersTab({
                 {permissions.allowIpLimit && (
                   <div className="space-y-2">
                     <Label>تعداد دستگاه (۰ = بدون تغییر)</Label>
-                    <Input
-                      dir="ltr"
-                      className="latin-input"
-                      type="number"
-                      min={0}
+                    <NumberInput
                       value={editForm.ipLimit}
-                      onChange={(e) => setEditForm({ ...editForm, ipLimit: Number(e.target.value) })}
+                      onValueChange={(v) => setEditForm({ ...editForm, ipLimit: v })}
                     />
                     <p className="text-xs text-muted-foreground">در ویرایش، مقدار ۰ یعنی بدون محدودیت</p>
                   </div>
@@ -1815,10 +1814,27 @@ function AccountSettingsTab({ username }: { username: string }) {
     }
   }, []);
 
+  // ---- ربات میرزا پنل ----
+  const [mirzaChatId, setMirzaChatId] = useState("");
+  const [mirzaToken, setMirzaToken] = useState("");
+  const [mirzaHasToken, setMirzaHasToken] = useState(false);
+  const [mirzaEnabled, setMirzaEnabled] = useState(false);
+  const [mirzaBusy, setMirzaBusy] = useState(false);
+
+  const loadMirza = useCallback(async () => {
+    const r = await api<{ mirza: { enabled: boolean; chatId: string; hasToken: boolean } }>("/api/reseller/mirza");
+    if (r.ok && r.data) {
+      setMirzaEnabled(r.data.mirza.enabled);
+      setMirzaChatId(r.data.mirza.chatId);
+      setMirzaHasToken(r.data.mirza.hasToken);
+    }
+  }, []);
+
   useEffect(() => {
     void load2fa();
     void loadTg();
-  }, [load2fa, loadTg]);
+    void loadMirza();
+  }, [load2fa, loadTg, loadMirza]);
 
   async function changePassword() {
     if (!curPass || !newPass) {
@@ -1909,6 +1925,30 @@ function AccountSettingsTab({ username }: { username: string }) {
     setTgBusy(false);
     if (r.ok) {
       toast({ title: "ارسال شد", description: "پیام تست به تلگرام شما ارسال شد" });
+    } else {
+      toast({ title: "خطا", description: r.error, variant: "destructive" });
+    }
+  }
+
+  async function saveMirza() {
+    setMirzaBusy(true);
+    const r = await api("/api/reseller/mirza", { method: "PUT", body: JSON.stringify({ botToken: mirzaToken, chatId: mirzaChatId, enabled: mirzaEnabled }) });
+    setMirzaBusy(false);
+    if (r.ok) {
+      toast({ title: "موفق", description: "تنظیمات ربات میرزا ذخیره شد" });
+      setMirzaToken("");
+      void loadMirza();
+    } else {
+      toast({ title: "خطا", description: r.error, variant: "destructive" });
+    }
+  }
+
+  async function testMirza() {
+    setMirzaBusy(true);
+    const r = await api<{ ok: boolean; msg: string }>("/api/reseller/mirza", { method: "POST" });
+    setMirzaBusy(false);
+    if (r.ok) {
+      toast({ title: "ارسال شد", description: "پیام تست به ربات میرزا شما ارسال شد" });
     } else {
       toast({ title: "خطا", description: r.error, variant: "destructive" });
     }
@@ -2050,6 +2090,43 @@ function AccountSettingsTab({ username }: { username: string }) {
               {tgBusy && <Spinner className="h-4 w-4" />} ذخیره تنظیمات
             </Button>
             <Button variant="outline" onClick={testTg} disabled={tgBusy}>
+              <SendIcon2 className="h-4 w-4" /> ارسال پیام تست
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ربات میرزا پنل */}
+      <Card className="bg-card card-soft">
+        <CardContent className="p-5 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-bold text-sm flex items-center gap-2">
+              <Bot className="h-4 w-4 text-[var(--brand-orange)]" />
+              ربات میرزا پنل
+              {mirzaEnabled && (
+                <Badge variant="outline" className="tone-ok">متصل</Badge>
+              )}
+            </h3>
+            <Switch checked={mirzaEnabled} onCheckedChange={setMirzaEnabled} />
+          </div>
+          <p className="text-xs text-muted-foreground leading-5">
+            ربات تلگرامی خودتان (مثل ربات فروش سرویس در میرزا پنل) را به این سامانه وصل کنید تا با همان امکانات اعلان‌های ما دریافت کنید: ساخت کاربر جدید، مصرف ۸۰٪ به بالا و انقضای نزدیک. کافی است توکن بات را از <b dir="ltr">@BotFather</b> بگیرید، اینجا وارد کنید و شناسه چت را از <b dir="ltr">@userinfobot</b> بگیرید. (قبل از استفاده یک پیام به بات خودتان بدهید) — اگر تلگرام هم فعال باشد، هر دو بات پیام دریافت می‌کنند.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>توکن بات میرزا {mirzaHasToken && <span className="text-[10px] tone-ok">(ذخیره شده — برای تغییر پر کنید)</span>}</Label>
+              <Input dir="ltr" className="latin-input" type="password" value={mirzaToken} onChange={(e) => setMirzaToken(e.target.value)} placeholder={mirzaHasToken ? "••••••••••••" : "123456789:AAE..."} autoComplete="off" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>شناسه چت (Chat ID)</Label>
+              <Input dir="ltr" className="latin-input" value={mirzaChatId} onChange={(e) => setMirzaChatId(e.target.value)} placeholder="123456789 یا @channel" />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={saveMirza} disabled={mirzaBusy} className="brand-gradient text-white hover:opacity-90 font-bold">
+              {mirzaBusy && <Spinner className="h-4 w-4" />} ذخیره و اتصال ربات
+            </Button>
+            <Button variant="outline" onClick={testMirza} disabled={mirzaBusy}>
               <SendIcon2 className="h-4 w-4" /> ارسال پیام تست
             </Button>
           </div>

@@ -59,6 +59,10 @@ model Reseller {
   tgBotToken String?  // توکن بات تلگرام (encrypted)
   tgChatId   String?  // شناسه چت/کانال مقصد
   tgEnabled  Boolean  @default(false)
+  // ---- ربات میرزا پنل (کانال دوم اعلان‌ها — اتصال بات تلگرامی خود نماینده در سرویس میرزا) ----
+  mirzaBotToken String?  // توکن بات میرزا (encrypted)
+  mirzaChatId   String?  // شناسه چت/کانال مقصد
+  mirzaEnabled  Boolean  @default(false)
   // ---- ورود دومرحله‌ای (TOTP) ----
   totpSecret  String? // رمز TOTP (encrypted)
   totpEnabled Boolean @default(false)

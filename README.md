@@ -1,6 +1,10 @@
 # PVNetwork — Reseller Dashboard for 3x-ui
 
+> 🇮🇷 نسخه فارسی این مستند: [README.fa.md](README.fa.md)
+
 PVNetwork is a self-hosted reseller dashboard for one or more existing 3x-ui servers. It gives the system owner a central admin panel for resellers, traffic pools, inbound permissions, users, white-label domains, 2FA, activity logs, subscription links, QR codes and related operations.
+
+![Dashboard overview](docs/screenshots/02-admin-overview.png)
 
 > The default one-line installer is **dashboard-only**. It does not install 3x-ui, Xray, or Caddy, and it does not replace unrelated services already running on the server.
 
@@ -128,7 +132,7 @@ An update preserves:
 - the SQLite database
 - the selected panel domain and app port
 
-Before replacing the running dashboard, the installer backs up the database and installer configuration. It builds the candidate image while the current container is still running, then replaces only `pv-reseller-dashboard`. If the new container fails local health checks and a previous image exists, the installer restores the previous dashboard image.
+Before replacing the running dashboard, the installer backs up the database and installer configuration. It then applies **additive-only schema migrations** to the SQLite database (new columns are added; no data is ever dropped or rewritten), builds the candidate image while the current container is still running, and replaces only `pv-reseller-dashboard`. If the new container fails local health checks and a previous image exists, the installer restores the previous dashboard image.
 
 It does not restart unrelated Docker containers, Xray, 3x-ui, databases, or VPN services.
 
@@ -171,15 +175,25 @@ Multiple external 3x-ui servers can be added. The API endpoint `/api/admin/inbou
 - inbound permissions per reseller
 - reseller traffic pools
 - multi-location user creation
+- mobile-friendly numeric inputs: the traffic (GB), count and device fields accept Persian/Latin digits, can be freely cleared and retyped on phone keyboards, and offer quick-pick presets (5, 10, 15, 20, **30, 40**, 50, 100 GB)
 - white-label brand and domain settings
 - end-user subscription portal and QR codes
 - bulk user creation
 - traffic and expiry visibility
 - CSV export
 - reseller Telegram notifications
+- reseller **Mirza Panel bot** connection: resellers can attach their own Telegram bot (for example the bot they run through the Mirza panel service) as a second notification channel with the same events — user created, usage ≥ 80%, upcoming expiry
 - admin and reseller TOTP 2FA
 - login rate limiting
 - activity logs
+
+### Mobile user creation and quick picks
+
+![Mobile create-user dialog with 30/40 GB presets](docs/screenshots/17-mobile-create-user-30-40gb.png)
+
+### Mirza Panel bot in reseller settings
+
+![Mirza Panel bot settings card](docs/screenshots/18-reseller-mirza-bot.png)
 
 ## Install layout
 

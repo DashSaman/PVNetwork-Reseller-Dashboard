@@ -304,6 +304,25 @@ sync_repository() {
   git -C "$REPO_DIR" merge --ff-only FETCH_HEAD
 }
 
+# مایگریشن‌های افزودنی (فقط ADD COLUMN) — هیچ‌گاه دیتا حذف یا تغییر نمی‌کند
+reseller_column_exists() {
+  sqlite3 "$DATA_DIR/custom.db" "PRAGMA table_info(Reseller);" | awk -F'|' -v c="$1" '$2==c{f=1} END{exit !f}'
+}
+
+migrate_database() {
+  [[ -f "$DATA_DIR/custom.db" ]] || return 0
+  command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 is required for schema migration"
+  local stmts=() col
+  for col in mirzaBotToken:TEXT mirzaChatId:TEXT; do
+    reseller_column_exists "${col%%:*}" || stmts+=("ALTER TABLE Reseller ADD COLUMN ${col%%:*} ${col##*:};")
+  done
+  reseller_column_exists mirzaEnabled || stmts+=("ALTER TABLE Reseller ADD COLUMN mirzaEnabled BOOLEAN NOT NULL DEFAULT 0;")
+  if ((${#stmts[@]})); then
+    log "Applying additive schema migrations (${#stmts[@]} column(s))"
+    sqlite3 "$DATA_DIR/custom.db" "${stmts[@]}"
+  fi
+}
+
 current_container_image_id() {
   docker inspect --format '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null || true
 }
@@ -543,6 +562,7 @@ main() {
   write_initial_credentials_if_needed
   backup_existing_install
   sync_repository
+  migrate_database
   write_installer_metadata
   deploy_dashboard
   configure_apache_tls

@@ -28,6 +28,49 @@ export function faNum(n: number | string): string {
   return Number(n || 0).toLocaleString("fa-IR");
 }
 
+const FA_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
+const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩";
+
+/** تبدیل ارقام فارسی/عربی به لاتین — کیبورد فارسی موبایل را هم می‌پذیرد */
+export function toLatinDigits(s: string): string {
+  return s.replace(/[۰-۹٠-٩]/g, (ch) => {
+    const f = FA_DIGITS.indexOf(ch);
+    if (f >= 0) return String(f);
+    return String(AR_DIGITS.indexOf(ch));
+  });
+}
+
+export type NumberInputProps = Omit<React.ComponentProps<"input">, "type" | "value" | "onChange"> & {
+  value: string; // مقدار به‌صورت رشته — خالی‌کردن فیلد آزاد است
+  onValueChange: (v: string) => void;
+  allowDecimal?: boolean;
+};
+
+/**
+ * ورودی عددی سازگار با موبایل — به‌جای type=number (که ارقام فارسی کیبورد موبایل را
+ * رد می‌کند و پاک‌کردن فیلد را غیرممکن می‌سازد) از type=text با کیبورد عددی استفاده می‌کند.
+ */
+export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
+  function NumberInput({ value, onValueChange, allowDecimal = false, className, ...props }, ref) {
+    return (
+      <Input
+        ref={ref}
+        type="text"
+        dir="ltr"
+        inputMode={allowDecimal ? "decimal" : "numeric"}
+        pattern="[0-9]*"
+        className={`latin-input ${className || ""}`}
+        value={value}
+        onChange={(e) => {
+          const clean = toLatinDigits(e.target.value).replace(allowDecimal ? /[^0-9.]/g : /[^0-9]/g, "");
+          onValueChange(clean);
+        }}
+        {...props}
+      />
+    );
+  }
+);
+
 /** تاریخ انقضا با برچسب وضعیت */
 export function expiryLabel(expiryTime: number): { text: string; tone: "ok" | "warn" | "danger" | "muted" } {
   if (!expiryTime || expiryTime <= 0) return { text: "نامحدود", tone: "muted" };

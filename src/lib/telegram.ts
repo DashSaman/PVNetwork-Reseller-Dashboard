@@ -14,6 +14,10 @@ export type ResellerTg = {
   tgBotToken: string | null;
   tgChatId: string | null;
   tgEnabled: boolean;
+  // ---- ربات میرزا پنل (کانال دوم اعلان) ----
+  mirzaBotToken?: string | null;
+  mirzaChatId?: string | null;
+  mirzaEnabled?: boolean;
 };
 
 const ALERT_INTERVAL_MS = 1000 * 60 * 60 * 12; // ۱۲ ساعت بین هشدارهای تکراری
@@ -51,6 +55,25 @@ export async function notifyReseller(reseller: ResellerTg, text: string): Promis
   return sendTelegram(token, reseller.tgChatId, text);
 }
 
+/** ارسال پیام با بات میرزا پنل نماینده (اگر فعال باشد) */
+export async function notifyMirza(reseller: ResellerTg, text: string): Promise<{ ok: boolean; msg: string }> {
+  if (!reseller.mirzaEnabled) return { ok: false, msg: "ربات میرزا غیرفعال است" };
+  const token = reseller.mirzaBotToken ? decryptSecret(reseller.mirzaBotToken) : "";
+  if (!token || !reseller.mirzaChatId) return { ok: false, msg: "توکن بات میرزا یا شناسه چت تنظیم نشده است" };
+  return sendTelegram(token, reseller.mirzaChatId, text);
+}
+
+/**
+ * ارسال به همه کانال‌های فعال نماینده (تلگرام + ربات میرزا).
+ * موفق اگر حداقل یک کانال پیام را دریافت کند.
+ */
+async function notifyAllChannels(reseller: ResellerTg, text: string): Promise<{ ok: boolean; msg: string }> {
+  const results = await Promise.all([notifyReseller(reseller, text), notifyMirza(reseller, text)]);
+  const okResult = results.find((r) => r.ok);
+  if (okResult) return okResult;
+  return results.find((r) => r.msg !== "اعلان تلگرام غیرفعال است" && r.msg !== "ربات میرزا غیرفعال است") || results[0];
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -71,7 +94,7 @@ export async function notifyUserCreated(
     kind === "bulk"
       ? `✅ <b>${brand}</b> — ${users.length} کاربر ساخته شد\n\n${lines.join("\n\n")}`
       : `✅ <b>${brand}</b> — کاربر جدید ساخته شد\n\n${lines[0]}`;
-  await notifyReseller(reseller, text);
+  await notifyAllChannels(reseller, text);
 }
 
 /** نقشه هشدارهای اخیر — در جدول Setting نگه‌داری می‌شود */
@@ -106,9 +129,9 @@ export async function sendThresholdAlerts(
   reseller: ResellerTg & { brandName: string | null },
   alerts: ThresholdAlert[]
 ): Promise<void> {
-  if (!reseller.tgEnabled || alerts.length === 0) return;
-  const token = reseller.tgBotToken ? decryptSecret(reseller.tgBotToken) : "";
-  if (!token || !reseller.tgChatId) return;
+  const tgReady = !!reseller.tgEnabled && !!reseller.tgBotToken && !!reseller.tgChatId;
+  const mirzaReady = !!reseller.mirzaEnabled && !!reseller.mirzaBotToken && !!reseller.mirzaChatId;
+  if ((!tgReady && !mirzaReady) || alerts.length === 0) return;
 
   const map = await loadAlertMap(reseller.id);
   const now = Date.now();
@@ -134,22 +157,28 @@ export async function sendThresholdAlerts(
     lines.push("<b>انقضای نزدیک:</b>");
     for (const u of expiry) lines.push(`• ${escapeHtml(u.email)} — ${u.days ?? 0} روز مانده`);
   }
-  const r = await sendTelegram(token, reseller.tgChatId, lines.join("\n"));
+  const r = await notifyAllChannels(reseller, lines.join("\n"));
   if (r.ok) {
     await saveAlertMap(reseller.id, map);
     await logActivity({
       actorType: "RESELLER",
       actorName: reseller.username,
-      action: "اعلان تلگرام هشدار مصرف",
+      action: "اعلان هشدار مصرف",
       detail: `${pending.length} هشدار ارسال شد`,
       resellerId: reseller.id,
     });
   }
 }
 
-/** تست اتصال بات */
+/** تست اتصال بات تلگرام */
 export async function testTelegram(reseller: ResellerTg & { brandName: string | null }): Promise<{ ok: boolean; msg: string }> {
   const r = await notifyReseller(reseller, `✅ تست اتصال موفق — اعلان‌های <b>${reseller.brandName || "پنل نمایندگی"}</b> فعال شد.`);
+  return r;
+}
+
+/** تست اتصال ربات میرزا پنل */
+export async function testMirza(reseller: ResellerTg & { brandName: string | null }): Promise<{ ok: boolean; msg: string }> {
+  const r = await notifyMirza(reseller, `✅ <b>ربات میرزا پنل</b> با موفقیت به ${escapeHtml(reseller.brandName || "پنل نمایندگی")} متصل شد — اعلان‌ها فعال است.`);
   return r;
 }
 

@@ -20,7 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
-import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput } from "./shared";
+import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput, NumberInput } from "./shared";
 import type { InboundInfo, ResellerInfo, InboundRefForm } from "./types";
 import { UserCog, Plus, Pencil, Trash2, KeyRound, Loader2, Globe, BadgeCheck, Server, ShieldOff } from "lucide-react";
 
@@ -30,7 +30,7 @@ type FormState = {
   name: string;
   active: boolean;
   multiLocation: boolean;
-  trafficPoolGB: number;
+  trafficPoolGB: string; // رشته‌ای برای تایپ روان در موبایل — هنگام ذخیره به عدد تبدیل می‌شود
   allowIpLimit: boolean;
   allowWhitelabel: boolean;
   inbounds: InboundRefForm[];
@@ -42,7 +42,7 @@ const emptyForm: FormState = {
   name: "",
   active: true,
   multiLocation: false,
-  trafficPoolGB: 2048,
+  trafficPoolGB: "2048",
   allowIpLimit: true,
   allowWhitelabel: true,
   inbounds: [],
@@ -99,7 +99,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
       name: r.name || "",
       active: r.active,
       multiLocation: r.multiLocation,
-      trafficPoolGB: r.trafficPoolGB,
+      trafficPoolGB: String(r.trafficPoolGB),
       allowIpLimit: r.allowIpLimit,
       allowWhitelabel: r.allowWhitelabel,
       inbounds: r.inbounds.map((i) => ({ panelId: i.panelId, inboundId: i.inboundId })),
@@ -134,9 +134,10 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
       return;
     }
     setSaving(true);
+    const payload = { ...form, trafficPoolGB: Math.max(0, Math.floor(Number(form.trafficPoolGB) || 0)) };
     const r = editing
-      ? await api(`/api/admin/resellers/${editing.id}`, { method: "PUT", body: JSON.stringify(form) })
-      : await api("/api/admin/resellers", { method: "POST", body: JSON.stringify(form) });
+      ? await api(`/api/admin/resellers/${editing.id}`, { method: "PUT", body: JSON.stringify(payload) })
+      : await api("/api/admin/resellers", { method: "POST", body: JSON.stringify(payload) });
     setSaving(false);
     if (r.ok) {
       toast({ title: "موفق", description: editing ? "نماینده ویرایش شد" : "نماینده ایجاد شد" });
@@ -365,22 +366,18 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
             <div className="rounded-xl border border-[var(--brand)]/30 bg-[var(--brand-soft)] p-4 space-y-2">
               <Label className="text-sm font-bold">پول ترافیک نماینده (گیگابایت)</Label>
               <div className="flex items-center gap-3">
-                <Input
-                  dir="ltr"
-                  className="latin-input max-w-40"
-                  type="number"
-                  min={0}
-                  step={1}
+                <NumberInput
+                  className="max-w-40"
                   value={form.trafficPoolGB}
-                  onChange={(e) => setForm({ ...form, trafficPoolGB: Number(e.target.value) })}
+                  onValueChange={(v) => setForm({ ...form, trafficPoolGB: v })}
                 />
                 <div className="flex flex-wrap gap-1.5">
                   {[512, 1024, 2048, 4096].map((g) => (
-                    <Button key={g} type="button" size="sm" variant="outline" onClick={() => setForm({ ...form, trafficPoolGB: g })}>
+                    <Button key={g} type="button" size="sm" variant="outline" onClick={() => setForm({ ...form, trafficPoolGB: String(g) })}>
                       {faNum(g)} گیگ
                     </Button>
                   ))}
-                  <Button type="button" size="sm" variant="outline" onClick={() => setForm({ ...form, trafficPoolGB: 0 })}>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setForm({ ...form, trafficPoolGB: "0" })}>
                     نامحدود
                   </Button>
                 </div>

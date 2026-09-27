@@ -82,3 +82,8 @@ deploy/panel-bundle/
 deploy/panel-bundle.tar.gz
 scripts/.env.local
 *.tar.gz
+
+# local dev/test harness
+.local-dev/
+package-lock.json
+
