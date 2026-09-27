@@ -317,6 +317,7 @@ migrate_database() {
     reseller_column_exists "${col%%:*}" || stmts+=("ALTER TABLE Reseller ADD COLUMN ${col%%:*} ${col##*:};")
   done
   reseller_column_exists mirzaEnabled || stmts+=("ALTER TABLE Reseller ADD COLUMN mirzaEnabled BOOLEAN NOT NULL DEFAULT 0;")
+  reseller_column_exists consumedGB || stmts+=("ALTER TABLE Reseller ADD COLUMN consumedGB REAL NOT NULL DEFAULT 0;")
   if ((${#stmts[@]})); then
     log "Applying additive schema migrations (${#stmts[@]} column(s))"
     sqlite3 "$DATA_DIR/custom.db" "${stmts[@]}"

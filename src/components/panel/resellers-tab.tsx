@@ -20,7 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
-import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput, NumberInput } from "./shared";
+import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput, NumberInput, parseNumberInput } from "./shared";
 import type { InboundInfo, ResellerInfo, InboundRefForm } from "./types";
 import { UserCog, Plus, Pencil, Trash2, KeyRound, Loader2, Globe, BadgeCheck, Server, ShieldOff } from "lucide-react";
 
@@ -134,7 +134,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
       return;
     }
     setSaving(true);
-    const payload = { ...form, trafficPoolGB: Math.max(0, Math.floor(Number(form.trafficPoolGB) || 0)) };
+    const payload = { ...form, trafficPoolGB: Math.max(0, Math.floor(parseNumberInput(form.trafficPoolGB))) };
     const r = editing
       ? await api(`/api/admin/resellers/${editing.id}`, { method: "PUT", body: JSON.stringify(payload) })
       : await api("/api/admin/resellers", { method: "POST", body: JSON.stringify(payload) });
@@ -266,7 +266,9 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                                 />
                               </div>
                             )}
-                            <div className="text-[10px] text-muted-foreground">{faNum(r.usersCount)} کاربر</div>
+                            <div className="text-[10px] text-muted-foreground">
+                              {faNum(r.usersCount)} کاربر{r.consumedGB > 0 ? ` — مصرف قطعی: ${faNum(Math.round(r.consumedGB * 100) / 100)} گیگ` : ""}
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell className="hidden xl:table-cell">

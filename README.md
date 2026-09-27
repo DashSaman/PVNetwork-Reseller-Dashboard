@@ -134,6 +134,8 @@ An update preserves:
 
 Before replacing the running dashboard, the installer backs up the database and installer configuration. It then applies **additive-only schema migrations** to the SQLite database (new columns are added; no data is ever dropped or rewritten), builds the candidate image while the current container is still running, and replaces only `pv-reseller-dashboard`. If the new container fails local health checks and a previous image exists, the installer restores the previous dashboard image.
 
+Migrations are versioned inside `install.sh` (`migrate_database`); each new deployment adds only the columns it needs and skips the ones that already exist.
+
 It does not restart unrelated Docker containers, Xray, 3x-ui, databases, or VPN services.
 
 ## Backup and rollback
@@ -182,7 +184,12 @@ Multiple external 3x-ui servers can be added. The API endpoint `/api/admin/inbou
 - traffic and expiry visibility
 - CSV export
 - reseller Telegram notifications
-- reseller **Mirza Panel bot** connection: resellers can attach their own Telegram bot (for example the bot they run through the Mirza panel service) as a second notification channel with the same events — user created, usage ≥ 80%, upcoming expiry
+- reseller **Mirza Panel bot** connection with two capabilities:
+
+- notifications: resellers can attach their own Telegram bot (for example the bot they run through the Mirza panel service) as a second notification channel with the same events — user created, usage ≥ 80%, upcoming expiry
+- direct selling through a **3x-ui-compatible bridge**: the reseller's Mirza bot connects to this dashboard exactly like it connects to a 3x-ui panel (panel URL + dashboard username/password). The bot is limited to the reseller's assigned inbounds and traffic pool, and every creation/deletion/reset goes through the same dashboard rules
+
+- anti-abuse traffic accounting: deleting or traffic-resetting a user records its consumed bytes as a permanent deduction from the reseller's pool, so resellers cannot recycle the pool by recreating users
 - admin and reseller TOTP 2FA
 - login rate limiting
 - activity logs

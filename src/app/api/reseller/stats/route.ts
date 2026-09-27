@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, getAllocatedGB, bytesToGB } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, getAllocatedGB, getConsumedGB, bytesToGB } from "@/lib/reseller-helpers";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 
 /** آمار کلی نماینده + داده‌های نمودارها (چندپنلی + پول ترافیک) */
@@ -13,7 +13,7 @@ export async function GET() {
   if (!reseller) return NextResponse.json({ error: "حساب شما فعال نیست" }, { status: 403 });
 
   const usersCount = await db.resellerUser.count({ where: { resellerId: reseller.id } });
-  const allocatedGB = await getAllocatedGB(reseller.id);
+  const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
   const primaryPanel = await db.panelConfig.findFirst({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   const primaryPanelId = primaryPanel?.id || "";
 
@@ -105,7 +105,8 @@ export async function GET() {
       multiLocation: reseller.multiLocation,
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB,
-      remainingGB: reseller.trafficPoolGB > 0 ? Math.max(0, reseller.trafficPoolGB - allocatedGB) : 0,
+      consumedGB,
+      remainingGB: reseller.trafficPoolGB > 0 ? Math.max(0, reseller.trafficPoolGB - allocatedGB - consumedGB) : 0,
       inboundsCount: reseller.inbounds.length,
       panelConnected: panelResult.ok,
     },

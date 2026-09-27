@@ -22,6 +22,7 @@ export type ResellerInfo = {
   multiLocation: boolean;
   trafficPoolGB: number;
   allocatedGB: number;
+  consumedGB: number;
   allowIpLimit: boolean;
   allowWhitelabel: boolean;
   brandName: string | null;
@@ -52,6 +53,7 @@ export type ResellerPermissions = {
   allowIpLimit: boolean;
   trafficPoolGB: number;
   allocatedGB: number;
+  consumedGB: number;
   remainingGB: number;
 };
 

@@ -25,6 +25,7 @@ export async function GET() {
       multiLocation: r.multiLocation,
       trafficPoolGB: r.trafficPoolGB,
       allocatedGB: r.users.reduce((s, u) => s + (u.trafficGB || 0), 0),
+      consumedGB: Number(r.consumedGB || 0),
       usersCount: r.users.length,
       allowWhitelabel: r.allowWhitelabel,
       brandName: r.brandName,

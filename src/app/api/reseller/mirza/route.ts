@@ -23,7 +23,7 @@ export async function GET() {
   });
 }
 
-/** ذخیره تنظیمات — PUT { botToken?, chatId, enabled } */
+/** ذخیره تنظیمات — PUT { botToken?, chatId?, enabled } — توکن فقط برای اعلان‌ها لازم است؛ پل فروش بدون آن هم کار می‌کند */
 export async function PUT(req: NextRequest) {
   const session = await requireReseller();
   if (!session) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
@@ -43,8 +43,6 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "فرمت توکن بات صحیح نیست — توکن بات تلگرامی خود را وارد کنید (مثل 123456789:AAE...)" }, { status: 400 });
       }
       data.mirzaBotToken = encryptSecret(clean);
-    } else if (!current.mirzaBotToken && enabled) {
-      return NextResponse.json({ error: "برای فعال‌سازی ربات میرزا، توکن بات الزامی است" }, { status: 400 });
     }
 
     await db.reseller.update({ where: { id: current.id }, data });

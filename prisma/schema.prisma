@@ -43,6 +43,7 @@ model Reseller {
   multiLocation  Boolean  @default(false) // اجازه انتخاب چند اینباند برای یک کاربر
   // ---- مدل پول ترافیک: ادمین فقط سهمیه کل می‌دهد، نماینده خودش بین کاربران تقسیم می‌کند ----
   trafficPoolGB  Int      @default(0) // پول ترافیک کل نماینده به گیگ — 0 = نامحدود
+  consumedGB     Float    @default(0) // مصرف قطعیِ کاربران حذف/ریست‌شده — با حذف کاربر به پول برنمی‌گردد (ضد دور زدن)
   // فیلدهای قدیمی (دیگر اعمال نمی‌شوند — فقط برای سازگاری داده)
   maxUsers       Int      @default(0)
   maxTrafficGB   Int      @default(0)

@@ -24,6 +24,10 @@ export type CoreUserParams = {
   expiryTime: number; // میلی‌ثانیه epoch یا ۰ = نامحدود
   ipLimit: number;
   refs: InboundRef[];
+  /** استفاده توسط پل 3x-ui (ربات میرزا): استفاده از ایمیل ارسالی بدون پسوند تصادفی */
+  exactEmail?: string;
+  /** شناسه سابسکریپشن دلخواه ربات — خالی = تولید خودکار */
+  subId?: string;
 };
 
 export type CoreUserResult =
@@ -51,14 +55,14 @@ export async function createResellerUserCore(
   if (refs.length === 0) {
     return { ok: false, error: "حداقل یک اینباند باید انتخاب شود", status: 400 };
   }
-  const selection = validateInboundSelection(reseller, refs);
+  const selection = await validateInboundSelection(reseller, refs);
   if (!selection.ok) return { ok: false, error: selection.msg, status: 403 };
 
   // ---- پول ترافیک (در ساخت گروهی پیش‌موجه بررسی شده — skip) ----
   if (!opts?.skipPoolCheck) {
-    const { getAllocatedGB, validatePoolAllocation } = await import("./reseller-helpers");
-    const allocatedGB = await getAllocatedGB(reseller.id);
-    const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, params.trafficGB);
+    const { getAllocatedGB, getConsumedGB, validatePoolAllocation } = await import("./reseller-helpers");
+    const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
+    const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, params.trafficGB, 0, consumedGB);
     if (!pool.ok) return { ok: false, error: pool.msg, status: 403 };
   }
 
@@ -83,8 +87,17 @@ export async function createResellerUserCore(
   }
 
   // ---- شناسه‌ها ----
-  const email = `${name}-${randomHex(4)}`;
-  const subId = randomHex(16);
+  // پل 3x-ui (ربات میرزا): ایمیل دقیق و subId دلخواه ربات؛ در داشبورد: پسوند تصادفی
+  let email: string;
+  if (params.exactEmail) {
+    email = params.exactEmail.trim().replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 32);
+    if (email.length < 3) {
+      return { ok: false, error: "ایمیل/نام کاربری باید حداقل ۳ کاراکتر معتبر باشد", status: 400 };
+    }
+  } else {
+    email = `${name}-${randomHex(4)}`;
+  }
+  const subId = (params.subId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) || randomHex(16);
   const uuid = randomUuid();
 
   // عدم تکراری بودن ایمیل در همه پنل‌ها

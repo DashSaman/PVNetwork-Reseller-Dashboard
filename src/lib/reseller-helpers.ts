@@ -70,16 +70,21 @@ export function refKey(r: InboundRef): string {
 
 /**
  * اعتبارسنجی اینباندهای انتخابی نسبت به دسترسی‌های نماینده + قانون مولتی‌لوکیشن.
+ * panelId خالی در داده‌های قدیمی به پنل اصلی ترجمه می‌شود.
  * (محدودیت تک‌کاربرِ ادمین حذف شده — نماینده آزاد است، فقط پول ترافیک اعمال می‌شود)
  */
-export function validateInboundSelection(
+export async function validateInboundSelection(
   reseller: ResellerWithInbounds,
   refs: InboundRef[]
-): { ok: true } | { ok: false; msg: string } {
+): Promise<{ ok: true } | { ok: false; msg: string }> {
   if (refs.length === 0) {
     return { ok: false, msg: "حداقل یک اینباند (لوکیشن) انتخاب کنید" };
   }
-  const allowed = new Set(reseller.inbounds.map((i) => refKey({ panelId: i.panelId, inboundId: i.inboundId })));
+  const { getPrimaryPanel } = await import("./panel-manager");
+  const primaryPanelId = (await getPrimaryPanel())?.id || "";
+  const allowed = new Set(
+    reseller.inbounds.map((i) => refKey({ panelId: i.panelId || primaryPanelId, inboundId: i.inboundId }))
+  );
   for (const ref of refs) {
     if (!allowed.has(refKey(ref))) {
       return { ok: false, msg: "شما به این اینباند دسترسی ندارید" };
@@ -103,22 +108,62 @@ export async function getAllocatedGB(resellerId: string, excludeUserId?: string)
   return rows.reduce((s, r) => s + (r.trafficGB || 0), 0);
 }
 
+/** مصرف قطعی ثبت‌شده (کاربران حذف/ریست‌شده) — با حذف کاربر آزاد نمی‌شود */
+export async function getConsumedGB(resellerId: string): Promise<number> {
+  const r = await db.reseller.findUnique({ where: { id: resellerId }, select: { consumedGB: true } });
+  return Number(r?.consumedGB || 0);
+}
+
+/** باقیمانده واقعی پول = پول − تخصیص فعال − مصرف قطعی (۰ = بی‌نهایت برای پول نامحدود) */
+export async function getRemainingGB(reseller: { id: string; trafficPoolGB: number }): Promise<number> {
+  if (reseller.trafficPoolGB <= 0) return 0;
+  const [allocated, consumed] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
+  return Math.max(0, reseller.trafficPoolGB - allocated - consumed);
+}
+
+/**
+ * بدهکارسازی مصرف کاربر هنگام حذف/ریست — ضد دور زدن پول ترافیک.
+ * مصرف فعلی کاربر (up+down) از پنل‌ها خوانده و به‌عنوان مصرف قطعی نماینده ثبت می‌شود.
+ * مصرف ۰ خطا نیست (کاربر بلااستفاده) — skip برای پرهیز از کوئری اضافه.
+ */
+export async function debitUsedTraffic(
+  resellerId: string,
+  email: string
+): Promise<number> {
+  const { getAllPanelInbounds } = await import("./panel-manager");
+  const snapshot = await getAllPanelInbounds();
+  if (!snapshot.ok) return 0;
+  let usedBytes = 0;
+  for (const bundle of snapshot.panels) {
+    for (const inb of bundle.inbounds) {
+      const st = inb.clientStats.find((c) => c.email === email);
+      if (st) usedBytes += (st.up || 0) + (st.down || 0);
+    }
+  }
+  const gb = Math.round((usedBytes / (1024 * 1024 * 1024)) * 10000) / 10000;
+  if (gb <= 0) return 0;
+  await db.reseller.update({ where: { id: resellerId }, data: { consumedGB: { increment: gb } } });
+  return gb;
+}
+
 /**
  * اعتبارسنجی تخصیص از پول ترافیک:
  * - پول نامحدود (0) → هر مقداری مجاز (شامل ۰ = نامحدود برای کاربر)
  * - پول محدود → سهمیه کاربر باید صریح و داخل باقیمانده پول باشد
+ *   باقیمانده = پول − تخصیص فعال + سهمیه خودِ همین کاربر (در ویرایش) − مصرف قطعی (حذف/ریست‌شده)
  */
 export function validatePoolAllocation(
   poolGB: number,
   allocatedGB: number,
   requestedGB: number,
-  currentOwnGB = 0 // در ویرایش، سهمیه فعلی همین کاربر (که آزاد می‌شود)
+  currentOwnGB = 0, // در ویرایش، سهمیه فعلی همین کاربر (که آزاد می‌شود)
+  consumedGB = 0 // مصرف قطعی ثبت‌شده — با حذف کاربر به پول برنمی‌گردد
 ): { ok: true } | { ok: false; msg: string } {
   if (poolGB <= 0) return { ok: true }; // پول نامحدود
   if (requestedGB <= 0) {
     return { ok: false, msg: "پول ترافیک شما محدود است — برای هر کاربر باید سهمیه مشخص تعیین کنید (۰ = نامحدود مجاز نیست)" };
   }
-  const remaining = poolGB - allocatedGB + currentOwnGB;
+  const remaining = poolGB - allocatedGB + currentOwnGB - consumedGB;
   if (requestedGB > remaining) {
     return {
       ok: false,

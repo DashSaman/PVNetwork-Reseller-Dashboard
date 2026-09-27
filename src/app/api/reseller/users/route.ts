@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { buildSubLink } from "@/lib/panel-manager";
-import { getResellerWithAccess, bytesToGB, type InboundRef } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, bytesToGB, getConsumedGB, type InboundRef } from "@/lib/reseller-helpers";
 import { createResellerUserCore } from "@/lib/user-create";
 import { sendThresholdAlerts, type ThresholdAlert } from "@/lib/telegram";
 
@@ -132,6 +132,7 @@ export async function GET() {
   }
 
   const allocatedGB = trackedUsers.reduce((s, u) => s + (u.trafficGB || 0), 0);
+  const consumedGB = await getConsumedGB(reseller.id);
 
   // ---- هشدارها: مصرف ≥ ۸۰٪ و انقضای نزدیک (≤ ۳ روز) ----
   const alerts: { email: string; type: "usage" | "expiry"; pct?: number; days?: number }[] = [];
@@ -155,7 +156,8 @@ export async function GET() {
       users: rows.length,
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB,
-      remainingGB: reseller.trafficPoolGB > 0 ? Math.max(0, reseller.trafficPoolGB - allocatedGB) : 0,
+      consumedGB,
+      remainingGB: reseller.trafficPoolGB > 0 ? Math.max(0, reseller.trafficPoolGB - allocatedGB - consumedGB) : 0,
     },
   });
 }

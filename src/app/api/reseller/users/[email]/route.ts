@@ -7,6 +7,8 @@ import {
   validateInboundSelection,
   validatePoolAllocation,
   getAllocatedGB,
+  getConsumedGB,
+  debitUsedTraffic,
   parseInboundRefs,
   stringifyInboundRefs,
   refKey,
@@ -103,8 +105,11 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     // ---- سهمیه و پول ----
     const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : tracked.trafficGB;
     if (trafficGB !== tracked.trafficGB) {
-      const allocatedGB = await getAllocatedGB(reseller.id, tracked.id);
-      const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, trafficGB, tracked.trafficGB);
+      const [allocatedGB, consumedGB] = await Promise.all([
+        getAllocatedGB(reseller.id, tracked.id),
+        getConsumedGB(reseller.id),
+      ]);
+      const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, trafficGB, tracked.trafficGB, consumedGB);
       if (!pool.ok) return NextResponse.json({ error: pool.msg }, { status: 403 });
     }
 
@@ -121,7 +126,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       : body.inboundIds
         ? body.inboundIds.map((inboundId) => ({ panelId: primaryPanelId, inboundId }))
         : currentRefs;
-    const selection = validateInboundSelection(reseller, newRefs);
+    const selection = await validateInboundSelection(reseller, newRefs);
     if (!selection.ok) return NextResponse.json({ error: selection.msg }, { status: 403 });
     for (const ref of newRefs) {
       if (!inboundIndex.has(refKey(ref))) {
@@ -251,6 +256,14 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     });
     if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
 
+    // ضد دور زدن پول: مصرف فعلی کاربر قبل از حذف، به‌عنوان مصرف قطعی نماینده ثبت می‌شود
+    let debitedGB = 0;
+    try {
+      debitedGB = await debitUsedTraffic(reseller.id, email);
+    } catch {
+      /* در نبود پنل/خطا، حذف ادامه می‌یابد — فقط بدهکاری ثبت نشد */
+    }
+
     // حذف از همه پنل‌ها
     const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
     const errors: string[] = [];
@@ -279,10 +292,10 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
       actorType: "RESELLER",
       actorName: reseller.username,
       action: "حذف کاربر",
-      detail: email,
+      detail: `${email}${debitedGB > 0 ? ` | مصرف قطعی ثبت‌شده: ${debitedGB} گیگ` : ""}`,
       resellerId: reseller.id,
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, debitedGB });
   } catch (e) {
     console.error("delete user error:", e);
     return NextResponse.json({ error: "خطای داخلی در حذف کاربر" }, { status: 500 });

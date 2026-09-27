@@ -40,30 +40,57 @@ export function toLatinDigits(s: string): string {
   });
 }
 
+/** پارس مقدار ورودی عددی در لحظه ثبت — ارقام فارسی/لاتین، بدون خطا مقدار ۰ */
+export function parseNumberInput(v: string): number {
+  const clean = toLatinDigits(v || "").replace(/[^0-9.]/g, "");
+  const n = Number(clean);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export type NumberInputProps = Omit<React.ComponentProps<"input">, "type" | "value" | "onChange"> & {
-  value: string; // مقدار به‌صورت رشته — خالی‌کردن فیلد آزاد است
+  value: string; // مقدار خام نمایشی (ارقام فارسی مجاز) — تبدیل به عدد فقط در لحظه ثبت
   onValueChange: (v: string) => void;
   allowDecimal?: boolean;
 };
 
 /**
- * ورودی عددی سازگار با موبایل — به‌جای type=number (که ارقام فارسی کیبورد موبایل را
- * رد می‌کند و پاک‌کردن فیلد را غیرممکن می‌سازد) از type=text با کیبورد عددی استفاده می‌کند.
+ * ورودی عددی سازگار با همه مرورگرهای موبایل:
+ * - type="text" + inputMode عددی → کیبورد عددی باز می‌شود ولی ارقام فارسی کیبورد فارسی هم تایپ می‌شود
+ * - حین تایپ هیچ بازنویسی/نرمال‌سازی انجام نمی‌شود (بدون پرش نشانگر)
+ * - کاراکترهای غیرمجاز فقط در همان لحظه حذف می‌شوند (کیبورد عددی موبایل اصلاً تولیدشان نمی‌کند)
+ * - نرمال‌سازی ارقام فارسی به لاتین فقط در blur و در لحظه ثبت (parseNumberInput)
  */
 export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
-  function NumberInput({ value, onValueChange, allowDecimal = false, className, ...props }, ref) {
+  function NumberInput({ value, onValueChange, allowDecimal = false, className, onBlur, ...props }, ref) {
     return (
       <Input
         ref={ref}
         type="text"
         dir="ltr"
         inputMode={allowDecimal ? "decimal" : "numeric"}
-        pattern="[0-9]*"
         className={`latin-input ${className || ""}`}
         value={value}
         onChange={(e) => {
-          const clean = toLatinDigits(e.target.value).replace(allowDecimal ? /[^0-9.]/g : /[^0-9]/g, "");
-          onValueChange(clean);
+          // حذف فقط کاراکترهای قطعاً نامعتبر — ارقام فارسی دست‌نخورده می‌مانند
+          const cleaned = e.target.value.replace(allowDecimal ? /[^0-9۰-۹٠-٩.]/g : /[^0-9۰-۹٠-٩]/g, "");
+          if (cleaned !== e.target.value) {
+            // بازنویسی فقط وقتی کاراکتر نامعتبری تایپ شده باشد
+            const el = e.target;
+            const pos = el.selectionStart ?? cleaned.length;
+            const removed = e.target.value.length - cleaned.length;
+            onValueChange(cleaned);
+            requestAnimationFrame(() => {
+              try { el.setSelectionRange(Math.max(0, pos - removed), Math.max(0, pos - removed)); } catch { /* نه در همه مرورگرها */ }
+            });
+          } else {
+            onValueChange(cleaned);
+          }
+        }}
+        onBlur={(e) => {
+          // نرمال‌سازی نمایش در خروج از فیلد — پرش نشانگر در blur بی‌اهمیت است
+          const normalized = toLatinDigits(value);
+          if (normalized !== value) onValueChange(normalized);
+          onBlur?.(e);
         }}
         {...props}
       />

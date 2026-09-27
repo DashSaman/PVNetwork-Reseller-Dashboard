@@ -18,7 +18,7 @@ import {
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/hooks/use-toast";
-import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput } from "./shared";
+import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput, parseNumberInput } from "./shared";
 import { ThemeToggle } from "./theme";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
 import {
@@ -773,9 +773,9 @@ function UsersTab({
       toast({ title: "خطا", description: "حداقل یک اینباند (لوکیشن) انتخاب کنید", variant: "destructive" });
       return;
     }
-    const nCount = Math.min(50, Math.max(1, Math.floor(Number(count) || 1)));
-    const nTraffic = Math.max(0, Math.floor(Number(trafficGB) || 0));
-    const nIpLimit = Math.max(0, Math.floor(Number(ipLimit) || 0));
+    const nCount = Math.min(50, Math.max(1, Math.floor(parseNumberInput(count) || 1)));
+    const nTraffic = Math.max(0, Math.floor(parseNumberInput(trafficGB)));
+    const nIpLimit = Math.max(0, Math.floor(parseNumberInput(ipLimit)));
     if (poolLimited && nTraffic <= 0) {
       toast({ title: "خطا", description: "پول ترافیک شما محدود است — سهمیه کاربر باید عددی مثبت باشد", variant: "destructive" });
       return;
@@ -1203,9 +1203,16 @@ function UsersTab({
           <div className="grid gap-4 py-2">
             {/* پول ترافیک */}
             {poolLimited ? (
-              <div className="rounded-xl border border-[var(--brand)]/30 bg-[var(--brand-soft)] px-3 py-2.5 text-sm flex items-center justify-between">
-                <span className="font-medium">باقیمانده پول ترافیک شما:</span>
-                <span className="font-bold text-[var(--brand-deep)]" dir="ltr">{faNum(permissions.remainingGB)} / {faNum(permissions.trafficPoolGB)} GB</span>
+              <div className="rounded-xl border border-[var(--brand)]/30 bg-[var(--brand-soft)] px-3 py-2.5 text-sm space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">باقیمانده پول ترافیک شما:</span>
+                  <span className="font-bold text-[var(--brand-deep)]" dir="ltr">{faNum(permissions.remainingGB)} / {faNum(permissions.trafficPoolGB)} GB</span>
+                </div>
+                {permissions.consumedGB > 0 && (
+                  <div className="text-[11px] text-muted-foreground">
+                    مصرف قطعی (کاربران حذف/ریست‌شده): {faNum(Math.round(permissions.consumedGB * 100) / 100)} گیگ — به پول شما برنمی‌گردد
+                  </div>
+                )}
               </div>
             ) : (
               <div className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
@@ -1216,16 +1223,16 @@ function UsersTab({
               <Label>تعداد — بیشتر از ۱ یعنی ساخت گروهی (تا ۵۰)</Label>
               <NumberInput
                 value={count}
-                onValueChange={(v) => setCount(v === "" ? "1" : String(Math.min(50, Math.max(1, Math.floor(Number(v) || 1)))))}
+                onValueChange={(v) => setCount(v)}
               />
-              {Number(count) > 1 && (
+              {parseNumberInput(count) > 1 && (
                 <p className="text-xs text-muted-foreground" dir="ltr">
                   {name || "shop"}01 … {name || "shop"}{faNum(count)} — شماره خودکار اضافه می‌شود
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <Label>{Number(count) > 1 ? "پیشوند نام کاربرها (حروف انگلیسی)" : "نام کاربر (حروف انگلیسی، عدد، - و _)"}</Label>
+              <Label>{parseNumberInput(count) > 1 ? "پیشوند نام کاربرها (حروف انگلیسی)" : "نام کاربر (حروف انگلیسی، عدد، - و _)"}</Label>
               <Input
                 dir="ltr"
                 className="latin-input"
@@ -1325,7 +1332,7 @@ function UsersTab({
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>انصراف</Button>
             <Button onClick={createUser} disabled={busy} className="brand-gradient text-white hover:opacity-90 font-bold">
-              {busy && <Spinner className="h-4 w-4" />} {Number(count) > 1 ? `ساخت ${faNum(count)} کاربر` : "ساخت کاربر"}
+              {busy && <Spinner className="h-4 w-4" />} {parseNumberInput(count) > 1 ? `ساخت ${faNum(parseNumberInput(count))} کاربر` : "ساخت کاربر"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1820,6 +1827,19 @@ function AccountSettingsTab({ username }: { username: string }) {
   const [mirzaHasToken, setMirzaHasToken] = useState(false);
   const [mirzaEnabled, setMirzaEnabled] = useState(false);
   const [mirzaBusy, setMirzaBusy] = useState(false);
+  const [bridgeUrl, setBridgeUrl] = useState("");
+
+  // آدرس پل 3x-ui برای اتصال ربات — پس از اولین رندر (دسترسی به location)
+  useEffect(() => {
+    setBridgeUrl(`${window.location.origin}/api/bridge/${encodeURIComponent(username)}`);
+  }, [username]);
+
+  function copyBridgeUrl() {
+    navigator.clipboard.writeText(bridgeUrl).then(
+      () => toast({ title: "کپی شد", description: "آدرس پنل برای ربات کپی شد" }),
+      () => toast({ title: "خطا", description: "کپی ناموفق بود", variant: "destructive" })
+    );
+  }
 
   const loadMirza = useCallback(async () => {
     const r = await api<{ mirza: { enabled: boolean; chatId: string; hasToken: boolean } }>("/api/reseller/mirza");
@@ -2110,8 +2130,43 @@ function AccountSettingsTab({ username }: { username: string }) {
             <Switch checked={mirzaEnabled} onCheckedChange={setMirzaEnabled} />
           </div>
           <p className="text-xs text-muted-foreground leading-5">
-            ربات تلگرامی خودتان (مثل ربات فروش سرویس در میرزا پنل) را به این سامانه وصل کنید تا با همان امکانات اعلان‌های ما دریافت کنید: ساخت کاربر جدید، مصرف ۸۰٪ به بالا و انقضای نزدیک. کافی است توکن بات را از <b dir="ltr">@BotFather</b> بگیرید، اینجا وارد کنید و شناسه چت را از <b dir="ltr">@userinfobot</b> بگیرید. (قبل از استفاده یک پیام به بات خودتان بدهید) — اگر تلگرام هم فعال باشد، هر دو بات پیام دریافت می‌کنند.
+            ربات تلگرامی خودتان (مثل ربات فروش سرویس در میرزا پنل) را به این سامانه وصل کنید: هم <b>اعلان‌ها</b> و هم <b>فروش مستقیم روی همین پنل</b>. با فعال‌کردن سوییچ، ربات می‌تواند مثل اتصال به یک پنل 3x-ui به حساب شما وصل شود — با همان اینباندهای مجاز، همان سقف پول ترافیک و همان قوانین داشبورد. برای اعلان‌ها هم توکن بات و شناسه چت را وارد کنید (اختیاری).
           </p>
+
+          {mirzaEnabled && (
+            <div className="rounded-xl border border-[var(--brand)]/40 bg-[var(--brand-soft)] p-3.5 space-y-2.5">
+              <div className="text-xs font-bold text-[var(--brand-deep)]">تنظیمات اتصال ربات به این پنل (فروش)</div>
+              <p className="text-[11px] text-muted-foreground leading-5">
+                در بخش تنظیمات پنلِ ربات میرزا، این سه مقدار را وارد کنید — دقیقاً مثل وقتی که ربات را به 3x-ui وصل می‌کنید:
+              </p>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] text-muted-foreground">آدرس پنل (Panel URL)</div>
+                    <div className="text-xs font-mono truncate" dir="ltr">{bridgeUrl}</div>
+                  </div>
+                  <Button size="icon" variant="ghost" title="کپی" onClick={copyBridgeUrl}>
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-border bg-card px-3 py-2">
+                    <div className="text-[10px] text-muted-foreground">نام کاربری</div>
+                    <div className="text-xs font-mono" dir="ltr">{username}</div>
+                  </div>
+                  <div className="rounded-lg border border-border bg-card px-3 py-2">
+                    <div className="text-[10px] text-muted-foreground">رمز عبور</div>
+                    <div className="text-xs">رمز ورود شما به همین داشبورد</div>
+                  </div>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-5">
+                ربات از اینباندهای مجاز شما کاربر می‌سازد، سهمیه هر فروش از پول ترافیک شما کسر می‌شود و مصرف کاربران حتی بعد از حذف یا ریست، به‌عنوان مصرف قطعی ثبت می‌ماند.
+              </p>
+            </div>
+          )}
+
+          <div className="text-xs font-bold">اعلان‌های تلگرام (اختیاری)</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>توکن بات میرزا {mirzaHasToken && <span className="text-[10px] tone-ok">(ذخیره شده — برای تغییر پر کنید)</span>}</Label>

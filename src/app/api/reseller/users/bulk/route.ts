@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, getAllocatedGB, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, getAllocatedGB, getConsumedGB, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 import { createResellerUserCore } from "@/lib/user-create";
 import { db } from "@/lib/db";
@@ -41,9 +41,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "پول ترافیک شما محدود است — سهمیه هر کاربر باید عددی مثبت باشد" }, { status: 400 });
     }
     if (reseller.trafficPoolGB > 0) {
-      const allocatedGB = await getAllocatedGB(reseller.id);
+      const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
       const need = trafficGB * count;
-      const remaining = reseller.trafficPoolGB - allocatedGB;
+      const remaining = reseller.trafficPoolGB - allocatedGB - consumedGB;
       if (need > remaining) {
         return NextResponse.json(
           { error: `ظرفیت پول کافی نیست — برای ${count} کاربر × ${trafficGB} گیگ، ${need} گیگ لازم است اما فقط ${Math.max(0, Math.floor(remaining))} گیگ باقی مانده` },
