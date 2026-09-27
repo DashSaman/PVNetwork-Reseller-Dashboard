@@ -50,6 +50,7 @@ import {
   Send,
   Activity,
   Bot,
+  Plug,
   Send as SendIcon2,
 } from "lucide-react";
 import QRCode from "react-qr-code";
@@ -1828,6 +1829,8 @@ function AccountSettingsTab({ username }: { username: string }) {
   const [mirzaEnabled, setMirzaEnabled] = useState(false);
   const [mirzaBusy, setMirzaBusy] = useState(false);
   const [bridgeUrl, setBridgeUrl] = useState("");
+  const [bridgeTestBusy, setBridgeTestBusy] = useState(false);
+  const [bridgeTestResult, setBridgeTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // آدرس پل 3x-ui برای اتصال ربات — پس از اولین رندر (دسترسی به location)
   useEffect(() => {
@@ -1839,6 +1842,20 @@ function AccountSettingsTab({ username }: { username: string }) {
       () => toast({ title: "کپی شد", description: "آدرس پنل برای ربات کپی شد" }),
       () => toast({ title: "خطا", description: "کپی ناموفق بود", variant: "destructive" })
     );
+  }
+
+  async function testBridge() {
+    setBridgeTestBusy(true);
+    setBridgeTestResult(null);
+    const r = await api<{ ok: boolean; msg: string; inbounds: number }>("/api/reseller/mirza/bridge-test", { method: "POST" });
+    setBridgeTestBusy(false);
+    if (r.ok && r.data) {
+      setBridgeTestResult({ ok: r.data.ok, msg: r.data.msg });
+      if (r.data.ok) toast({ title: "اتصال آماده است", description: r.data.msg });
+      else toast({ title: "آماده نیست", description: r.data.msg, variant: "destructive" });
+    } else {
+      toast({ title: "خطا", description: r.error, variant: "destructive" });
+    }
   }
 
   const loadMirza = useCallback(async () => {
@@ -2159,6 +2176,23 @@ function AccountSettingsTab({ username }: { username: string }) {
                     <div className="text-xs">رمز ورود شما به همین داشبورد</div>
                   </div>
                 </div>
+              </div>
+              <ol className="text-[11px] text-muted-foreground leading-5 list-decimal ps-4 space-y-0.5">
+                <li>سوییچ بالا روشن باشد و تنظیمات ذخیره شده باشد</li>
+                <li>در ربات میرزا: بخش پنل‌ها ← افزودن پنل (3x-ui)</li>
+                <li>آدرس، نام کاربری و رمز بالا را وارد کنید</li>
+                <li>دکمه «تست اتصال ربات» را بزنید و نتیجه را ببینید</li>
+                <li>ربات را ذخیره کنید — از این به بعد فروش‌ها از همین پنل انجام می‌شود</li>
+              </ol>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="outline" onClick={testBridge} disabled={bridgeTestBusy}>
+                  {bridgeTestBusy ? <Spinner className="h-4 w-4" /> : <Plug className="h-4 w-4" />} تست اتصال ربات
+                </Button>
+                {bridgeTestResult && (
+                  <span className={`text-[11px] font-medium ${bridgeTestResult.ok ? "tone-ok" : "tone-danger"}`} dir="auto">
+                    {bridgeTestResult.msg}
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-muted-foreground leading-5">
                 ربات از اینباندهای مجاز شما کاربر می‌سازد، سهمیه هر فروش از پول ترافیک شما کسر می‌شود و مصرف کاربران حتی بعد از حذف یا ریست، به‌عنوان مصرف قطعی ثبت می‌ماند.

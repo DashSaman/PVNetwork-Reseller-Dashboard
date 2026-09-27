@@ -57,6 +57,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (parts.startsWith("panel/api/clients/del/")) return bridgeDeleteClient(auth.reseller, emailFromPath);
   if (parts.startsWith("panel/api/clients/resetTraffic/")) return bridgeResetTraffic(auth.reseller, emailFromPath);
 
+  // ---------- سازگاری با API قدیمی 3x-ui v2 (برخی ربات‌ها) ----------
+  if (parts === "panel/api/inbounds/list") return bridgeInboundList(auth.reseller);
+  const legacyAdd = parts.match(/^panel\/api\/inbounds\/(\d+)\/addClient$/);
+  if (legacyAdd) return bridgeLegacyAddClient(req, auth.reseller);
+  const legacyReset = parts.match(/^panel\/api\/inbounds\/\d+\/clientResetTraffic\/(.+)$/);
+  if (legacyReset) return bridgeResetTraffic(auth.reseller, decodeURIComponent(legacyReset[1]));
+
   return xui(false, "مسیر پشتیبانی نمی‌شود");
 }
 
@@ -69,6 +76,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   if (parts === "panel/api/inbounds/list") return bridgeInboundList(auth.reseller);
   if (parts === "panel/api/clients/list") return bridgeClientList(auth.reseller);
+  if (parts === "panel/api/server/status" || parts === "panel/api/server/getStatus") return bridgeServerStatus();
+  if (parts === "panel/setting" || parts === "panel/api/setting") return bridgeSetting();
 
   return xui(false, "مسیر پشتیبانی نمی‌شود");
 }
@@ -199,81 +208,39 @@ async function bridgeClientList(reseller: ResellerWithInbounds) {
   return xui(true, "", obj);
 }
 
-async function bridgeAddClient(req: NextRequest, reseller: ResellerWithInbounds) {
-  let body: Record<string, unknown>;
-  try {
-    body = (await req.json()) as Record<string, unknown>;
-  } catch {
-    return xui(false, "بدنه JSON نامعتبر است");
-  }
-
-  // فرمت یکپارچه 3x-ui: {client, inboundIds} — یا ساده: {inboundId, client}
-  let client = (body.client || null) as Record<string, unknown> | null;
-  let inboundIdsRaw: unknown = body.inboundIds;
-  if (!client && body.settings !== undefined) {
-    // فرمت قدیمی per-inbound: {id, settings: JSON {clients: [...]}}
-    try {
-      const settings = typeof body.settings === "string" ? JSON.parse(String(body.settings)) : body.settings;
-      const clients = (settings as { clients?: unknown })?.clients;
-      if (Array.isArray(clients) && clients.length > 0) {
-        client = clients[0] as Record<string, unknown>;
-        inboundIdsRaw = [body.id];
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-  if (!client && typeof body.email === "string") {
-    // فرمت ساده {email, totalGB(ms?), inboundId}
-    client = body;
-    inboundIdsRaw = body.inboundIds ?? body.inboundId;
-  }
-  if (!client || typeof client !== "object") {
-    return xui(false, "کلاینت در بدنه یافت نشد");
-  }
-
-  // اینباندهای مقصد — فقط از دسترسی‌های مجاز
-  const ids = (Array.isArray(inboundIdsRaw) ? inboundIdsRaw : [inboundIdsRaw])
-    .map((x) => Number(x))
-    .filter((x) => Number.isFinite(x));
-  if (ids.length === 0) return xui(false, "هیچ اینباندی مشخص نشده است");
-
+/** ساخت یک کلاینت از طریق پل — مشترک بین فرمت جدید (یکی + inboundIds) و قدیمی (per-inbound) */
+async function createOneViaBridge(
+  reseller: ResellerWithInbounds,
+  client: Record<string, unknown>,
+  ids: number[]
+): Promise<Response> {
   const panelResult = await getAllPanelInbounds();
   if (!panelResult.ok) return xui(false, panelResult.msg || "هیچ پنلی در دسترس نیست");
   const allowed = await allowedRefsResolved(reseller);
-  const inboundIndex = new Map<string, { panelId: string; inboundId: number; protocol: string }>();
-  for (const bundle of panelResult.panels) {
-    for (const inb of bundle.inbounds) {
-      inboundIndex.set(`${bundle.panelId}#${inb.id}`, { panelId: bundle.panelId, inboundId: inb.id, protocol: inb.protocol });
-    }
-  }
+
   const refs: InboundRef[] = [];
   for (const id of ids) {
-    // اگه panelId مشخصی ارسال نشده، اینباند را در پنل‌ها جستجو کن
-    let found: { panelId: string; inboundId: number; protocol: string } | undefined =
-      inboundIndex.get(`${reseller.inbounds[0]?.panelId || ""}#${id}`);
-    if (!found || !allowed.has(refKey({ panelId: found.panelId, inboundId: id }))) {
-      for (const v of inboundIndex.values()) {
-        if (v.inboundId === id) {
-          const key = refKey({ panelId: v.panelId, inboundId: v.inboundId });
-          if (allowed.has(key)) { found = v; break; }
-        }
+    // اینباند را بین پنل‌های دارای دسترسی جستجو کن
+    let found: { panelId: string; inboundId: number } | undefined;
+    for (const bundle of panelResult.panels) {
+      const key = refKey({ panelId: bundle.panelId, inboundId: id });
+      if (allowed.has(key) && bundle.inbounds.some((inb) => inb.id === id)) {
+        found = { panelId: bundle.panelId, inboundId: id };
+        break;
       }
     }
-    if (!found || !allowed.has(refKey({ panelId: found.panelId, inboundId: id }))) {
-      return xui(false, `اینباند ${id} در دسترسی‌های شما نیست`);
-    }
-    refs.push({ panelId: found.panelId, inboundId: id });
+    if (!found) return xui(false, `اینباند ${id} در دسترسی‌های شما نیست`);
+    refs.push(found);
   }
 
   // پارامترهای کلاینت — totalGB به بایت، expiryTime به میلی‌ثانیه (قرارداد 3x-ui)
-  const rawEmail = String(client.email || body.email || "").trim();
+  const rawEmail = String(client.email || "").trim();
   const name = rawEmail.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^-+|-+$/g, "") || `bot-${Date.now()}`;
-  const totalBytes = Math.max(0, Number(client.totalGB ?? body.totalGB ?? 0) || 0);
+  const totalBytes = Math.max(0, Number(client.totalGB ?? 0) || 0);
   const trafficGB = totalBytes > 0 ? bytesToGB(totalBytes) : 0;
-  const expiryTime = Math.max(0, Number(client.expiryTime ?? body.expiryTime ?? 0) || 0);
-  const ipLimit = Math.max(0, Number(client.limitIp ?? body.limitIp ?? 0) || 0);
-  const subIdRaw = String(client.subId ?? body.subId ?? "").trim();
+  const expiryTime = Math.max(0, Number(client.expiryTime ?? 0) || 0);
+  const ipLimit = Math.max(0, Number(client.limitIp ?? 0) || 0);
+  const subIdRaw = String(client.subId ?? "").trim();
 
   const r = await createResellerUserCore(reseller, {
     name,
@@ -296,6 +263,107 @@ async function bridgeAddClient(req: NextRequest, reseller: ResellerWithInbounds)
   })();
 
   return xui(true, "", { email: r.email, subId: r.subId, subLink: r.subLink, trafficGB });
+}
+
+async function bridgeAddClient(req: NextRequest, reseller: ResellerWithInbounds) {
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return xui(false, "بدنه JSON نامعتبر است");
+  }
+
+  // فرمت یکپارچه 3x-ui: {client, inboundIds} — یا ساده: {inboundId, client}
+  let client = (body.client || null) as Record<string, unknown> | null;
+  let inboundIdsRaw: unknown = body.inboundIds;
+  if (!client && typeof body.email === "string") {
+    client = body;
+    inboundIdsRaw = body.inboundIds ?? body.inboundId;
+  }
+  if (!client || typeof client !== "object") {
+    return xui(false, "کلاینت در بدنه یافت نشد");
+  }
+  const ids = (Array.isArray(inboundIdsRaw) ? inboundIdsRaw : [inboundIdsRaw])
+    .map((x) => Number(x))
+    .filter((x) => Number.isFinite(x));
+  if (ids.length === 0) return xui(false, "هیچ اینباندی مشخص نشده است");
+  return createOneViaBridge(reseller, client, ids);
+}
+
+/** فرمت قدیمی: POST /panel/api/inbounds/{id}/addClient با {id, settings: "JSON"} */
+async function bridgeLegacyAddClient(req: NextRequest, reseller: ResellerWithInbounds) {
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return xui(false, "بدنه JSON نامعتبر است");
+  }
+  let clients: unknown;
+  try {
+    const settings = typeof body.settings === "string" ? JSON.parse(body.settings) : body.settings;
+    clients = (settings as { clients?: unknown })?.clients;
+  } catch {
+    return xui(false, "settings نامعتبر است");
+  }
+  if (!Array.isArray(clients) || clients.length === 0) return xui(false, "کلاینت در settings یافت نشد");
+
+  const inboundId = Number(body.id);
+  const results: unknown[] = [];
+  for (const c of clients as Record<string, unknown>[]) {
+    const r = await createOneViaBridge(reseller, c, [inboundId]);
+    const j = (await r.json()) as { success: boolean; msg?: string; obj?: unknown };
+    if (!j.success) return xui(false, j.msg || "ساخت کاربر ناموفق بود");
+    results.push(j.obj);
+  }
+  return xui(true, "", results);
+}
+
+/** وضعیت سرور پنل اصلی — فقط برای نمایش وضعیت اتصال در ربات */
+async function bridgeServerStatus() {
+  const { getPrimaryPanel, getPanelConnection } = await import("@/lib/panel-manager");
+  const { getServerStatus } = await import("@/lib/panel");
+  const primary = await getPrimaryPanel();
+  if (!primary) return xui(false, "پنلی متصل نیست");
+  const conn = await getPanelConnection(primary.id);
+  if (!conn.ok) return xui(false, conn.msg);
+  const st = await getServerStatus(conn.conn as PanelAuth);
+  if (!st.ok || !st.data) return xui(false, st.msg || "وضعیت سرور دریافت نشد");
+  return xui(true, "", {
+    cpu: st.data.cpu,
+    cpuColor: "",
+    mem: { current: st.data.memUsed, total: st.data.memTotal },
+    disk: {},
+    xray: { state: st.data.xrayRunning ? "running" : "stopped", running: st.data.xrayRunning, error: "" },
+    uptime: st.data.uptime,
+    netIO: { up: st.data.up, down: st.data.down },
+    tcpCount: st.data.tcpCount,
+  });
+}
+
+/** تنظیمات سابسکریپشن پنل — برای ساخت لینک ساب توسط ربات */
+async function bridgeSetting() {
+  const { getPrimaryPanel } = await import("@/lib/panel-manager");
+  const panel = await getPrimaryPanel();
+  if (!panel?.subBase) return xui(true, "", { subEnable: false });
+  let port = "";
+  let host = "";
+  try {
+    const u = new URL(panel.subBase.trim());
+    host = u.hostname;
+    port = u.port || "443";
+  } catch {
+    host = panel.subBase.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  }
+  const subPath = (panel.subPath || "sub").replace(/^\/+|\/+$/g, "");
+  return xui(true, "", {
+    subEnable: true,
+    subPort: Number(port) || 443,
+    subPath: `/${subPath}/`,
+    subDomain: host,
+    subURI: panel.subBase.trim(),
+    subJsonURI: "",
+    subTLS: panel.subBase.trim().startsWith("https"),
+  });
 }
 
 async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInbounds, email: string) {
