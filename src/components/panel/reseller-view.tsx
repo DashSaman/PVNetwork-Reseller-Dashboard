@@ -2155,6 +2155,14 @@ function AccountSettingsTab({ username }: { username: string }) {
           <p className="text-xs text-muted-foreground leading-5">
             ربات تلگرامی خودتان (مثل ربات فروش سرویس در میرزا پنل) را به این سامانه وصل کنید: هم <b>اعلان‌ها</b> و هم <b>فروش مستقیم روی همین پنل</b>. با فعال‌کردن سوییچ، ربات می‌تواند مثل اتصال به یک پنل 3x-ui به حساب شما وصل شود — با همان اینباندهای مجاز، همان سقف پول ترافیک و همان قوانین داشبورد. برای اعلان‌ها هم توکن بات و شناسه چت را وارد کنید (اختیاری).
           </p>
+          <a
+            href="/guide/mirza-bot"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--brand)]/40 bg-[var(--brand-soft)] px-3 py-1.5 text-xs font-bold text-[var(--brand-deep)] hover:opacity-90 transition-opacity"
+          >
+            📖 راهنمای تصویری قدم‌به‌قدم اتصال ربات میرزا
+          </a>
 
           {mirzaEnabled && (
             <div className="rounded-xl border border-[var(--brand)]/40 bg-[var(--brand-soft)] p-3.5 space-y-2.5">

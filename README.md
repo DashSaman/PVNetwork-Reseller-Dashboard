@@ -198,6 +198,10 @@ Multiple external 3x-ui servers can be added. The API endpoint `/api/admin/inbou
 
 ![Mobile create-user dialog with 30/40 GB presets](docs/screenshots/17-mobile-create-user-30-40gb.png)
 
+### Mirza Panel bot step-by-step guide (Persian)
+
+A full visual walkthrough for connecting the Mirza bot — including the bot field mapping table — lives at [docs/guide-mirza-bot.fa.md](docs/guide-mirza-bot.fa.md). Resellers also get the same guide inside the dashboard at `/guide/mirza-bot` (linked from the bot settings card).
+
 ### Mirza Panel bot in reseller settings
 
 ![Mirza Panel bot settings card](docs/screenshots/18-reseller-mirza-bot.png)
