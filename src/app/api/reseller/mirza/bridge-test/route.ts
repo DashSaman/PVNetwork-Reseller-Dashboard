@@ -29,9 +29,13 @@ export async function POST() {
     reseller.inbounds.map((i) => refKey({ panelId: i.panelId || primary, inboundId: i.inboundId }))
   );
   let inbounds = 0;
+  const list: { id: number; tag: string; protocol: string; port: number }[] = [];
   for (const bundle of panelResult.panels) {
     for (const inb of bundle.inbounds) {
-      if (allowed.has(refKey({ panelId: bundle.panelId, inboundId: inb.id }))) inbounds++;
+      if (allowed.has(refKey({ panelId: bundle.panelId, inboundId: inb.id }))) {
+        inbounds++;
+        list.push({ id: inb.id, tag: inb.remark || inb.tag, protocol: inb.protocol, port: inb.port });
+      }
     }
   }
 
@@ -39,5 +43,6 @@ export async function POST() {
     ok: inbounds > 0,
     msg: inbounds > 0 ? `ربات می‌تواند متصل شود — ${inbounds} اینباند در دسترس ربات است` : "هیچ اینباندی از پنل در دسترس نیست — دسترسی‌ها را با مدیر بررسی کنید",
     inbounds,
+    list,
   });
 }

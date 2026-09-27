@@ -26,6 +26,8 @@ export type CoreUserParams = {
   refs: InboundRef[];
   /** استفاده توسط پل 3x-ui (ربات میرزا): استفاده از ایمیل ارسالی بدون پسوند تصادفی */
   exactEmail?: string;
+  /** uuid دلخواه ربات — رها شود تا uuid تصادفی ساخته شود */
+  exactUuid?: string;
   /** شناسه سابسکریپشن دلخواه ربات — خالی = تولید خودکار */
   subId?: string;
 };
@@ -98,7 +100,7 @@ export async function createResellerUserCore(
     email = `${name}-${randomHex(4)}`;
   }
   const subId = (params.subId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) || randomHex(16);
-  const uuid = randomUuid();
+  const uuid = (params.exactUuid || "").trim() || randomUuid();
 
   // عدم تکراری بودن ایمیل در همه پنل‌ها
   for (const bundle of panelResult.panels) {

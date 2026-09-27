@@ -1831,6 +1831,7 @@ function AccountSettingsTab({ username }: { username: string }) {
   const [bridgeUrl, setBridgeUrl] = useState("");
   const [bridgeTestBusy, setBridgeTestBusy] = useState(false);
   const [bridgeTestResult, setBridgeTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [bridgeTestList, setBridgeTestList] = useState<{ id: number; tag: string; protocol: string; port: number }[]>([]);
 
   // آدرس پل 3x-ui برای اتصال ربات — پس از اولین رندر (دسترسی به location)
   useEffect(() => {
@@ -1847,10 +1848,15 @@ function AccountSettingsTab({ username }: { username: string }) {
   async function testBridge() {
     setBridgeTestBusy(true);
     setBridgeTestResult(null);
-    const r = await api<{ ok: boolean; msg: string; inbounds: number }>("/api/reseller/mirza/bridge-test", { method: "POST" });
+    setBridgeTestList([]);
+    const r = await api<{ ok: boolean; msg: string; inbounds: number; list?: { id: number; tag: string; protocol: string; port: number }[] }>(
+      "/api/reseller/mirza/bridge-test",
+      { method: "POST" }
+    );
     setBridgeTestBusy(false);
     if (r.ok && r.data) {
       setBridgeTestResult({ ok: r.data.ok, msg: r.data.msg });
+      setBridgeTestList(r.data.list || []);
       if (r.data.ok) toast({ title: "اتصال آماده است", description: r.data.msg });
       else toast({ title: "آماده نیست", description: r.data.msg, variant: "destructive" });
     } else {
@@ -2179,9 +2185,10 @@ function AccountSettingsTab({ username }: { username: string }) {
               </div>
               <ol className="text-[11px] text-muted-foreground leading-5 list-decimal ps-4 space-y-0.5">
                 <li>سوییچ بالا روشن باشد و تنظیمات ذخیره شده باشد</li>
-                <li>در ربات میرزا: بخش پنل‌ها ← افزودن پنل (3x-ui)</li>
+                <li>در ربات میرزا: بخش پنل‌ها ← افزودن پنل ← نوع <b>x-ui</b> انتخاب شود</li>
                 <li>آدرس، نام کاربری و رمز بالا را وارد کنید</li>
-                <li>دکمه «تست اتصال ربات» را بزنید و نتیجه را ببینید</li>
+                <li>«تست اتصال ربات» را بزنید — شناسه اینباند زیر همین‌جا نمایش داده می‌شود؛ همان عدد را در فیلد <b dir="ltr">inboundid</b> ربات وارد کنید</li>
+                <li>«لینک ساب» ربات (<b dir="ltr">linksubx</b>) را روی آدرس سابسکریپشن پنل 3x-ui شما تنظیم کنید (مثل <b dir="ltr">https://sub.example.com/sub</b>) — لینک خریدار به شکل <b dir="ltr">لینک-ساب/شناسه</b> ساخته می‌شود</li>
                 <li>ربات را ذخیره کنید — از این به بعد فروش‌ها از همین پنل انجام می‌شود</li>
               </ol>
               <div className="flex flex-wrap items-center gap-2">
@@ -2194,6 +2201,18 @@ function AccountSettingsTab({ username }: { username: string }) {
                   </span>
                 )}
               </div>
+              {bridgeTestList.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[10px] text-muted-foreground">اینباندهای در دسترس ربات — شناسه هر کدام برای فیلد <b dir="ltr">inboundid</b>:</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {bridgeTestList.map((i) => (
+                      <Badge key={i.id} variant="outline" className="text-[10px] gap-1" dir="ltr">
+                        {i.tag} · port {i.port} — id {i.id}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
               <p className="text-[11px] text-muted-foreground leading-5">
                 ربات از اینباندهای مجاز شما کاربر می‌سازد، سهمیه هر فروش از پول ترافیک شما کسر می‌شود و مصرف کاربران حتی بعد از حذف یا ریست، به‌عنوان مصرف قطعی ثبت می‌ماند.
               </p>

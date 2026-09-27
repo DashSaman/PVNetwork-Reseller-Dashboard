@@ -187,7 +187,7 @@ Multiple external 3x-ui servers can be added. The API endpoint `/api/admin/inbou
 - reseller **Mirza Panel bot** connection with two capabilities:
 
 - notifications: resellers can attach their own Telegram bot (for example the bot they run through the Mirza panel service) as a second notification channel with the same events — user created, usage ≥ 80%, upcoming expiry
-- direct selling through a **3x-ui-compatible bridge**: the reseller's Mirza bot connects to this dashboard exactly like it connects to a 3x-ui panel (panel URL + dashboard username/password). The bot is limited to the reseller's assigned inbounds and traffic pool, and every creation/deletion/reset goes through the same dashboard rules
+- direct selling through a **3x-ui-compatible bridge**: the reseller's Mirza bot connects to this dashboard exactly like it connects to a 3x-ui panel (panel URL + dashboard username/password). The bot is limited to the reseller's assigned inbounds and traffic pool, and every creation/deletion/reset goes through the same dashboard rules. Tested against the [botmirzapanel](https://github.com/mahdiMGF2/botmirzapanel) x-ui_single flow (login, addClient with settings body, getClientTraffics, updateClient, resetClientTraffic, delClientByEmail); in the bot's panel config the reseller enters the bridge URL, dashboard credentials, the inbound ID shown by the dashboard self-test, and the subscription base as `linksubx`.
 
 - anti-abuse traffic accounting: deleting or traffic-resetting a user records its consumed bytes as a permanent deduction from the reseller's pool, so resellers cannot recycle the pool by recreating users
 - admin and reseller TOTP 2FA

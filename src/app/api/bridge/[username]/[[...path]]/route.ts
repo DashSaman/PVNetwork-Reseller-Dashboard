@@ -57,12 +57,22 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (parts.startsWith("panel/api/clients/del/")) return bridgeDeleteClient(auth.reseller, emailFromPath);
   if (parts.startsWith("panel/api/clients/resetTraffic/")) return bridgeResetTraffic(auth.reseller, emailFromPath);
 
+  // ---------- سازگاری با ربات میرزا (x-ui_single) ----------
+  if (parts === "panel/api/inbounds/addClient") return bridgeMirzaAddClient(req, auth.reseller);
+  if (parts.startsWith("panel/api/inbounds/updateClient/")) {
+    return bridgeUpdateClient(req, auth.reseller, decodeURIComponent(parts.slice("panel/api/inbounds/updateClient/".length)));
+  }
+  const mirzaReset = parts.match(/^panel\/api\/inbounds\/(\d+)\/resetClientTraffic\/(.+)$/);
+  if (mirzaReset) return bridgeResetTraffic(auth.reseller, decodeURIComponent(mirzaReset[2]));
+  const mirzaDel = parts.match(/^panel\/api\/inbounds\/(\d+)\/delClientByEmail\/(.+)$/);
+  if (mirzaDel) return bridgeDeleteClient(auth.reseller, decodeURIComponent(mirzaDel[2]));
+
   // ---------- سازگاری با API قدیمی 3x-ui v2 (برخی ربات‌ها) ----------
   if (parts === "panel/api/inbounds/list") return bridgeInboundList(auth.reseller);
   const legacyAdd = parts.match(/^panel\/api\/inbounds\/(\d+)\/addClient$/);
   if (legacyAdd) return bridgeLegacyAddClient(req, auth.reseller);
-  const legacyReset = parts.match(/^panel\/api\/inbounds\/\d+\/clientResetTraffic\/(.+)$/);
-  if (legacyReset) return bridgeResetTraffic(auth.reseller, decodeURIComponent(legacyReset[1]));
+  const legacyReset = parts.match(/^panel\/api\/inbounds\/(\d+)\/clientResetTraffic\/(.+)$/);
+  if (legacyReset) return bridgeResetTraffic(auth.reseller, decodeURIComponent(legacyReset[2]));
 
   return xui(false, "مسیر پشتیبانی نمی‌شود");
 }
@@ -76,6 +86,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   if (parts === "panel/api/inbounds/list") return bridgeInboundList(auth.reseller);
   if (parts === "panel/api/clients/list") return bridgeClientList(auth.reseller);
+  if (parts.startsWith("panel/api/inbounds/getClientTraffics/")) {
+    return bridgeGetClientTraffics(auth.reseller, decodeURIComponent(parts.slice("panel/api/inbounds/getClientTraffics/".length)));
+  }
   if (parts === "panel/api/server/status" || parts === "panel/api/server/getStatus") return bridgeServerStatus();
   if (parts === "panel/setting" || parts === "panel/api/setting") return bridgeSetting();
 
@@ -249,6 +262,7 @@ async function createOneViaBridge(
     ipLimit,
     refs,
     exactEmail: name,
+    exactUuid: typeof client.id === "string" ? client.id.trim() : "",
     subId: subIdRaw,
   });
   if (!r.ok) return xui(false, r.error);
@@ -318,6 +332,85 @@ async function bridgeLegacyAddClient(req: NextRequest, reseller: ResellerWithInb
   return xui(true, "", results);
 }
 
+// ============================================================ ربات میرزا (x-ui_single)
+/** GET /panel/api/inbounds/getClientTraffics/{email} — وضعیت کاربر؛ obj شامل inboundId/uuid/آمار */
+async function bridgeGetClientTraffics(reseller: ResellerWithInbounds, email: string) {
+  const tracked = await db.resellerUser.findUnique({
+    where: { resellerId_email: { resellerId: reseller.id, email } },
+  });
+  if (!tracked) {
+    return Response.json({ success: false, msg: "user not found", obj: null });
+  }
+  const panelResult = await getAllPanelInbounds();
+  if (!panelResult.ok) {
+    return Response.json({ success: false, msg: panelResult.msg || "هیچ پنلی در دسترس نیست", obj: null });
+  }
+
+  // رکورد زنده و آمار کاربر — همان منطق داشبورد: بین پنل‌ها بیشینه مصرف
+  type LiveClient = { id?: string; password?: string; flow?: string; limitIp?: number; enable?: boolean; subId?: string };
+  let live: LiveClient | null = null;
+  let stats: { up: number; down: number; total: number; expiryTime: number; enable?: boolean } | null = null;
+  let inboundId = reseller.inbounds[0]?.inboundId ?? 0;
+  for (const bundle of panelResult.panels) {
+    for (const inb of bundle.inbounds) {
+      const rec = inb.clients.find((c) => c.email === email);
+      const st = inb.clientStats.find((c) => c.email === email);
+      if (rec) live = rec as LiveClient;
+      if (st) {
+        inboundId = inb.id;
+        if (!stats || st.up + st.down > stats.up + stats.down) {
+          stats = { up: st.up || 0, down: st.down || 0, total: st.total || 0, expiryTime: st.expiryTime || 0, enable: st.enable };
+        }
+      }
+    }
+  }
+
+  const obj = {
+    id: live?.id || "",
+    uuid: live?.id || "",
+    password: live?.password || "",
+    flow: live?.flow || "",
+    email,
+    subId: tracked.subId || live?.subId || "",
+    limitIp: live?.limitIp ?? 0,
+    total: stats?.total || (tracked.trafficGB > 0 ? gbToBytes(tracked.trafficGB) : 0),
+    up: stats?.up || 0,
+    down: stats?.down || 0,
+    expiryTime: stats?.expiryTime || 0,
+    enable: stats?.enable ?? live?.enable ?? true,
+    inboundId,
+  };
+  return Response.json({ success: true, msg: "", obj });
+}
+
+/** POST /panel/api/inbounds/addClient — بدنه میرزا: {id: inboundId, settings: "JSON{clients:[...]}", decryption, fallbacks} */
+async function bridgeMirzaAddClient(req: NextRequest, reseller: ResellerWithInbounds) {
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return xui(false, "بدنه JSON نامعتبر است");
+  }
+  const inboundId = Number(body.id);
+  if (!Number.isFinite(inboundId)) return xui(false, "شناسه اینباند نامعتبر است");
+
+  let clients: unknown;
+  try {
+    const settings = typeof body.settings === "string" ? JSON.parse(body.settings) : body.settings;
+    clients = (settings as { clients?: unknown })?.clients;
+  } catch {
+    return xui(false, "settings نامعتبر است");
+  }
+  if (!Array.isArray(clients) || clients.length === 0) return xui(false, "کلاینت در settings یافت نشد");
+
+  for (const c of clients as Record<string, unknown>[]) {
+    const r = await createOneViaBridge(reseller, c, [inboundId]);
+    const j = (await r.json()) as { success: boolean; msg?: string };
+    if (!j.success) return xui(false, j.msg || "ساخت کاربر ناموفق بود");
+  }
+  return xui(true, "");
+}
+
 /** وضعیت سرور پنل اصلی — فقط برای نمایش وضعیت اتصال در ربات */
 async function bridgeServerStatus() {
   const { getPrimaryPanel, getPanelConnection } = await import("@/lib/panel-manager");
@@ -367,11 +460,6 @@ async function bridgeSetting() {
 }
 
 async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInbounds, email: string) {
-  const tracked = await db.resellerUser.findUnique({
-    where: { resellerId_email: { resellerId: reseller.id, email } },
-  });
-  if (!tracked) return xui(false, "کاربر یافت نشد");
-
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -379,12 +467,32 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     return xui(false, "بدنه JSON نامعتبر است");
   }
 
+  // بدنه میرزا: {id (اینباند یا uuid جدید), settings: "JSON{clients:[{id (uuid جدید), email, totalGB, expiryTime, enable, subId}]}"}
+  let payload = body;
+  if (body.settings !== undefined) {
+    try {
+      const settings = typeof body.settings === "string" ? JSON.parse(body.settings) : body.settings;
+      const clients = (settings as { clients?: unknown })?.clients;
+      if (!Array.isArray(clients) || clients.length === 0) return xui(false, "کلاینت در settings یافت نشد");
+      payload = clients[0] as Record<string, unknown>;
+      const settingsEmail = String((payload as Record<string, unknown>).email || "").trim();
+      if (settingsEmail) email = settingsEmail;
+    } catch {
+      return xui(false, "settings نامعتبر است");
+    }
+  }
+
+  const tracked = await db.resellerUser.findUnique({
+    where: { resellerId_email: { resellerId: reseller.id, email } },
+  });
+  if (!tracked) return xui(false, "کاربر یافت نشد");
+
   // سهمیه — با اعتبارسنجی پول (مصرف قطعی لحاظ می‌شود)
   const trafficGB =
-    body.totalGB !== undefined
-      ? (Math.max(0, Number(body.totalGB) || 0) > 0 ? bytesToGB(Math.max(0, Number(body.totalGB) || 0)) : 0)
-      : body.trafficGB !== undefined
-        ? Math.max(0, Number(body.trafficGB) || 0)
+    payload.totalGB !== undefined
+      ? (Math.max(0, Number(payload.totalGB) || 0) > 0 ? bytesToGB(Math.max(0, Number(payload.totalGB) || 0)) : 0)
+      : payload.trafficGB !== undefined
+        ? Math.max(0, Number(payload.trafficGB) || 0)
         : tracked.trafficGB;
   if (trafficGB !== tracked.trafficGB) {
     const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id, tracked.id), getConsumedGB(reseller.id)]);
@@ -392,9 +500,11 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     if (!pool.ok) return xui(false, pool.msg);
   }
 
-  const expiryTime = body.expiryTime !== undefined ? Math.max(0, Number(body.expiryTime) || 0) : undefined;
-  const enable = body.enable !== undefined ? !!body.enable : undefined;
-  const ipLimit = body.limitIp !== undefined ? Math.max(0, Number(body.limitIp) || 0) : 0;
+  const expiryTime = payload.expiryTime !== undefined ? Math.max(0, Number(payload.expiryTime) || 0) : undefined;
+  const enable = payload.enable !== undefined ? !!payload.enable : undefined;
+  const ipLimit = payload.limitIp !== undefined ? Math.max(0, Number(payload.limitIp) || 0) : 0;
+  const newUuid = typeof payload.id === "string" && payload.id.trim() ? payload.id.trim() : undefined;
+  const newSubId = typeof payload.subId === "string" && payload.subId.trim() ? payload.subId.trim() : undefined;
 
   // اعمال روی پنل‌های دارای این کاربر
   const panelResult = await getAllPanelInbounds();
@@ -414,17 +524,28 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     if (!conn.ok) { errors.push(conn.msg); continue; }
     const upd = await updateClient(conn.conn as PanelAuth, email, inb?.protocol || "vless", {
       email,
+      id: newUuid,
       limitIp: ipLimit,
       totalGB: trafficGB > 0 ? trafficGB * GB : 0,
       expiryTime: expiryTime ?? undefined,
       enable: enable ?? true,
-      subId: tracked.subId || "",
+      subId: newSubId || tracked.subId || "",
     });
     if (!upd.ok) errors.push(upd.msg || "ویرایش ناموفق");
   }
   if (errors.length) return xui(false, errors.join(" | "));
 
-  await db.resellerUser.update({ where: { id: tracked.id }, data: { trafficGB } });
+  await db.resellerUser.update({
+    where: { id: tracked.id },
+    data: { trafficGB, ...(newSubId ? { subId: newSubId } : {}) },
+  });
+  await logActivity({
+    actorType: "RESELLER",
+    actorName: reseller.username,
+    action: "ویرایش کاربر از طریق پل ربات",
+    detail: `${email} | سهمیه: ${trafficGB || "نامحدود"}GB`,
+    resellerId: reseller.id,
+  });
   return xui(true, "");
 }
 
