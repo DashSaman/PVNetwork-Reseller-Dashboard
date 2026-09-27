@@ -1,11 +1,29 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { LoginView } from "@/components/panel/login-view";
-import { AdminView } from "@/components/panel/admin-view";
-import { ResellerView } from "@/components/panel/reseller-view";
-import { api, PvLogo } from "@/components/panel/shared";
+import { api, PvLogo, Spinner } from "@/components/panel/shared";
 import type { Session } from "@/components/panel/types";
+
+// داشبوردها (نمودارها و کتابخانه‌های سنگین) جدا از صفحه ورود لود می‌شوند — کاهش چشمگیر لود اول
+const AdminView = dynamic(
+  () => import("@/components/panel/admin-view").then((m) => ({ default: m.AdminView })),
+  { loading: () => <ViewSpinner /> }
+);
+const ResellerView = dynamic(
+  () => import("@/components/panel/reseller-view").then((m) => ({ default: m.ResellerView })),
+  { loading: () => <ViewSpinner /> }
+);
+
+function ViewSpinner() {
+  return (
+    <main className="min-h-screen flex flex-col items-center justify-center gap-3 text-muted-foreground">
+      <PvLogo size={48} className="animate-pulse" />
+      <span className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--brand)] border-t-transparent" />
+    </main>
+  );
+}
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);

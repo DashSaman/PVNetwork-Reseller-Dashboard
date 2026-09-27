@@ -92,8 +92,8 @@ EOFV
 }
 
 render_https_vhost() {
-  local domain="$1" port="$2" output="$3"
-  cat > "$output" <<EOFV
+    local domain="$1" port="$2" output="$3"
+    cat > "$output" <<EOFV
 # Managed by PVNetwork Reseller Dashboard installer
 <IfModule mod_ssl.c>
 <VirtualHost *:443>
@@ -108,6 +108,22 @@ render_https_vhost() {
     ProxyAddHeaders On
     RequestHeader set X-Forwarded-Proto "https"
     RequestHeader set X-Forwarded-Port "443"
+
+    # استاتیک‌های هش‌دار Next — کش بلندمدت در مرورگر و CDN (بقیه no-store می‌ماند)
+    <LocationMatch "^/_next/static/">
+        Header always unset Cache-Control
+        Header always set Cache-Control "public, max-age=31536000, immutable"
+    </LocationMatch>
+    <LocationMatch "^/_next/image">
+        Header always unset Cache-Control
+        Header always set Cache-Control "public, max-age=86400"
+    </LocationMatch>
+    <LocationMatch "\\.(?:webp|png|jpe?g|svg|ico|woff2?)\$">
+        Header always unset Cache-Control
+        Header always set Cache-Control "public, max-age=2592000"
+    </LocationMatch>
+
+    # HTML و APIها بدون کش (امنیتی)
     Header always set Cache-Control "no-store, no-cache, must-revalidate"
 
     ProxyPass        / http://127.0.0.1:$port/ retry=0 timeout=60
