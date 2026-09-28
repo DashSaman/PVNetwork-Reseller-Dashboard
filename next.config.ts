@@ -1,11 +1,8 @@
 import type { NextConfig } from "next";
 
+// خطاهای TypeScript بیلد production را نباید رد کنند
 const nextConfig: NextConfig = {
   output: "standalone",
-  /* config options here */
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   reactStrictMode: false,
 };
 

@@ -114,6 +114,23 @@ export async function getConsumedGB(resellerId: string): Promise<number> {
   return Number(r?.consumedGB || 0);
 }
 
+// ---------- قفل اتمیک سهمیه (Phase 1) ----------
+// یک نمونه اپ (تک‌کانتینر) — ترتیب‌دهی check-then-act برای جلوگیری از race دو درخواست همزمان.
+// نکته: عملیات واقعی نوشتن SQLite خودش سریال است؛ این قفل فاصلهٔ «بررسی ← نوشتن» را اتمیک می‌کند.
+type LockStore = Map<string, Promise<unknown>>;
+const lockStore: LockStore = ((globalThis as { __pvnetQuotaLocks?: LockStore }).__pvnetQuotaLocks ??= new Map());
+
+export async function withResellerLock<T>(resellerId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = lockStore.get(resellerId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  lockStore.set(resellerId, run);
+  try {
+    return await run;
+  } finally {
+    if (lockStore.get(resellerId) === run) lockStore.delete(resellerId);
+  }
+}
+
 /** باقیمانده واقعی پول = پول − تخصیص فعال − مصرف قطعی (۰ = بی‌نهایت برای پول نامحدود) */
 export async function getRemainingGB(reseller: { id: string; trafficPoolGB: number }): Promise<number> {
   if (reseller.trafficPoolGB <= 0) return 0;
@@ -122,28 +139,45 @@ export async function getRemainingGB(reseller: { id: string; trafficPoolGB: numb
 }
 
 /**
+ * تجمیع کانونی مصرف یک کاربر از روی snapshot پنل‌ها — تنها مرجع محاسبه مصرف.
+ * معناشناسی 3x-ui: شمارنده هر ایمیل در هر پنل یکتاست و در چند اینباندِ همان پنل تکرار نمایش داده می‌شود
+ * ← داخل هر پنل بیشینه (up+down)، بین پنل‌ها جمع. همین منطق باید در UI، بدهکارسازی، هشدارها و پل استفاده شود.
+ */
+export function canonicalUserUsageBytes(
+  panels: { panelId: string; inbounds: { clientStats: { email: string; up?: number; down?: number }[] }[] }[],
+  email: string
+): number {
+  let totalBytes = 0;
+  for (const bundle of panels) {
+    let panelBytes = 0;
+    for (const inb of bundle.inbounds) {
+      const st = inb.clientStats.find((c) => c.email === email);
+      if (st) panelBytes = Math.max(panelBytes, (st.up || 0) + (st.down || 0));
+    }
+    totalBytes += panelBytes;
+  }
+  return totalBytes;
+}
+
+/**
  * بدهکارسازی مصرف کاربر هنگام حذف/ریست — ضد دور زدن پول ترافیک.
- * مصرف فعلی کاربر (up+down) از پنل‌ها خوانده و به‌عنوان مصرف قطعی نماینده ثبت می‌شود.
- * مصرف ۰ خطا نیست (کاربر بلااستفاده) — skip برای پرهیز از کوئری اضافه.
+ * <b>fail-closed</b>: اگر پنل‌ها قابل خواندن نباشند، عملیات تخریبی نباید ادامه یابد وگرنه
+ * نماینده می‌تواند با قطعی پنل، سهمیه بازیابی کند. مصرف صفر خطا نیست (skip).
  */
 export async function debitUsedTraffic(
   resellerId: string,
   email: string
-): Promise<number> {
+): Promise<{ ok: true; debitedGB: number } | { ok: false; msg: string }> {
   const { getAllPanelInbounds } = await import("./panel-manager");
   const snapshot = await getAllPanelInbounds();
-  if (!snapshot.ok) return 0;
-  let usedBytes = 0;
-  for (const bundle of snapshot.panels) {
-    for (const inb of bundle.inbounds) {
-      const st = inb.clientStats.find((c) => c.email === email);
-      if (st) usedBytes += (st.up || 0) + (st.down || 0);
-    }
+  if (!snapshot.ok) {
+    return { ok: false, msg: snapshot.msg || "پنل‌ها در دسترس نیستند — برای جلوگیری از کاهش حساب، عملیات انجام نشد" };
   }
+  const usedBytes = canonicalUserUsageBytes(snapshot.panels, email);
   const gb = Math.round((usedBytes / (1024 * 1024 * 1024)) * 10000) / 10000;
-  if (gb <= 0) return 0;
+  if (gb <= 0) return { ok: true, debitedGB: 0 };
   await db.reseller.update({ where: { id: resellerId }, data: { consumedGB: { increment: gb } } });
-  return gb;
+  return { ok: true, debitedGB: gb };
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   validatePoolAllocation,
   getAllocatedGB,
   getConsumedGB,
+  withResellerLock,
   debitUsedTraffic,
   parseInboundRefs,
   stringifyInboundRefs,
@@ -38,6 +39,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const reseller = await getResellerWithAccess(session.uid);
     if (!reseller) return NextResponse.json({ error: "حساب شما فعال نیست" }, { status: 403 });
 
+    return withResellerLock(reseller.id, async () => {
     const tracked = await db.resellerUser.findUnique({
       where: { resellerId_email: { resellerId: reseller.id, email } },
     });
@@ -234,6 +236,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
     const subLink = await buildSubLink(body.subId !== undefined ? body.subId : current.subId, reseller, newRefs[0]?.panelId || primaryPanelId);
     return NextResponse.json({ ok: true, subLink });
+  });
   } catch (e) {
     console.error("update user error:", e);
     return NextResponse.json({ error: "خطای داخلی در ویرایش کاربر" }, { status: 500 });
@@ -256,13 +259,13 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     });
     if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
 
-    // ضد دور زدن پول: مصرف فعلی کاربر قبل از حذف، به‌عنوان مصرف قطعی نماینده ثبت می‌شود
-    let debitedGB = 0;
-    try {
-      debitedGB = await debitUsedTraffic(reseller.id, email);
-    } catch {
-      /* در نبود پنل/خطا، حذف ادامه می‌یابد — فقط بدهکاری ثبت نشد */
+    // ضد دور زدن پول (fail-closed): اگر مصرف قابل خواندن نباشد، حذف انجام نمی‌شود
+return withResellerLock(reseller.id, async () => {
+    const debit = await debitUsedTraffic(reseller.id, email);
+    if (!debit.ok) {
+      return NextResponse.json({ error: `حذف انجام نشد: ${debit.msg}` }, { status: 502 });
     }
+    const debitedGB = debit.debitedGB;
 
     // حذف از همه پنل‌ها
     const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
@@ -296,6 +299,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
       resellerId: reseller.id,
     });
     return NextResponse.json({ ok: true, debitedGB });
+});
   } catch (e) {
     console.error("delete user error:", e);
     return NextResponse.json({ error: "خطای داخلی در حذف کاربر" }, { status: 500 });

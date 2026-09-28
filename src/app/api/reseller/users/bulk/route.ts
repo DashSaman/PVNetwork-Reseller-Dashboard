@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, getAllocatedGB, getConsumedGB, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, getAllocatedGB, getConsumedGB, withResellerLock, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 import { createResellerUserCore } from "@/lib/user-create";
 import { db } from "@/lib/db";

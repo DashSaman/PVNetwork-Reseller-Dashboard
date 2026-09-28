@@ -42,6 +42,18 @@ export async function createResellerUserCore(
   snapshot?: AllPanelsResult | null,
   opts?: { skipPoolCheck?: boolean }
 ): Promise<CoreUserResult> {
+  // بخش بحرانی سهمیه (بررسی ← ساخت ← ثبت) داخل قفل نماینده — ساخت گروهی خودش قفل بیرونی دارد
+  if (opts?.skipPoolCheck) return createResellerUserCoreInner(reseller, params, snapshot, opts);
+  const { withResellerLock } = await import("./reseller-helpers");
+  return withResellerLock(reseller.id, () => createResellerUserCoreInner(reseller, params, snapshot, opts));
+}
+
+async function createResellerUserCoreInner(
+  reseller: ResellerWithInbounds,
+  params: CoreUserParams,
+  snapshot?: AllPanelsResult | null,
+  opts?: { skipPoolCheck?: boolean }
+): Promise<CoreUserResult> {
   // ---- نام ----
   const nameCheck = validateUsername(params.name.trim());
   if (!nameCheck.ok) return { ok: false, error: nameCheck.msg, status: 400 };

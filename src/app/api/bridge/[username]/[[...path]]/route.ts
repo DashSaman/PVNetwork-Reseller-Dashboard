@@ -8,6 +8,7 @@ import {
   getAllocatedGB,
   getConsumedGB,
   validatePoolAllocation,
+  withResellerLock,
   debitUsedTraffic,
   parseInboundRefs,
   refKey,
@@ -125,6 +126,7 @@ async function bridgeLogin(req: NextRequest, username: string) {
   res.cookies.set(BRIDGE_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
     path: bridgeCookiePath(row.username),
     maxAge: 60 * 60 * 24,
   });
@@ -494,6 +496,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
       : payload.trafficGB !== undefined
         ? Math.max(0, Number(payload.trafficGB) || 0)
         : tracked.trafficGB;
+  return withResellerLock(reseller.id, async () => {
   if (trafficGB !== tracked.trafficGB) {
     const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id, tracked.id), getConsumedGB(reseller.id)]);
     const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, trafficGB, tracked.trafficGB, consumedGB);
@@ -547,6 +550,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     resellerId: reseller.id,
   });
   return xui(true, "");
+  });
 }
 
 async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string) {
@@ -555,7 +559,9 @@ async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string)
   });
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
-  await debitUsedTraffic(reseller.id, email).catch(() => undefined);
+  return withResellerLock(reseller.id, async () => {
+  const debit = await debitUsedTraffic(reseller.id, email);
+  if (!debit.ok) return xui(false, debit.msg);
 
   const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   for (const panel of panels) {
@@ -572,6 +578,7 @@ async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string)
     resellerId: reseller.id,
   });
   return xui(true, "");
+  });
 }
 
 async function bridgeResetTraffic(reseller: ResellerWithInbounds, email: string) {
@@ -580,7 +587,9 @@ async function bridgeResetTraffic(reseller: ResellerWithInbounds, email: string)
   });
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
-  await debitUsedTraffic(reseller.id, email).catch(() => undefined);
+  return withResellerLock(reseller.id, async () => {
+  const debit = await debitUsedTraffic(reseller.id, email);
+  if (!debit.ok) return xui(false, debit.msg);
 
   const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   let anyOk = false;
@@ -592,6 +601,7 @@ async function bridgeResetTraffic(reseller: ResellerWithInbounds, email: string)
   }
   if (!anyOk) return xui(false, "ریست ترافیک روی هیچ پنلی انجام نشد");
   return xui(true, "");
+  });
 }
 
 async function bridgeOnlines(reseller: ResellerWithInbounds) {

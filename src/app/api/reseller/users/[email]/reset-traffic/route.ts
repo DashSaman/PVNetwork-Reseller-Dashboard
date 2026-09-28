@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { getPanelConnection } from "@/lib/panel-manager";
-import { getResellerWithAccess, debitUsedTraffic } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, withResellerLock, debitUsedTraffic } from "@/lib/reseller-helpers";
 import { resetClientTraffic, type PanelAuth } from "@/lib/panel";
 import { logActivity } from "@/lib/logger";
 
@@ -23,13 +23,13 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     });
     if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
 
-    // ضد دور زدن پول: مصرف فعلی کاربر قبل از ریست، قطعی ثبت می‌شود
-    let debitedGB = 0;
-    try {
-      debitedGB = await debitUsedTraffic(reseller.id, email);
-    } catch {
-      /* بدون پنل در دسترس، ریست ادامه می‌یابد */
+    return withResellerLock(reseller.id, async () => {
+    // ضد دور زدن پول (fail-closed): اگر مصرف قابل خواندن نباشد، ریست انجام نمی‌شود
+    const debit = await debitUsedTraffic(reseller.id, email);
+    if (!debit.ok) {
+      return NextResponse.json({ error: `ریست انجام نشد: ${debit.msg}` }, { status: 502 });
     }
+    const debitedGB = debit.debitedGB;
 
     // ریست روی همه پنل‌ها (کاربر می‌تواند بین پنل‌ها مشترک باشد)
     const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
@@ -59,6 +59,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       resellerId: reseller.id,
     });
     return NextResponse.json({ ok: true, debitedGB });
+    });
   } catch (e) {
     console.error("reset traffic error:", e);
     return NextResponse.json({ error: "خطای داخلی در ریست ترافیک" }, { status: 500 });
