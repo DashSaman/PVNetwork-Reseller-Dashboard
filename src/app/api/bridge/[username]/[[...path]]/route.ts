@@ -17,6 +17,7 @@ import {
   type InboundRef,
   type ResellerWithInbounds,
 } from "@/lib/reseller-helpers";
+import { deleteUserByJournal, resetUserByJournal } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
 import { logActivity } from "@/lib/logger";
@@ -559,26 +560,9 @@ async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string)
   });
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
-  return withResellerLock(reseller.id, async () => {
-  const debit = await debitUsedTraffic(reseller.id, email);
-  if (!debit.ok) return xui(false, debit.msg);
-
-  const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
-  for (const panel of panels) {
-    const conn = await getPanelConnection(panel.id);
-    if (!conn.ok) continue;
-    await deleteClient(conn.conn as PanelAuth, email);
-  }
-  await db.resellerUser.delete({ where: { id: tracked.id } });
-  await logActivity({
-    actorType: "RESELLER",
-    actorName: reseller.username,
-    action: "حذف کاربر از طریق پل ربات",
-    detail: email,
-    resellerId: reseller.id,
-  });
+  const result = await deleteUserByJournal(reseller, tracked, reseller.username);
+  if (!result.ok) return xui(false, result.msg);
   return xui(true, "");
-  });
 }
 
 async function bridgeResetTraffic(reseller: ResellerWithInbounds, email: string) {
@@ -587,21 +571,9 @@ async function bridgeResetTraffic(reseller: ResellerWithInbounds, email: string)
   });
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
-  return withResellerLock(reseller.id, async () => {
-  const debit = await debitUsedTraffic(reseller.id, email);
-  if (!debit.ok) return xui(false, debit.msg);
-
-  const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
-  let anyOk = false;
-  for (const panel of panels) {
-    const conn = await getPanelConnection(panel.id);
-    if (!conn.ok) continue;
-    const r = await resetClientTraffic(conn.conn as PanelAuth, email);
-    if (r.ok) anyOk = true;
-  }
-  if (!anyOk) return xui(false, "ریست ترافیک روی هیچ پنلی انجام نشد");
+  const result = await resetUserByJournal(reseller, tracked, reseller.username);
+  if (!result.ok) return xui(false, result.msg);
   return xui(true, "");
-  });
 }
 
 async function bridgeOnlines(reseller: ResellerWithInbounds) {

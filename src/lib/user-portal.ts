@@ -63,6 +63,8 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
 
   for (const bundle of panelResult.panels) {
     const panel = await getPanelById(bundle.panelId);
+    let panelUp = 0;
+    let panelDown = 0;
     let host = "";
     if (panel?.subBase) {
       try {
@@ -81,8 +83,8 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
       if (!client && !stat) continue;
       seenInbound.add(key);
 
-      up += stat?.up || 0;
-      down += stat?.down || 0;
+      panelUp = Math.max(panelUp, stat?.up || 0);
+      panelDown = Math.max(panelDown, stat?.down || 0);
       total = Math.max(total, client?.totalGB || 0);
       expiryTime = Math.max(expiryTime, client?.expiryTime || 0);
       enable = enable || (client?.enable ?? true);
@@ -103,6 +105,9 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
         links.push({ ...built, remark: inb.remark || inb.tag });
       }
     }
+    // تجمیع کانونی: فقط رکورد برنده هر پنل به مجموع کل اضافه می‌شود
+    up += panelUp;
+    down += panelDown;
   }
 
   const usedGB = Math.round(((up + down) / 1073741824) * 100) / 100;

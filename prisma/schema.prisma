@@ -125,3 +125,25 @@ model ActivityLog {
 
   @@index([createdAt])
 }
+
+// ژورنال عملیات تخریبی چندپنلی — idempotency و بازیابی خرابی جزئی (فاز ۱.۱)
+model OperationJournal {
+  id                  String   @id @default(cuid())
+  idempotencyKey      String   @unique
+  resellerId          String
+  userId              String?
+  email               String
+  type                String   // DELETE | RESET | CREATE | UPDATE
+  status              String   @default("PENDING") // PENDING | RUNNING | PARTIAL | SUCCESS | FAILED | NEEDS_REPAIR
+  usageSnapshotGB     Float?   // مصرف کانونی ثبت‌شده پیش از عملیات — بدهکاری فقط یک‌بار از این مقدار
+  accountingCommitted Boolean  @default(false)
+  targetPanels        String   @default("[]")
+  completedPanels     String   @default("[]")
+  failedPanels        String   @default("[]")
+  lastError           String?
+  metadata            String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([email, type, status])
+}

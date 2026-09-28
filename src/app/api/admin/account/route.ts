@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
 import { hashPassword, verifyPassword, signSession } from "@/lib/crypto";
+import { setDashboardSessionCookie } from "@/lib/session";
 import { SESSION_COOKIE, sessionExpiry } from "@/lib/session";
 import { logActivity } from "@/lib/logger";
 
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
     // صدور نشست تازه (نام کاربری ممکن است عوض شده باشد)
     const token = signSession({ role: "ADMIN", uid: admin.id, username, exp: sessionExpiry() });
     const res = NextResponse.json({ ok: true, username });
-    res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 12 });
+    setDashboardSessionCookie(res, token);
     return res;
   } catch (e) {
     console.error("admin account error:", e);

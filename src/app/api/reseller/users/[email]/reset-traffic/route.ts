@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getPanelConnection } from "@/lib/panel-manager";
-import { getResellerWithAccess, withResellerLock, debitUsedTraffic } from "@/lib/reseller-helpers";
-import { resetClientTraffic, type PanelAuth } from "@/lib/panel";
+import { getResellerWithAccess } from "@/lib/reseller-helpers";
+import { resetUserByJournal } from "@/lib/accounting-ops";
 import { logActivity } from "@/lib/logger";
 
 type Ctx = { params: Promise<{ email: string }> };
@@ -23,43 +22,12 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     });
     if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
 
-    return withResellerLock(reseller.id, async () => {
-    // ضد دور زدن پول (fail-closed): اگر مصرف قابل خواندن نباشد، ریست انجام نمی‌شود
-    const debit = await debitUsedTraffic(reseller.id, email);
-    if (!debit.ok) {
-      return NextResponse.json({ error: `ریست انجام نشد: ${debit.msg}` }, { status: 502 });
+    // ریست از طریق سرویس متمرکز ژورنال‌دار (مشترک با پل ربات) — fail-closed و بدهکاری یک‌باره
+    const result = await resetUserByJournal(reseller, tracked, reseller.username);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.msg, partial: result.partial === true }, { status: result.status });
     }
-    const debitedGB = debit.debitedGB;
-
-    // ریست روی همه پنل‌ها (کاربر می‌تواند بین پنل‌ها مشترک باشد)
-    const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
-    let anyOk = false;
-    const errors: string[] = [];
-    for (const panel of panels) {
-      const conn = await getPanelConnection(panel.id);
-      if (!conn.ok) continue;
-      const r = await resetClientTraffic(conn.conn as PanelAuth, email);
-      if (r.ok) anyOk = true;
-    }
-    if (!anyOk) {
-      const conn = await getPanelConnection(panels[0]?.id);
-      if (!conn.ok) return NextResponse.json({ error: conn.msg }, { status: 502 });
-      const r = await resetClientTraffic(conn.conn as PanelAuth, email);
-      if (!r.ok) errors.push(r.msg || "ریست ناموفق بود");
-    }
-    if (errors.length) {
-      return NextResponse.json({ error: `ریست ترافیک ناموفق بود: ${errors.join(" | ")}` }, { status: 502 });
-    }
-
-    await logActivity({
-      actorType: "RESELLER",
-      actorName: reseller.username,
-      action: "ریست ترافیک کاربر",
-      detail: `${email}${debitedGB > 0 ? ` | مصرف قطعی ثبت‌شده: ${debitedGB} گیگ` : ""}`,
-      resellerId: reseller.id,
-    });
-    return NextResponse.json({ ok: true, debitedGB });
-    });
+    return NextResponse.json({ ok: true, debitedGB: result.debitedGB });
   } catch (e) {
     console.error("reset traffic error:", e);
     return NextResponse.json({ error: "خطای داخلی در ریست ترافیک" }, { status: 500 });

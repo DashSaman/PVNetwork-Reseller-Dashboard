@@ -8,6 +8,19 @@ export function sessionExpiry(): number {
   return Date.now() + SESSION_TTL;
 }
 
+/** تنها راه صدور کوکی نشست داشبورد — سیاست امنیتی یکسان در همه مسیرها */
+export function setDashboardSessionCookie(res: import("next/server").NextResponse, token: string): void {
+  res.cookies.set({
+    name: SESSION_COOKIE,
+    value: token,
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 12,
+  });
+}
+
 export async function getSession(): Promise<SessionPayload | null> {
   const store = await cookies();
   return verifySession(store.get(SESSION_COOKIE)?.value);

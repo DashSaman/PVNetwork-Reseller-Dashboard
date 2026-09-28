@@ -1,3 +1,28 @@
+export type CanonicalUsage = { upBytes: number; downBytes: number; usedBytes: number };
+
+/**
+ * تجمیع کانونی مصرف یک کاربر — تنها مرجع محاسبه در داشبورد، پل و پرتال.
+ * داخل هر پنل: یک رکورد برنده (بیشینه up+down — شمارنده یکتای ایمیل که در چند اینباند تکرار نمایش داده می‌شود)
+ * بین پنل‌ها: جمع مقادیر برنده.
+ */
+export function canonicalUserUsage(
+  panels: { panelId: string; inbounds: { clientStats: { email: string; up?: number; down?: number }[] }[] }[],
+  email: string
+): CanonicalUsage {
+  let upBytes = 0, downBytes = 0;
+  for (const bundle of panels) {
+    let winner: { up: number; down: number } | null = null;
+    for (const inb of bundle.inbounds) {
+      const st = inb.clientStats.find((c) => c.email === email);
+      if (st && (st.up || 0) + (st.down || 0) > (winner ? winner.up + winner.down : -1)) {
+        winner = { up: st.up || 0, down: st.down || 0 };
+      }
+    }
+    if (winner) { upBytes += winner.up; downBytes += winner.down; }
+  }
+  return { upBytes, downBytes, usedBytes: upBytes + downBytes };
+}
+
 import { db } from "@/lib/db";
 import type { Reseller, ResellerInbound } from "@prisma/client";
 
@@ -173,7 +198,7 @@ export async function debitUsedTraffic(
   if (!snapshot.ok) {
     return { ok: false, msg: snapshot.msg || "پنل‌ها در دسترس نیستند — برای جلوگیری از کاهش حساب، عملیات انجام نشد" };
   }
-  const usedBytes = canonicalUserUsageBytes(snapshot.panels, email);
+  const usedBytes = canonicalUserUsage(snapshot.panels, email).usedBytes;
   const gb = Math.round((usedBytes / (1024 * 1024 * 1024)) * 10000) / 10000;
   if (gb <= 0) return { ok: true, debitedGB: 0 };
   await db.reseller.update({ where: { id: resellerId }, data: { consumedGB: { increment: gb } } });

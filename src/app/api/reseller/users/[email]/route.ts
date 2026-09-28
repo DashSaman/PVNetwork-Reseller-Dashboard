@@ -24,6 +24,7 @@ import {
   type PanelAuth,
 } from "@/lib/panel";
 import { randomUuid } from "@/lib/crypto";
+import { deleteUserByJournal } from "@/lib/accounting-ops";
 import { logActivity } from "@/lib/logger";
 
 type Ctx = { params: Promise<{ email: string }> };
@@ -259,47 +260,13 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     });
     if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
 
-    // ضد دور زدن پول (fail-closed): اگر مصرف قابل خواندن نباشد، حذف انجام نمی‌شود
-return withResellerLock(reseller.id, async () => {
-    const debit = await debitUsedTraffic(reseller.id, email);
-    if (!debit.ok) {
-      return NextResponse.json({ error: `حذف انجام نشد: ${debit.msg}` }, { status: 502 });
+    // حذف از طریق سرویس متمرکز ژورنال‌دار (مشترک با پل ربات) — fail-closed و بدهکاری یک‌باره
+    const result = await deleteUserByJournal(reseller, tracked, reseller.username);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.msg, partial: result.partial === true }, { status: result.status });
     }
-    const debitedGB = debit.debitedGB;
-
-    // حذف از همه پنل‌ها
-    const panels = await db.panelConfig.findMany({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
-    const errors: string[] = [];
-    let deletedFromAny = false;
-    for (const panel of panels) {
-      const conn = await getPanelConnection(panel.id);
-      if (!conn.ok) continue;
-      const r = await deleteClient(conn.conn as PanelAuth, email);
-      if (r.ok) deletedFromAny = true;
-      // "یافت نشد" خطا نیست — کاربر شاید فقط در پنل دیگری باشد
-    }
-    if (!deletedFromAny && panels.length > 0) {
-      // حداقل یک تلاش واقعی انجام شده؛ اگر همه شکست خورده باشند پیام خطا بده
-      const conn = await getPanelConnection(panels[0].id);
-      if (conn.ok) {
-        const r = await deleteClient(conn.conn as PanelAuth, email);
-        if (!r.ok) errors.push(r.msg || "حذف ناموفق بود");
-      }
-    }
-    if (errors.length) {
-      return NextResponse.json({ error: `حذف ناموفق: ${errors.join(" | ")}` }, { status: 502 });
-    }
-
-    await db.resellerUser.delete({ where: { id: tracked.id } });
-    await logActivity({
-      actorType: "RESELLER",
-      actorName: reseller.username,
-      action: "حذف کاربر",
-      detail: `${email}${debitedGB > 0 ? ` | مصرف قطعی ثبت‌شده: ${debitedGB} گیگ` : ""}`,
-      resellerId: reseller.id,
-    });
+    const debitedGB = result.debitedGB;
     return NextResponse.json({ ok: true, debitedGB });
-});
   } catch (e) {
     console.error("delete user error:", e);
     return NextResponse.json({ error: "خطای داخلی در حذف کاربر" }, { status: 500 });

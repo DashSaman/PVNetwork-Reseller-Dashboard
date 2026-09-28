@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, getAllocatedGB, getConsumedGB, withResellerLock, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
-import { createResellerUserCore } from "@/lib/user-create";
+import { createResellerUserCoreWithinResellerLock } from "@/lib/user-create";
 import { db } from "@/lib/db";
 
 const MAX_BULK = 50;
@@ -36,6 +36,8 @@ export async function POST(req: NextRequest) {
     const trafficGB = Math.max(0, Number(body.trafficGB) || 0); // ۰ = نامحدود
     const ipLimit = reseller.allowIpLimit ? Math.max(0, Number(body.ipLimit) || 0) : 0;
 
+    // کل عملیات داخل قفل نماینده — bulk/bulk و bulk/single نمی‌توانند هم‌زمان over-spend کنند
+    return withResellerLock(reseller.id, async () => {
     // ---- پول ترافیک: کل دسته یک‌جا بررسی می‌شود ----
     if (reseller.trafficPoolGB > 0 && trafficGB <= 0) {
       return NextResponse.json({ error: "پول ترافیک شما محدود است — سهمیه هر کاربر باید عددی مثبت باشد" }, { status: 400 });
@@ -86,11 +88,10 @@ export async function POST(req: NextRequest) {
 
     for (let i = 1; i <= count; i++) {
       const name = `${prefix}${String(i).padStart(pad, "0")}`;
-      const r = await createResellerUserCore(
+      const r = await createResellerUserCoreWithinResellerLock(
         reseller,
         { name, trafficGB, expiryTime, ipLimit, refs },
-        snapshot,
-        { skipPoolCheck: true } // پیش‌موجه برای کل دسته بررسی شد
+        snapshot
       );
       if (r.ok) {
         created.push({ email: r.email, subId: r.subId, subLink: r.subLink });
@@ -125,6 +126,7 @@ export async function POST(req: NextRequest) {
       created,
       failed,
     });
+    }); // پایان قفل نماینده
   } catch (e) {
     console.error("bulk create users error:", e);
     return NextResponse.json({ error: "خطای داخلی در ساخت گروهی کاربران" }, { status: 500 });

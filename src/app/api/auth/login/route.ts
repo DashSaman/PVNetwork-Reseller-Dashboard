@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { verifyPassword, signSession, decryptSecret } from "@/lib/crypto";
-import { SESSION_COOKIE, sessionExpiry } from "@/lib/session";
+import { SESSION_COOKIE, sessionExpiry, setDashboardSessionCookie } from "@/lib/session";
 import { verifyTotp } from "@/lib/totp";
 import { logActivity } from "@/lib/logger";
 import { isBlocked, recordFailure, clearFailures, clientIp, LIMITS } from "@/lib/rate-limit";
@@ -72,13 +72,7 @@ export async function POST(req: NextRequest) {
     const issue = (role: "ADMIN" | "RESELLER", uid: string, uname: string, resellerId?: string) => {
       const token = signSession({ role, uid, username: uname, exp: sessionExpiry() });
       const res = NextResponse.json({ role, username: uname });
-      res.cookies.set(SESSION_COOKIE, token, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
-        path: "/",
-        maxAge: 60 * 60 * 12,
-      });
+      setDashboardSessionCookie(res, token);
       return { res, role, uid, uname, resellerId };
     };
 

@@ -32,6 +32,58 @@ export type CoreUserParams = {
   subId?: string;
 };
 
+/** حذف جبرانی کپی‌های ساخته‌شده روی پنل‌های موفق — true یعنی جبران کامل */
+async function compensatePartialCreate(
+  reseller: ResellerWithInbounds,
+  email: string,
+  createdPanels: string[]
+): Promise<boolean> {
+  if (createdPanels.length === 0) return true;
+  let allOk = true;
+  const { getPanelConnection } = await import("./panel-manager");
+  const { deleteClient } = await import("./panel");
+  for (const panelId of createdPanels) {
+    try {
+      const conn = await getPanelConnection(panelId);
+      if (!conn.ok) { allOk = false; continue; }
+      const r = await deleteClient(conn.conn as unknown as Parameters<typeof deleteClient>[0], email);
+      if (!r.ok) allOk = false;
+    } catch {
+      allOk = false;
+    }
+  }
+  return allOk;
+}
+
+/** ثبت کاربر یتیم NEEDS_REPAIR — سهمیه رزرو می‌ماند و برای بررسی دستی ثبت می‌شود */
+async function recordOrphanRepair(
+  reseller: ResellerWithInbounds,
+  email: string,
+  createdPanels: string[],
+  params: CoreUserParams,
+  lastError: string
+): Promise<void> {
+  await db.operationJournal.create({
+    data: {
+      idempotencyKey: `create-orphan:${email}:${Date.now()}`,
+      resellerId: reseller.id,
+      email,
+      type: "CREATE",
+      status: "NEEDS_REPAIR",
+      targetPanels: JSON.stringify(createdPanels),
+      lastError,
+      metadata: JSON.stringify({ trafficGB: params.trafficGB, expiryTime: params.expiryTime, refs: params.refs }),
+    },
+  });
+  await logActivity({
+    actorType: "RESELLER",
+    actorName: reseller.username,
+    action: "کاربر یتیم پس از ساخت ناقص — NEEDS_REPAIR",
+    detail: `${email} روی پنل‌های ${createdPanels.join(", ")} ساخته شده و حذف جبرانی ناموفق بود`,
+    resellerId: reseller.id,
+  });
+}
+
 export type CoreUserResult =
   | { ok: true; email: string; subId: string; subLink: string | null }
   | { ok: false; error: string; status: number };
@@ -39,20 +91,30 @@ export type CoreUserResult =
 export async function createResellerUserCore(
   reseller: ResellerWithInbounds,
   params: CoreUserParams,
-  snapshot?: AllPanelsResult | null,
-  opts?: { skipPoolCheck?: boolean }
+  snapshot?: AllPanelsResult | null
 ): Promise<CoreUserResult> {
-  // بخش بحرانی سهمیه (بررسی ← ساخت ← ثبت) داخل قفل نماینده — ساخت گروهی خودش قفل بیرونی دارد
-  if (opts?.skipPoolCheck) return createResellerUserCoreInner(reseller, params, snapshot, opts);
+  // مسیر عمومی: همیشه قفل + بررسی پول — هیچ مسیری امکان عبور از بررسی سهمیه ندارد
   const { withResellerLock } = await import("./reseller-helpers");
-  return withResellerLock(reseller.id, () => createResellerUserCoreInner(reseller, params, snapshot, opts));
+  return withResellerLock(reseller.id, () => createResellerUserCoreInner(reseller, params, snapshot ?? null, { checkPool: true }));
+}
+
+/**
+ * فقط از داخل قفلِ پیش‌تر گرفته‌شدهٔ نماینده (ساخت گروهی — پیش‌بررسی کل دسته در همان قفل انجام شده).
+ * نام صریح برای جلوگیری از استفاده تصادفی به‌عنوان میان‌بر عبور از بررسی سهمیه.
+ */
+export async function createResellerUserCoreWithinResellerLock(
+  reseller: ResellerWithInbounds,
+  params: CoreUserParams,
+  snapshot?: AllPanelsResult | null
+): Promise<CoreUserResult> {
+  return createResellerUserCoreInner(reseller, params, snapshot ?? null, { checkPool: false });
 }
 
 async function createResellerUserCoreInner(
   reseller: ResellerWithInbounds,
   params: CoreUserParams,
-  snapshot?: AllPanelsResult | null,
-  opts?: { skipPoolCheck?: boolean }
+  snapshot: AllPanelsResult | null,
+  opts: { checkPool: boolean }
 ): Promise<CoreUserResult> {
   // ---- نام ----
   const nameCheck = validateUsername(params.name.trim());
@@ -73,7 +135,7 @@ async function createResellerUserCoreInner(
   if (!selection.ok) return { ok: false, error: selection.msg, status: 403 };
 
   // ---- پول ترافیک (در ساخت گروهی پیش‌موجه بررسی شده — skip) ----
-  if (!opts?.skipPoolCheck) {
+  if (opts.checkPool) {
     const { getAllocatedGB, getConsumedGB, validatePoolAllocation } = await import("./reseller-helpers");
     const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
     const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, params.trafficGB, 0, consumedGB);
@@ -130,9 +192,12 @@ async function createResellerUserCoreInner(
     arr.push(ref.inboundId);
     byPanel.set(ref.panelId, arr);
   }
+  const createdPanels: string[] = [];
   for (const [panelId, inboundIds] of byPanel) {
     const conn = await getPanelConnection(panelId);
     if (!conn.ok) {
+      const repaired = await compensatePartialCreate(reseller, email, createdPanels);
+      if (!repaired) await recordOrphanRepair(reseller, email, createdPanels, params, "اتصال پنل قطع شد");
       return { ok: false, error: `اتصال به پنل ناموفق: ${conn.msg}`, status: 502 };
     }
     const firstProtocol = inboundIndex.get(refKey({ panelId, inboundId: inboundIds[0] }))?.protocol || "vless";
@@ -154,8 +219,15 @@ async function createResellerUserCoreInner(
         detail: `${email}: ${r.msg}`,
         resellerId: reseller.id,
       });
+      // ساخت ناقص چندپنلی: حذف جبرانی روی پنل‌های موفق — کاربر یتیم نمی‌ماند
+      const repaired = await compensatePartialCreate(reseller, email, createdPanels);
+      if (!repaired) {
+        await recordOrphanRepair(reseller, email, createdPanels, params, r.msg || "unknown");
+        return { ok: false, error: `ساخت روی بعضی پنل‌ها ناموفق بود و حذف جبرانی هم انجام نشد — برای بررسی دستی ثبت شد: ${r.msg}`, status: 502 };
+      }
       return { ok: false, error: `ساخت کاربر ناموفق بود: ${r.msg}`, status: 502 };
     }
+    createdPanels.push(panelId);
   }
 
   // ---- ثبت در دیتابیس + لاگ ----
