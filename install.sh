@@ -334,6 +334,7 @@ migrate_database() {
   done
   reseller_column_exists mirzaEnabled || stmts+=("ALTER TABLE Reseller ADD COLUMN mirzaEnabled BOOLEAN NOT NULL DEFAULT 0;")
   reseller_column_exists consumedGB || stmts+=("ALTER TABLE Reseller ADD COLUMN consumedGB REAL NOT NULL DEFAULT 0;")
+  sqlite3 "$DATA_DIR/custom.db" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='OperationJournal';" | grep -q 1 || stmts+=("CREATE TABLE IF NOT EXISTS OperationJournal (id TEXT NOT NULL PRIMARY KEY, idempotencyKey TEXT NOT NULL, resellerId TEXT NOT NULL, userId TEXT, email TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', usageSnapshotGB REAL, accountingCommitted BOOLEAN NOT NULL DEFAULT 0, targetPanels TEXT NOT NULL DEFAULT '[]', completedPanels TEXT NOT NULL DEFAULT '[]', failedPanels TEXT NOT NULL DEFAULT '[]', lastError TEXT, metadata TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS OperationJournal_idempotencyKey_key ON OperationJournal(idempotencyKey); CREATE INDEX IF NOT EXISTS OperationJournal_email_type_status_idx ON OperationJournal(email, type, status);")
   if ((${#stmts[@]})); then
     log "Applying additive schema migrations (${#stmts[@]} column(s))"
     sqlite3 "$DATA_DIR/custom.db" "${stmts[@]}"
