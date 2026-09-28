@@ -23,7 +23,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
 
     // ریست از طریق سرویس متمرکز ژورنال‌دار (مشترک با پل ربات) — fail-closed و بدهکاری یک‌باره
-    const result = await resetUserByJournal(reseller, tracked, reseller.username);
+    const result = await resetUserByJournal(reseller.id, email);
     if (!result.ok) {
       return NextResponse.json({ error: result.msg, partial: result.partial === true }, { status: result.status });
     }

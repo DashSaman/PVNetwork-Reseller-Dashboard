@@ -156,6 +156,19 @@ export async function withResellerLock<T>(resellerId: string, fn: () => Promise<
   }
 }
 
+/** باقیماندهٔ مؤثر = پول − تخصیص فعال − رزروهای فعال CREATE − مصرف قطعی (محاسبهٔ مرجع همهٔ مسیرها) */
+export async function getEffectiveRemainingGB(reseller: { id: string; trafficPoolGB: number }): Promise<number> {
+  if (reseller.trafficPoolGB <= 0) return 0;
+  const { getAllocatedGB, getConsumedGB } = await import("./reseller-helpers");
+  const { getActiveReservationsGB } = await import("./accounting-ops");
+  const [allocated, consumed, reserved] = await Promise.all([
+    getAllocatedGB(reseller.id),
+    getConsumedGB(reseller.id),
+    getActiveReservationsGB(reseller.id),
+  ]);
+  return Math.max(0, reseller.trafficPoolGB - allocated - reserved - consumed);
+}
+
 /** باقیمانده واقعی پول = پول − تخصیص فعال − مصرف قطعی (۰ = بی‌نهایت برای پول نامحدود) */
 export async function getRemainingGB(reseller: { id: string; trafficPoolGB: number }): Promise<number> {
   if (reseller.trafficPoolGB <= 0) return 0;

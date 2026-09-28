@@ -83,8 +83,11 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
       if (!client && !stat) continue;
       seenInbound.add(key);
 
-      panelUp = Math.max(panelUp, stat?.up || 0);
-      panelDown = Math.max(panelDown, stat?.down || 0);
+      // برندهٔ پنل: کل رکورد با بیشینهٔ up+down (نه max جدا برای up و down)
+      if ((stat?.up || 0) + (stat?.down || 0) > panelUp + panelDown) {
+        panelUp = stat?.up || 0;
+        panelDown = stat?.down || 0;
+      }
       total = Math.max(total, client?.totalGB || 0);
       expiryTime = Math.max(expiryTime, client?.expiryTime || 0);
       enable = enable || (client?.enable ?? true);

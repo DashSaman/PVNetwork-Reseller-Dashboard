@@ -136,6 +136,7 @@ model OperationJournal {
   type                String   // DELETE | RESET | CREATE | UPDATE
   status              String   @default("PENDING") // PENDING | RUNNING | PARTIAL | SUCCESS | FAILED | NEEDS_REPAIR
   usageSnapshotGB     Float?   // مصرف کانونی ثبت‌شده پیش از عملیات — بدهکاری فقط یک‌بار از این مقدار
+  reservedGB          Float    @default(0) // سهمیهٔ رزروشدهٔ فعال (CREATE) — تا تعیین تکلیف از باقیمانده کسر می‌شود
   accountingCommitted Boolean  @default(false)
   targetPanels        String   @default("[]")
   completedPanels     String   @default("[]")

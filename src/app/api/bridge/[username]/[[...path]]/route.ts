@@ -9,7 +9,6 @@ import {
   getConsumedGB,
   validatePoolAllocation,
   withResellerLock,
-  debitUsedTraffic,
   parseInboundRefs,
   refKey,
   bytesToGB,
@@ -17,7 +16,7 @@ import {
   type InboundRef,
   type ResellerWithInbounds,
 } from "@/lib/reseller-helpers";
-import { deleteUserByJournal, resetUserByJournal } from "@/lib/accounting-ops";
+import { deleteUserByJournal, resetUserByJournal, hasActiveOperation } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
 import { logActivity } from "@/lib/logger";
@@ -498,6 +497,18 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
         ? Math.max(0, Number(payload.trafficGB) || 0)
         : tracked.trafficGB;
   return withResellerLock(reseller.id, async () => {
+  // مانع تداخل با عملیات تخریبی فعال
+  if (await hasActiveOperation(reseller.id, email, ["DELETE", "RESET"])) {
+    return xui(false, "عملیات حذف/ریست دیگری برای این کاربر در جریان است");
+  }
+  const updateJournal = await db.operationJournal.create({
+    data: {
+      idempotencyKey: `bridge-update-op:${tracked.id}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+      resellerId: reseller.id, userId: tracked.id, email, type: "UPDATE", status: "RUNNING",
+      targetPanels: "[]",
+      metadata: JSON.stringify({ oldTrafficGB: tracked.trafficGB, newTrafficGB: trafficGB }),
+    },
+  });
   if (trafficGB !== tracked.trafficGB) {
     const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id, tracked.id), getConsumedGB(reseller.id)]);
     const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, trafficGB, tracked.trafficGB, consumedGB);
@@ -514,6 +525,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   const panelResult = await getAllPanelInbounds();
   if (!panelResult.ok) return xui(false, panelResult.msg || "هیچ پنلی در دسترس نیست");
   const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
+  await db.operationJournal.update({ where: { id: updateJournal.id }, data: { targetPanels: JSON.stringify(refs.map((r) => r.panelId)) } });
   const errors: string[] = [];
   const donePanels = new Set<string>();
   for (const ref of refs) {
@@ -537,8 +549,12 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     });
     if (!upd.ok) errors.push(upd.msg || "ویرایش ناموفق");
   }
-  if (errors.length) return xui(false, errors.join(" | "));
+  if (errors.length) {
+    await db.operationJournal.update({ where: { id: updateJournal.id }, data: { status: "PARTIAL", lastError: errors.join(" | ") } });
+    return xui(false, `ویرایش ناقص بود: ${errors.join(" | ")}`);
+  }
 
+  await db.operationJournal.update({ where: { id: updateJournal.id }, data: { status: "SUCCESS" } });
   await db.resellerUser.update({
     where: { id: tracked.id },
     data: { trafficGB, ...(newSubId ? { subId: newSubId } : {}) },
@@ -560,7 +576,7 @@ async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string)
   });
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
-  const result = await deleteUserByJournal(reseller, tracked, reseller.username);
+  const result = await deleteUserByJournal(reseller.id, email);
   if (!result.ok) return xui(false, result.msg);
   return xui(true, "");
 }
@@ -571,7 +587,7 @@ async function bridgeResetTraffic(reseller: ResellerWithInbounds, email: string)
   });
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
-  const result = await resetUserByJournal(reseller, tracked, reseller.username);
+  const result = await resetUserByJournal(reseller.id, email);
   if (!result.ok) return xui(false, result.msg);
   return xui(true, "");
 }

@@ -9,7 +9,6 @@ import {
   getAllocatedGB,
   getConsumedGB,
   withResellerLock,
-  debitUsedTraffic,
   parseInboundRefs,
   stringifyInboundRefs,
   refKey,
@@ -24,7 +23,7 @@ import {
   type PanelAuth,
 } from "@/lib/panel";
 import { randomUuid } from "@/lib/crypto";
-import { deleteUserByJournal } from "@/lib/accounting-ops";
+import { deleteUserByJournal, hasActiveOperation } from "@/lib/accounting-ops";
 import { logActivity } from "@/lib/logger";
 
 type Ctx = { params: Promise<{ email: string }> };
@@ -105,8 +104,21 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       current = { totalGB: 0, expiryTime: 0, enable: true, subId: tracked.subId || "", protocol: anyInbound?.protocol || "vless" };
     }
 
+    // مانع تداخل با عملیات تخریبی فعال
+    if (await hasActiveOperation(reseller.id, email, ["DELETE", "RESET"])) {
+      return NextResponse.json({ error: "عملیات حذف/ریست دیگری برای این کاربر در جریان است — پس از پایان آن دوباره تلاش کنید" }, { status: 409 });
+    }
+    const updateJournal = await db.operationJournal.create({
+      data: {
+        idempotencyKey: `update-op:${tracked.id}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+        resellerId: reseller.id, userId: tracked.id, email, type: "UPDATE", status: "RUNNING",
+        targetPanels: JSON.stringify(currentRefs.map((r) => r.panelId)),
+      },
+    });
+
     // ---- سهمیه و پول ----
     const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : tracked.trafficGB;
+    await db.operationJournal.update({ where: { id: updateJournal.id }, data: { metadata: JSON.stringify({ oldTrafficGB: tracked.trafficGB, newTrafficGB: trafficGB }) } });
     if (trafficGB !== tracked.trafficGB) {
       const [allocatedGB, consumedGB] = await Promise.all([
         getAllocatedGB(reseller.id, tracked.id),
@@ -213,9 +225,14 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     }
 
     if (errors.length) {
-      return NextResponse.json({ error: errors.join(" | ") }, { status: 502 });
+      await db.operationJournal.update({
+        where: { id: updateJournal.id },
+        data: { status: "PARTIAL", lastError: errors.join(" | ") },
+      });
+      return NextResponse.json({ error: `ویرایش ناقص بود: ${errors.join(" | ")}`, partial: true }, { status: 502 });
     }
 
+    await db.operationJournal.update({ where: { id: updateJournal.id }, data: { status: "SUCCESS" } });
     await db.resellerUser.update({
       where: { id: tracked.id },
       data: {
@@ -260,13 +277,12 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     });
     if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
 
-    // حذف از طریق سرویس متمرکز ژورنال‌دار (مشترک با پل ربات) — fail-closed و بدهکاری یک‌باره
-    const result = await deleteUserByJournal(reseller, tracked, reseller.username);
+    // حذف از طریق سرویس متمرکز ژورنال‌دار (مشترک با پل ربات) — reload داخل قفل
+    const result = await deleteUserByJournal(reseller.id, email);
     if (!result.ok) {
       return NextResponse.json({ error: result.msg, partial: result.partial === true }, { status: result.status });
     }
-    const debitedGB = result.debitedGB;
-    return NextResponse.json({ ok: true, debitedGB });
+    return NextResponse.json({ ok: true, debitedGB: result.debitedGB });
   } catch (e) {
     console.error("delete user error:", e);
     return NextResponse.json({ error: "خطای داخلی در حذف کاربر" }, { status: 500 });

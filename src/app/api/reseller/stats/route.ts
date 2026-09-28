@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, getAllocatedGB, getConsumedGB, bytesToGB } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, getAllocatedGB, getConsumedGB, getEffectiveRemainingGB, bytesToGB } from "@/lib/reseller-helpers";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 
 /** آمار کلی نماینده + داده‌های نمودارها (چندپنلی + پول ترافیک) */
@@ -106,7 +106,7 @@ export async function GET() {
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB,
       consumedGB,
-      remainingGB: reseller.trafficPoolGB > 0 ? Math.max(0, reseller.trafficPoolGB - allocatedGB - consumedGB) : 0,
+      remainingGB: await getEffectiveRemainingGB(reseller),
       inboundsCount: reseller.inbounds.length,
       panelConnected: panelResult.ok,
     },

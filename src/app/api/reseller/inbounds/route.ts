@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
-import { getResellerWithAccess, getAllocatedGB, getConsumedGB } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, getAllocatedGB, getConsumedGB, getEffectiveRemainingGB } from "@/lib/reseller-helpers";
 
 /**
  * اینباندهای مجاز نماینده (از همه پنل‌ها) + پول ترافیک او
@@ -104,7 +104,7 @@ export async function GET() {
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB,
       consumedGB,
-      remainingGB: reseller.trafficPoolGB > 0 ? Math.max(0, reseller.trafficPoolGB - allocatedGB - consumedGB) : 0,
+      remainingGB: await getEffectiveRemainingGB(reseller),
     },
   });
 }

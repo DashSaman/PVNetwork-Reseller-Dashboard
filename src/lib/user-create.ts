@@ -32,6 +32,24 @@ export type CoreUserParams = {
   subId?: string;
 };
 
+/** بررسی وضعیت واقعی ریموت پس از شکست مبهم addClient — timeout/خطای شبکه ≠ عدم ساخت */
+async function verifyRemoteAbsent(panelId: string, email: string): Promise<"ABSENT" | "PRESENT" | "UNKNOWN"> {
+  try {
+    const { getPanelConnection } = await import("./panel-manager");
+    const { getInbounds } = await import("./panel");
+    const conn = await getPanelConnection(panelId);
+    if (!conn.ok) return "UNKNOWN";
+    const r = await getInbounds(conn.conn as Parameters<typeof getInbounds>[0]);
+    if (!r.ok || !r.data) return "UNKNOWN";
+    for (const inb of r.data) {
+      if (inb.clients.some((c) => c.email === email) || inb.clientStats.some((c) => c.email === email)) return "PRESENT";
+    }
+    return "ABSENT";
+  } catch {
+    return "UNKNOWN";
+  }
+}
+
 /** حذف جبرانی کپی‌های ساخته‌شده روی پنل‌های موفق — true یعنی جبران کامل */
 async function compensatePartialCreate(
   reseller: ResellerWithInbounds,
@@ -55,7 +73,7 @@ async function compensatePartialCreate(
   return allOk;
 }
 
-/** ثبت کاربر یتیم NEEDS_REPAIR — سهمیه رزرو می‌ماند و برای بررسی دستی ثبت می‌شود */
+/** لاگ فعالیت یتیم — وضعیت ژورنال در createJournal تنظیم شده است */
 async function recordOrphanRepair(
   reseller: ResellerWithInbounds,
   email: string,
@@ -63,23 +81,11 @@ async function recordOrphanRepair(
   params: CoreUserParams,
   lastError: string
 ): Promise<void> {
-  await db.operationJournal.create({
-    data: {
-      idempotencyKey: `create-orphan:${email}:${Date.now()}`,
-      resellerId: reseller.id,
-      email,
-      type: "CREATE",
-      status: "NEEDS_REPAIR",
-      targetPanels: JSON.stringify(createdPanels),
-      lastError,
-      metadata: JSON.stringify({ trafficGB: params.trafficGB, expiryTime: params.expiryTime, refs: params.refs }),
-    },
-  });
   await logActivity({
     actorType: "RESELLER",
     actorName: reseller.username,
     action: "کاربر یتیم پس از ساخت ناقص — NEEDS_REPAIR",
-    detail: `${email} روی پنل‌های ${createdPanels.join(", ")} ساخته شده و حذف جبرانی ناموفق بود`,
+    detail: `${email} روی پنل‌های ${createdPanels.join(", ")} — ${lastError}`,
     resellerId: reseller.id,
   });
 }
@@ -136,9 +142,11 @@ async function createResellerUserCoreInner(
 
   // ---- پول ترافیک (در ساخت گروهی پیش‌موجه بررسی شده — skip) ----
   if (opts.checkPool) {
-    const { getAllocatedGB, getConsumedGB, validatePoolAllocation } = await import("./reseller-helpers");
-    const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
-    const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, params.trafficGB, 0, consumedGB);
+    const { getAllocatedGB, getConsumedGB, validatePoolAllocation, getEffectiveRemainingGB } = await import("./reseller-helpers");
+    const [allocatedGB, consumedGB, remainingGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id), getEffectiveRemainingGB(reseller)]);
+    // باقیماندهٔ مؤثر شامل رزروهای فعال است — یتیم NEEDS_REPAIR سهمیه را قفل نگه می‌دارد
+    const reservedGB = Math.max(0, reseller.trafficPoolGB - allocatedGB - consumedGB - remainingGB);
+    const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB + reservedGB, params.trafficGB, 0, consumedGB);
     if (!pool.ok) return { ok: false, error: pool.msg, status: 403 };
   }
 
@@ -161,6 +169,19 @@ async function createResellerUserCoreInner(
       return { ok: false, error: "اینباند انتخابی در پنل در دسترس نیست", status: 400 };
     }
   }
+
+  // ---- ژورنال CREATE — رزرو ماندگار قبل از هر اثر ریموت (crash-safe) ----
+  const createJournal = await db.operationJournal.create({
+    data: {
+      idempotencyKey: `create:${params.name}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`,
+      resellerId: reseller.id,
+      email: "pending",
+      type: "CREATE",
+      status: "RUNNING",
+      reservedGB: params.trafficGB,
+      metadata: JSON.stringify({ name: params.name, trafficGB: params.trafficGB, expiryTime: params.expiryTime, ipLimit: params.ipLimit, refs }),
+    },
+  });
 
   // ---- شناسه‌ها ----
   // پل 3x-ui (ربات میرزا): ایمیل دقیق و subId دلخواه ربات؛ در داشبورد: پسوند تصادفی
@@ -197,7 +218,15 @@ async function createResellerUserCoreInner(
     const conn = await getPanelConnection(panelId);
     if (!conn.ok) {
       const repaired = await compensatePartialCreate(reseller, email, createdPanels);
-      if (!repaired) await recordOrphanRepair(reseller, email, createdPanels, params, "اتصال پنل قطع شد");
+      if (!repaired) {
+        await db.operationJournal.update({
+          where: { id: createJournal.id },
+          data: { status: "NEEDS_REPAIR", email, lastError: conn.msg, failedPanels: JSON.stringify(createdPanels) },
+        });
+        await recordOrphanRepair(reseller, email, createdPanels, params, "اتصال پنل قطع شد");
+      } else {
+        await db.operationJournal.update({ where: { id: createJournal.id }, data: { status: "FAILED", reservedGB: 0, email, lastError: conn.msg } });
+      }
       return { ok: false, error: `اتصال به پنل ناموفق: ${conn.msg}`, status: 502 };
     }
     const firstProtocol = inboundIndex.get(refKey({ panelId, inboundId: inboundIds[0] }))?.protocol || "vless";
@@ -219,12 +248,34 @@ async function createResellerUserCoreInner(
         detail: `${email}: ${r.msg}`,
         resellerId: reseller.id,
       });
+      // UNKNOWN-outcome: خطای addClient دلیل عدمِ ساخت نیست — وضعیت ریموت همین پنل را استعلام می‌کنیم
+      const outcome = await verifyRemoteAbsent(panelId, email);
+      if (outcome === "PRESENT") createdPanels.push(panelId); // در واقع ساخته شده — جبرانش کن
+      if (outcome === "UNKNOWN") {
+        // نتیجه نامشخص — رزرو می‌ماند و NEEDS_REPAIR (هرگز سهمیه آزاد نمی‌شود)
+        await db.operationJournal.update({
+          where: { id: createJournal.id },
+          data: { status: "NEEDS_REPAIR", email, lastError: `(UNKNOWN outcome) ${r.msg}`, failedPanels: JSON.stringify([...createdPanels, panelId]) },
+        });
+        await recordOrphanRepair(reseller, email, [...createdPanels, panelId], params, `نتیجهٔ ریموت نامشخص: ${r.msg}`);
+        return { ok: false, error: `پاسخ پنل قطع شد و وضعیت ساخت نامشخص است — سهمیه رزرو ماند و برای بررسی ثبت شد: ${r.msg}`, status: 502 };
+      }
       // ساخت ناقص چندپنلی: حذف جبرانی روی پنل‌های موفق — کاربر یتیم نمی‌ماند
       const repaired = await compensatePartialCreate(reseller, email, createdPanels);
       if (!repaired) {
+        // جبران نامطمئن — رزرو می‌ماند (سهمیه قفل) و ژورنال NEEDS_REPAIR
+        await db.operationJournal.update({
+          where: { id: createJournal.id },
+          data: { status: "NEEDS_REPAIR", email, lastError: r.msg || "unknown", failedPanels: JSON.stringify(createdPanels) },
+        });
         await recordOrphanRepair(reseller, email, createdPanels, params, r.msg || "unknown");
-        return { ok: false, error: `ساخت روی بعضی پنل‌ها ناموفق بود و حذف جبرانی هم انجام نشد — برای بررسی دستی ثبت شد: ${r.msg}`, status: 502 };
+        return { ok: false, error: `ساخت روی بعضی پنل‌ها ناموفق بود و حذف جبرانی هم انجام نشد — سهمیه رزرو ماند و برای بررسی دستی ثبت شد: ${r.msg}`, status: 502 };
       }
+      // جبران کامل — رزرو آزاد و عملیات FAILED
+      await db.operationJournal.update({
+        where: { id: createJournal.id },
+        data: { status: "FAILED", reservedGB: 0, email, lastError: r.msg || "unknown" },
+      });
       return { ok: false, error: `ساخت کاربر ناموفق بود: ${r.msg}`, status: 502 };
     }
     createdPanels.push(panelId);
@@ -241,6 +292,12 @@ async function createResellerUserCoreInner(
       panelId: refs[0].panelId || "",
       trafficGB: params.trafficGB,
     },
+  });
+
+  // تبدیل رزرو به تخصیص عادی — رزرو آزاد، رکورد محلی ثبت شد (یک‌بار)
+  await db.operationJournal.update({
+    where: { id: createJournal.id },
+    data: { status: "SUCCESS", reservedGB: 0, email, completedPanels: JSON.stringify([...byPanel.keys()]) },
   });
 
   const subLink = await buildSubLink(subId, reseller, refs[0].panelId || "");
