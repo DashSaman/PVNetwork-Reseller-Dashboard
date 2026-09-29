@@ -228,7 +228,7 @@ function OverviewTab({
                   ? stats.panel.panelsCount > 1
                     ? `${faNum(stats.panel.panelsCount)} پنل ثنایی متصل است`
                     : "پنل ثنایی متصل است"
-                  : "پنل ثنایی متصل نیست"}
+                  : "پنل تنظیم نشده است"}
               </div>
               <div className="text-xs text-muted-foreground">
                 {stats.panel.connected

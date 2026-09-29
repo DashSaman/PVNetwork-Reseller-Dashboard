@@ -138,8 +138,9 @@ async function getInboundsForPanel(p: PanelConfig): Promise<{ ok: boolean; data?
  * خواندن پنل‌ها برای رابط کاربری (نمایش) — ددلاین کوتاه ۳ ثانیه، بدون retry.
  * هر پنل مستقل با AbortSignal.timeout خودش قطع می‌شود؛ پنل کند → unavailable، بقیه سالم برمی‌گردند.
  * هرگز برای عملیات تخریبی/حسابداری استفاده نشود — آن‌ها getAllPanelInboundsFresh می‌گیرند.
+ * نکته: پنل production با auth ~۴s طول می‌کشد — ۶s حاشیهٔ امن است.
  */
-export const UI_READ_TIMEOUT_MS = 3000;
+export const UI_READ_TIMEOUT_MS = 6000;
 
 export async function getAllPanelInboundsForUi(): Promise<AllPanelsResult> {
   const panels = (await getAllPanels()).filter((p) => p.active);

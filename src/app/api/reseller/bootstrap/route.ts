@@ -61,7 +61,7 @@ export async function GET() {
     rows.push({
       email,
       name: tracked.name,
-      inboundTags: tagsByEmail.get(email) || ["در پنل یافت نشد"],
+      inboundTags: tagsByEmail.get(email) || reseller.inbounds.map((i) => i.inboundTag || i.remark || "#" + i.inboundId).slice(0, 3),
       protocol: protoByEmail.get(email) || "-",
       totalGB: agg?.total ? bytesToGB(agg.total) : 0,
       usedGB: 0, // live-users جدا آپدیت می‌کند
