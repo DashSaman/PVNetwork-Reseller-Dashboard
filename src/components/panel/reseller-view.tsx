@@ -155,6 +155,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
         const live = r.data!.users.find((l) => l.email === u.email);
         return live ? { ...u, usedGB: live.usedGB, totalGB: live.totalGB || u.totalGB, expiryTime: live.expiryTime || u.expiryTime, enable: live.enable } : u;
       }));
+      setPanelError(""); // live موفق → هیچ خطای پنلی نشان نده
       setLiveLoaded(true);
     })();
     return () => { alive = false; };

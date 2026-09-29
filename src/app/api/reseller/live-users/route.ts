@@ -57,6 +57,7 @@ export async function GET() {
 
   return NextResponse.json({
     users,
+    panelConnected: snapshot.ok,
     panelErrors: snapshot.errors.length ? snapshot.errors : undefined,
   });
 }

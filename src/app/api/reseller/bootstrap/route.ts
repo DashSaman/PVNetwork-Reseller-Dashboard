@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, bytesToGB, canonicalUsageByEmail, refKey, type InboundRef } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, refKey, parseInboundRefs } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
-import { getAllPanelInbounds } from "@/lib/panel-manager";
 import { buildSubLink } from "@/lib/panel-manager";
 
 /**
- * بوت‌استرپ اولین صفحهٔ نماینده («کاربران من») — «یک» snapshot پنل‌ها همهٔ داده‌های لازم را می‌سازد:
- * کاربران + مصرف کانونی، اینباندهای مجاز، مجوزها/سهمیه و برندِ سبک. آمار/نمودار عمداً جدا هستند (on-demand).
+ * بوت‌استرپ اولین صفحهٔ نماینده («کاربران من») — فقط دادهٔ لوکال DB، بدون هیچ تماس با 3x-ui.
+ * مصرف زنده و وضعیت پنل از /api/reseller/live-users جداگانه می‌آید (async بعد از رندر اولیه).
  */
 export async function GET() {
   const session = await requireReseller();
@@ -17,56 +16,49 @@ export async function GET() {
   const reseller = await getResellerWithAccess(session.uid);
   if (!reseller) return NextResponse.json({ error: "حساب شما فعال نیست" }, { status: 403 });
 
-  const panelResult = { ok: false, panels: [] as { panelId: string; panelName: string; inbounds: { id: number; tag: string; remark: string; protocol: string; port: number; clientStats: { email: string; up?: number; down?: number; total?: number; expiryTime?: number; enable?: boolean }[]; clients: unknown[] }[] }[], errors: [] as { panelId: string; panelName: string; msg: string }[] };
   const primaryPanel = await db.panelConfig.findFirst({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   const primaryPanelId = primaryPanel?.id || "";
-  const allowed = new Set(reseller.inbounds.map((i) => refKey({ panelId: i.panelId, inboundId: i.inboundId })));
+  const panelNameById = new Map<string, string>();
+  for (const p of await db.panelConfig.findMany()) panelNameById.set(p.id, p.name);
+
+  // نقشهٔ اینباندهای مجاز از DB — برای پیدا کردن tags هر کاربر
+  const allowedById = new Map(reseller.inbounds.map((i) => [`${i.panelId || primaryPanelId}::${i.inboundId}`, i]));
 
   const trackedUsers = await db.resellerUser.findMany({ where: { resellerId: reseller.id } });
-  const trackedMap = new Map(trackedUsers.map((u) => [u.email, u]));
-  const usage = canonicalUsageByEmail(panelResult.panels.map((b) => ({ panelId: b.panelId, inbounds: b.inbounds })));
 
-  type Row = {
+  // ساخت ردیف‌ها از دادهٔ DB — locations از refs خود هر کاربر (نه همهٔ اینباندهای نماینده)
+  const rows: {
     email: string; name: string | null; inboundTags: string[]; protocol: string;
     totalGB: number; usedGB: number; expiryTime: number; enable: boolean;
-    subId: string | null; subLink: string | null; trafficGB: number; createdAt?: Date;
-  };
-  const rows: Row[] = [];
-  const tagsByEmail = new Map<string, string[]>();
-  const protoByEmail = new Map<string, string>();
-  const aggByEmail = new Map<string, { total: number; expiryTime: number; enable: boolean }>();
-  for (const bundle of panelResult.panels) {
-    for (const inb of bundle.inbounds) {
-      for (const st of inb.clientStats) {
-        if (!trackedMap.has(st.email)) continue;
-        const tags = tagsByEmail.get(st.email) || [];
-        tags.push(panelResult.panels.length > 1 ? `${bundle.panelName} · ${inb.tag}` : inb.tag);
-        tagsByEmail.set(st.email, tags);
-        if (!protoByEmail.has(st.email)) protoByEmail.set(st.email, inb.protocol);
-        const prev = aggByEmail.get(st.email);
-        const enable = st.enable ?? true;
-        if (!prev) aggByEmail.set(st.email, { total: st.total || 0, expiryTime: st.expiryTime || 0, enable });
-        else {
-          prev.total = Math.max(prev.total, st.total || 0);
-          prev.expiryTime = Math.max(prev.expiryTime, st.expiryTime || 0);
-          prev.enable = prev.enable && enable;
-        }
-      }
-    }
-  }
-  for (const [email, tracked] of trackedMap) {
-    const agg = aggByEmail.get(email);
+    subId: string | null; subLink: string | null; trafficGB: number; createdAt: Date;
+  }[] = [];
+  for (const tracked of trackedUsers) {
     const subPanelId = tracked.panelId || primaryPanelId;
     const subLink = await buildSubLink(tracked.subId || "", reseller, subPanelId);
+
+    // locations: از refs ذخیره‌شدهٔ «همین کاربر» تطبیق با اینباندهای مجاز DB
+    let inboundTags: string[] = [];
+    try {
+      const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId || primaryPanelId);
+      inboundTags = refs
+        .map((r) => {
+          const meta = allowedById.get(`${r.panelId}::${r.inboundId}`);
+          const panelName = panelNameById.get(r.panelId) || "";
+          const tag = meta?.inboundTag || meta?.remark || `#${r.inboundId}`;
+          return panelName ? `${panelName} · ${tag}` : tag;
+        })
+        .filter(Boolean);
+    } catch { /* refs نامعتبر → خالی */ }
+
     rows.push({
-      email,
+      email: tracked.email,
       name: tracked.name,
-      inboundTags: tagsByEmail.get(email) || reseller.inbounds.map((i) => i.inboundTag || i.remark || "#" + i.inboundId).slice(0, 3),
-      protocol: protoByEmail.get(email) || "-",
-      totalGB: agg?.total ? bytesToGB(agg.total) : 0,
-      usedGB: 0, // live-users جدا آپدیت می‌کند
-      expiryTime: 0, // live-users جدا آپدیت می‌کند
-      enable: true, // live-users جدا آپدیت می‌کند
+      inboundTags,
+      protocol: allowedById.get(inboundTags.length ? "" : "")?.protocol || "-", // live-users آپدیت می‌کند
+      totalGB: tracked.trafficGB || 0,
+      usedGB: 0, // live-users آپدیت می‌کند
+      expiryTime: 0, // live-users آپدیت می‌کند
+      enable: true, // live-users آپدیت می‌کند
       subId: tracked.subId || null,
       subLink,
       trafficGB: tracked.trafficGB,
@@ -75,31 +67,26 @@ export async function GET() {
   }
   rows.sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
 
-  // اینباندهای مجاز (همان شکل inbounds route)
-  const panelNameById = new Map<string, string>();
-  for (const p of await db.panelConfig.findMany()) panelNameById.set(p.id, p.name);
-  const inbounds = panelResult.panels.flatMap((bundle) =>
-    bundle.inbounds
-      .filter((inb) => allowed.has(refKey({ panelId: bundle.panelId, inboundId: inb.id })))
-      .map((inb) => ({
-        inboundId: inb.id,
-        panelId: bundle.panelId,
-        panelName: panelNameById.get(bundle.panelId) || "پنل",
-        tag: inb.tag,
-        remark: inb.remark,
-        protocol: inb.protocol,
-        port: inb.port,
-        clientsCount: inb.clients.length,
-      }))
-  );
+  // اینباندهای مجاز — از DB ResellerInbound (بدون 3x-ui)
+  const inbounds = reseller.inbounds.map((i) => ({
+    inboundId: i.inboundId,
+    panelId: i.panelId || primaryPanelId,
+    panelName: panelNameById.get(i.panelId || primaryPanelId) || "پنل",
+    tag: i.inboundTag,
+    remark: i.remark || i.inboundTag,
+    protocol: i.protocol,
+    port: i.port,
+    clientsCount: 0, // live آپدیت می‌کند
+  }));
 
   const quota = await getQuotaState(reseller.id, reseller);
 
   return NextResponse.json({
     users: rows,
     inbounds,
-    panelError: panelResult.ok ? "" : (panelResult as { msg?: string }).msg || "هیچ پنلی در دسترس نیست",
-    panelErrors: panelResult.errors.length ? panelResult.errors : undefined,
+    // bootstrap هیچ بررسی زنده انجام نمی‌دهد — خطای اتصال نمی‌گوید؛ وضعیت زنده live-users تعیین می‌کند
+    panelError: "",
+    liveStatus: "loading",
     permissions: {
       multiLocation: reseller.multiLocation,
       allowIpLimit: reseller.allowIpLimit,
