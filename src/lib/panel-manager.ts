@@ -140,7 +140,7 @@ async function getInboundsForPanel(p: PanelConfig): Promise<{ ok: boolean; data?
  * هرگز برای عملیات تخریبی/حسابداری استفاده نشود — آن‌ها getAllPanelInboundsFresh می‌گیرند.
  * نکته: پنل production با auth ~۴s طول می‌کشد — ۶s حاشیهٔ امن است.
  */
-export const UI_READ_TIMEOUT_MS = 6000;
+export const UI_READ_TIMEOUT_MS = 8000;
 
 export async function getAllPanelInboundsForUi(): Promise<AllPanelsResult> {
   const panels = (await getAllPanels()).filter((p) => p.active);
@@ -180,41 +180,17 @@ export async function getAllPanelInboundsForUi(): Promise<AllPanelsResult> {
 
 async function getInboundsWithTimeout(
   conn: PanelAuth,
-  timeoutMs: number
+  _timeoutMs: number
 ): Promise<{ ok: boolean; data?: PanelInbound[]; msg?: string }> {
-  const { getInbounds } = await import("./panel");
+  const { getInbounds } = await import('./panel');
   try {
-    // ابزار کوتاه: fetch مستقیم با AbortSignal کوتاه — دور زدن timeout ۲۰s
-    const signal = AbortSignal.timeout(timeoutMs);
-    const base = normalize(conn.baseUrl);
-    const headers: Record<string, string> = { Accept: "application/json", "User-Agent": "PvNetWork/1.0-UI" };
-    if (conn.token) headers.Authorization = `Bearer ${conn.token}`;
-    else if (conn.cookie) { headers.Cookie = conn.cookie; if (conn.csrf) headers["X-CSRF-Token"] = conn.csrf; }
-    const res = await fetch(`${base}/panel/api/inbounds/list`, { headers, signal });
-    const j = (await res.json().catch(() => null)) as { success?: boolean; obj?: unknown } | null;
-    if (res.ok && j?.success && Array.isArray(j.obj)) {
-      // parse سبک — فقط آمار کلاینت‌ها لازم است برای UI
-      const list = j.obj as RawInboundLite[];
-      const inbounds: PanelInbound[] = list.map((raw) => ({
-        id: raw.id, port: raw.port, protocol: raw.protocol,
-        tag: raw.tag || `inbound-${raw.id}`, remark: raw.remark || raw.tag || `inbound-${raw.id}`,
-        up: raw.up || 0, down: raw.down || 0, total: raw.total || 0,
-        clients: [], clientStats: raw.clientStats || [], stream: null,
-      }));
-      return { ok: true, data: inbounds };
-    }
-    return { ok: false, msg: `UI read failed (HTTP ${res.status})` };
+    const r = await getInbounds(conn);
+    if (r.ok && r.data) return { ok: true, data: r.data };
+    return { ok: false, msg: r.msg || 'UI read failed' };
   } catch (e) {
-    const msg = (e as Error).name === "TimeoutError" ? `UI deadline (${timeoutMs}ms) exceeded` : `UI read error: ${(e as Error).message}`;
-    return { ok: false, msg };
+    return { ok: false, msg: 'UI read error: ' + (e as Error).message };
   }
 }
-
-type RawInboundLite = {
-  id: number; port: number; protocol: string; tag?: string; remark?: string;
-  up?: number; down?: number; total?: number;
-  clientStats?: PanelClientStat[];
-};
 
 // ---- single-flight خواندنی: هم‌زمانی + TTL بسیار کوتاه — هرگز برای عملیات تخریبی/حسابداری ----
 type Flight = { at: number; promise: Promise<AllPanelsResult> };
