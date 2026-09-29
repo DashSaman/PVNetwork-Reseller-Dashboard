@@ -102,7 +102,7 @@ model ResellerUser {
   reseller   Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
   email      String // شناسه یکتای کاربر در پنل ثنایی
   name       String? // نام/یادداشت دلخواه نماینده
-  subId      String?
+  subId      String?  @unique
   inboundIds String // JSON آرایه‌ای از {panelId, inboundId} — مولتی‌لوکیشن بین پنل‌ها
   panelId    String   @default("") // پنل مرجع کاربر — خالی = پنل اصلی
   trafficGB  Int      @default(0) // سهمیه تخصیص‌یافته از پول (گیگ) — 0 = نامحدود

@@ -156,26 +156,6 @@ export async function withResellerLock<T>(resellerId: string, fn: () => Promise<
   }
 }
 
-/** باقیماندهٔ مؤثر = پول − تخصیص فعال − رزروهای فعال CREATE − مصرف قطعی (محاسبهٔ مرجع همهٔ مسیرها) */
-export async function getEffectiveRemainingGB(reseller: { id: string; trafficPoolGB: number }): Promise<number> {
-  if (reseller.trafficPoolGB <= 0) return 0;
-  const { getAllocatedGB, getConsumedGB } = await import("./reseller-helpers");
-  const { getActiveReservationsGB } = await import("./accounting-ops");
-  const [allocated, consumed, reserved] = await Promise.all([
-    getAllocatedGB(reseller.id),
-    getConsumedGB(reseller.id),
-    getActiveReservationsGB(reseller.id),
-  ]);
-  return Math.max(0, reseller.trafficPoolGB - allocated - reserved - consumed);
-}
-
-/** باقیمانده واقعی پول = پول − تخصیص فعال − مصرف قطعی (۰ = بی‌نهایت برای پول نامحدود) */
-export async function getRemainingGB(reseller: { id: string; trafficPoolGB: number }): Promise<number> {
-  if (reseller.trafficPoolGB <= 0) return 0;
-  const [allocated, consumed] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
-  return Math.max(0, reseller.trafficPoolGB - allocated - consumed);
-}
-
 /**
  * محاسبهٔ کانونی برای همهٔ ایمیل‌های snapshot — نسخهٔ bulk همان منطق تک‌منبع
  * (برندهٔ هر پنل = رکورد با بیشینهٔ up+down؛ بین پنل‌ها جمع برنده‌ها)
@@ -183,8 +163,10 @@ export async function getRemainingGB(reseller: { id: string; trafficPoolGB: numb
 export function canonicalUsageByEmail(
   panels: { panelId: string; inbounds: { clientStats: { email: string; up?: number; down?: number }[] }[] }[]
 ): Map<string, CanonicalUsage> {
-  const winners = new Map<string, { up: number; down: number }>();
+  // برنده به تفکیک پنل — سپس جمع برنده‌ها بین پنل‌ها (همان معناشناسی canonicalUserUsage)
+  const perPanel = new Map<string, Map<string, { up: number; down: number }>>();
   for (const bundle of panels) {
+    const winners = perPanel.get(bundle.panelId) ?? new Map<string, { up: number; down: number }>();
     for (const inb of bundle.inbounds) {
       for (const st of inb.clientStats) {
         const cur = { up: st.up || 0, down: st.down || 0 };
@@ -192,9 +174,19 @@ export function canonicalUsageByEmail(
         if (!prev || cur.up + cur.down > prev.up + prev.down) winners.set(st.email, cur);
       }
     }
+    perPanel.set(bundle.panelId, winners);
+  }
+  const sums = new Map<string, { up: number; down: number }>();
+  for (const winners of perPanel.values()) {
+    for (const [email, v] of winners) {
+      const acc = sums.get(email) ?? { up: 0, down: 0 };
+      acc.up += v.up;
+      acc.down += v.down;
+      sums.set(email, acc);
+    }
   }
   const out = new Map<string, CanonicalUsage>();
-  for (const [email, v] of winners) out.set(email, { upBytes: v.up, downBytes: v.down, usedBytes: v.up + v.down });
+  for (const [email, v] of sums) out.set(email, { upBytes: v.up, downBytes: v.down, usedBytes: v.up + v.down });
   return out;
 }
 

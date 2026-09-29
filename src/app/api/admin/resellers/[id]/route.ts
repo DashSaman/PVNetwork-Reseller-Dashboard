@@ -51,7 +51,8 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       trafficPoolGB?: number;
       allowIpLimit?: boolean;
       allowWhitelabel?: boolean;
-      disable2fa?: boolean; // اضطراری: خاموش‌سازی ورود دومرحله‌ای نماینده توسط ادمین
+      disable2fa?: boolean;
+    overrideSafety?: boolean; // تایید صریح کاهش پول زیر تعهدات // اضطراری: خاموش‌سازی ورود دومرحله‌ای نماینده توسط ادمین
       inbounds?: InboundRef[]; // فرمت جدید
       inboundIds?: number[]; // سازگاری قدیمی
     };
@@ -59,19 +60,22 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const current = await db.reseller.findUnique({ where: { id }, include: { inbounds: true } });
     if (!current) return NextResponse.json({ error: "نماینده پیدا نشد" }, { status: 404 });
 
-    // اگر پول کوچک‌تر از سهمیه تخصیص‌یافته فعلی شود، اجازه داده نمی‌شود
+    // اگر پول کوچک‌تر از تعهدات قطعی (تخصیص + رزروهای فعال + مصرف) شود، اجازه داده نمی‌شود
     if (body.trafficPoolGB !== undefined) {
       const newPool = Math.max(0, Math.round(Number(body.trafficPoolGB) || 0));
-      const allocated = await db.resellerUser.aggregate({
-        _sum: { trafficGB: true },
-        where: { resellerId: id },
-      });
-      const allocatedGB = allocated._sum.trafficGB || 0;
-      if (newPool > 0 && newPool < allocatedGB) {
-        return NextResponse.json(
-          { error: `پول جدید (${newPool} گیگ) کمتر از سهمیه تخصیص‌یافته به کاربران فعلی (${allocatedGB} گیگ) است` },
-          { status: 400 }
-        );
+      if (newPool > 0) {
+        const { getQuotaState } = await import("@/lib/accounting-ops");
+        const q = await getQuotaState(id, current);
+        const obligations = q.allocated + q.reserved + q.consumed;
+        if (newPool < obligations && body.overrideSafety !== true) {
+          return NextResponse.json(
+            { error: `پول جدید (${newPool} گیگ) کمتر از تعهدات فعلی (${Math.round(obligations * 100) / 100} گیگ = تخصیص ${q.allocated} + رزرو ${q.reserved} + مصرف ${q.consumed}) است — برای تایید صریح، overrideSafety ارسال کنید` },
+            { status: 409 }
+          );
+        }
+        if (newPool < obligations && body.overrideSafety === true) {
+          await logActivity({ actorType: "ADMIN", actorName: "admin", action: "تغییر پول زیر تعهدات (override صریح)", detail: `new=${newPool} obligations=${obligations}` });
+        }
       }
     }
 
@@ -157,6 +161,16 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
 
   const current = await db.reseller.findUnique({ where: { id } });
   if (!current) return NextResponse.json({ error: "نماینده پیدا نشد" }, { status: 404 });
+
+  // حذف ناامن ممنوع: کاربران tracked یا عملیات فعال یعنی کلاینت‌های ریموتِ متعلق به این نماینده زنده‌اند
+  const userCount = await db.resellerUser.count({ where: { resellerId: id } });
+  const activeOps = await db.operationJournal.count({ where: { resellerId: id, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } } });
+  if (userCount > 0 || activeOps > 0) {
+    return NextResponse.json(
+      { error: `این نماینده ${userCount} کاربر فعال و ${activeOps} عملیات در جریان دارد — ابتدا کاربران را مدیریت کنید و سپس حذف را تکرار کنید (حذف رکورد محلی، کلاینت‌های VPN ریموت را زنده نگه می‌دارد)` },
+      { status: 409 }
+    );
+  }
 
   await db.reseller.delete({ where: { id } });
   await logActivity({

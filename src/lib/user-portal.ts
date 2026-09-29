@@ -25,7 +25,7 @@ export type PortalData = {
 };
 
 export async function getPortalData(subIdRaw: string, requestHost: string): Promise<PortalData> {
-  const subId = (subIdRaw || "").trim().replace(/[^a-zA-Z0-9]/g, "");
+  const subId = (subIdRaw || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
   const empty: PortalData = { found: false, subId, brandName: "PvNetWork", totalGB: 0, usedGB: 0, expiryTime: 0, enable: false, links: [], locations: [] };
   if (!subId || subId.length < 8) return empty;
 

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, getAllocatedGB, getConsumedGB, getEffectiveRemainingGB, bytesToGB } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, getAllocatedGB, getConsumedGB, bytesToGB } from "@/lib/reseller-helpers";
+import { getQuotaState } from "@/lib/accounting-ops";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 
 /** آمار کلی نماینده + داده‌های نمودارها (چندپنلی + پول ترافیک) */
@@ -56,11 +57,6 @@ export async function GET() {
             panelStatByEmail.get(stat.email)!.total = client.totalGB || 0;
           }
           inboundUsers++;
-          const expired = client ? client.expiryTime > 0 && client.expiryTime < Date.now() : false;
-          const limited = client ? (client.totalGB || 0) > 0 && usedBytes >= (client.totalGB || 0) : false;
-          if (client && !client.enable) disabledUsers++;
-          else if (expired || limited) expiredUsers++;
-          else if (client) activeUsers++;
         }
         if (inboundUsers > 0) {
           trafficByInbound.push({
@@ -80,6 +76,38 @@ export async function GET() {
         usagePerEmail.set(email, { used: prev.used + s.used, total: Math.max(prev.total, s.total) });
       }
     }
+
+  // C11: وضعیت هر کاربر فقط یک‌بار شمرده می‌شود (تجمیع per-email پیش از شمارش)
+  {
+    const seen = new Map<string, { enable: boolean; expiryTime: number; total: number; used: number }>();
+    for (const [email, u] of usagePerEmail) {
+      const prev = seen.get(email);
+      if (!prev) seen.set(email, { enable: true, expiryTime: 0, total: u.total, used: u.used });
+      else { prev.total = Math.max(prev.total, u.total); prev.used = Math.max(prev.used, u.used); }
+    }
+    if (panelResult.ok) {
+      for (const bundle of panelResult.panels) {
+        for (const inb of bundle.inbounds) {
+          for (const stat of inb.clientStats) {
+            if (!emails.has(stat.email)) continue;
+            const client = inb.clients.find((c) => c.email === stat.email);
+            if (!client) continue;
+            const e = seen.get(stat.email);
+            if (!e) continue;
+            e.enable = e.enable && (client.enable ?? true);
+            e.expiryTime = Math.max(e.expiryTime, client.expiryTime || 0);
+          }
+        }
+      }
+    }
+    for (const u of seen.values()) {
+      const expired = u.expiryTime > 0 && u.expiryTime < Date.now();
+      const limited = u.total > 0 && u.used >= u.total;
+      if (!u.enable) disabledUsers++;
+      else if (expired || limited) expiredUsers++;
+      else activeUsers++;
+    }
+  }
 
     for (const [email, u] of usagePerEmail) {
       totalQuotaGB += u.total ? u.total / 1073741824 : 0;
@@ -106,7 +134,7 @@ export async function GET() {
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB,
       consumedGB,
-      remainingGB: await getEffectiveRemainingGB(reseller),
+      remainingGB: (await getQuotaState(reseller.id, reseller)).remaining,
       inboundsCount: reseller.inbounds.length,
       panelConnected: panelResult.ok,
     },

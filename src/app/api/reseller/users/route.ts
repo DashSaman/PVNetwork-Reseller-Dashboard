@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { buildSubLink } from "@/lib/panel-manager";
-import { getResellerWithAccess, bytesToGB, getConsumedGB, getEffectiveRemainingGB, canonicalUsageByEmail, type InboundRef } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, bytesToGB, getConsumedGB, canonicalUsageByEmail, type InboundRef } from "@/lib/reseller-helpers";
+import { getQuotaState } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { sendThresholdAlerts, type ThresholdAlert } from "@/lib/telegram";
 
@@ -160,7 +161,7 @@ export async function GET() {
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB,
       consumedGB,
-      remainingGB: await getEffectiveRemainingGB(reseller),
+      remainingGB: (await getQuotaState(reseller.id, reseller)).remaining,
     },
   });
 }
@@ -182,7 +183,10 @@ export async function POST(req: NextRequest) {
       ipLimit?: number;
       inbounds?: InboundRef[]; // فرمت جدید {panelId, inboundId}
       inboundIds?: number[]; // سازگاری قدیمی (پنل اصلی)
+      requestId?: string; // هویت idempotent درخواست (retry همان عملیات را ادامه می‌دهد)
     };
+
+    const requestId = (req.headers.get("idempotency-key") || body.requestId || "").trim().slice(0, 64) || undefined;
 
     const primaryPanel = await db.panelConfig.findFirst({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
     const primaryPanelId = primaryPanel?.id || "";
@@ -202,7 +206,7 @@ export async function POST(req: NextRequest) {
     const ipLimit = reseller.allowIpLimit ? Math.max(0, Number(body.ipLimit) || 0) : 0;
     const trafficGB = Math.max(0, Number(body.trafficGB) || 0);
 
-    const r = await createResellerUserCore(reseller, { name: body.name || "", trafficGB, expiryTime, ipLimit, refs });
+    const r = await createResellerUserCore(reseller, { name: body.name || "", trafficGB, expiryTime, ipLimit, refs, requestId });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
 
     // اعلان تلگرام — ناهمزمان بدون بلاک کردن پاسخ

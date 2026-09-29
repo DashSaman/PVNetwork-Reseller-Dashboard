@@ -116,35 +116,49 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   const [stats, setStats] = useState<Record<string, number | boolean> | null>(null);
   const [charts, setCharts] = useState<StatsCharts | null>(null);
 
+  // اولین صفحه فقط بوت‌استرپ (یک snapshot پنل‌ها) — آمار/نمودارِ تب دیگر on-demand بار می‌شود
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await api<{ users: ResellerUserRow[]; alerts?: UserAlert[] }>("/api/reseller/users");
-    const i = await api<{ inbounds: InboundInfo[]; panelError: string | null; permissions: ResellerPermissions }>("/api/reseller/inbounds");
-    const s = await api<{ stats: Record<string, number | boolean>; charts: StatsCharts }>("/api/reseller/stats");
-    const w = await api<{ whitelabel: WhitelabelInfo }>("/api/reseller/whitelabel");
+    const b = await api<{
+      users: ResellerUserRow[];
+      inbounds: InboundInfo[];
+      panelError: string;
+      panelErrors?: { panelName: string; msg: string }[];
+      permissions: ResellerPermissions;
+      brand: { allowWhitelabel: boolean; brandName: string | null; customDomain: string | null; domainVerified: boolean };
+    }>("/api/reseller/bootstrap");
     setLoading(false);
-    if (r.ok && r.data) {
-      setUsers(r.data.users);
-      setAlerts(r.data.alerts || []);
-    } else if (!i.ok) setPanelError(r.error || "خطا در دریافت کاربران");
-    else setUsers([]);
-    if (i.ok && i.data) {
-      setInbounds(i.data.inbounds);
-      setPermissions(i.data.permissions);
-      setPanelError(i.data.panelError || "");
-    } else if (!i.ok && r.ok) {
-      setPanelError("");
+    if (b.ok && b.data) {
+      setUsers(b.data.users);
+      setInbounds(b.data.inbounds);
+      setPermissions(b.data.permissions);
+      setPanelError(b.data.panelError || "");
+      setWhitelabel((w) => ({ ...(w ?? { allowWhitelabel: b.data!.brand.allowWhitelabel, brandName: b.data!.brand.brandName, customDomain: b.data!.brand.customDomain, domainVerified: b.data!.brand.domainVerified, verifyToken: null as string | null, subHost: undefined, subPort: undefined }), ...b.data!.brand }));
+    } else {
+      setPanelError(b.error || "خطا در دریافت داده‌ها");
     }
-    if (s.ok && s.data) {
-      setStats(s.data.stats);
-      setCharts(s.data.charts);
-    }
-    if (w.ok && w.data) setWhitelabel(w.data.whitelabel);
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // آمار و نمودارها فقط با باز شدن تب «آمار و مصرف» — صفحهٔ کاربران هرگز منتظر آن‌ها نمی‌ماند
+  useEffect(() => {
+    if (tab !== "stats" || stats !== null) return;
+    let alive = true;
+    void (async () => {
+      const s = await api<{ stats: Record<string, number | boolean>; charts: StatsCharts }>("/api/reseller/stats");
+      if (alive && s.ok && s.data) {
+        setStats(s.data.stats);
+        setCharts(s.data.charts);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });

@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
-import { getPanelConnection, getAllPanelInbounds, buildSubLink, type AllPanelsResult } from "./panel-manager";
+import { getPanelConnection, getAllPanelInboundsFresh, buildSubLink, type AllPanelsResult } from "./panel-manager";
 import { addClient, type PanelAuth, type PanelClient } from "./panel";
 import { randomHex, randomUuid } from "./crypto";
+type TypePanelAuth = import("./panel").PanelAuth;
 import { logActivity } from "./logger";
 import {
   validateInboundSelection,
@@ -28,6 +29,8 @@ export type CoreUserParams = {
   exactEmail?: string;
   /** uuid دلخواه ربات — رها شود تا uuid تصادفی ساخته شود */
   exactUuid?: string;
+  /** هویت idempotent درخواست (داشبورد/کلاینت) — retry همان عملیات را resume می‌کند */
+  requestId?: string;
   /** شناسه سابسکریپشن دلخواه ربات — خالی = تولید خودکار */
   subId?: string;
 };
@@ -73,6 +76,56 @@ async function compensatePartialCreate(
   return allOk;
 }
 
+
+/**
+ * ادامهٔ CREATE نیمه‌کاره از metadata «اصلی» ژورنال — هیچ شناسهٔ جدیدی تولید نمی‌شود (C4).
+ * اگر ریموت کامل است → finalize؛ اگر ناقص → تلاش برای تکمیل پنل‌های مانده با پارامترهای اصلی.
+ */
+async function resumeCreateFromJournal(
+  reseller: ResellerWithInbounds,
+  journalId: string,
+  meta: { email: string; subId: string; trafficGB: number; expiryTime: number; ipLimit: number; refs: InboundRef[]; name: string },
+  snapshot: AllPanelsResult | null
+): Promise<CoreUserResult> {
+  const panelResult = snapshot || (await getAllPanelInboundsFresh());
+  if (!panelResult.ok) return { ok: false, error: panelResult.msg || "هیچ پنلی در دسترس نیست", status: 502 };
+  const uuid = randomUuid(); // uuid فقط برای پنل‌های «ناموفق قبلی» که کلاینت ندارند — اگر داشته باشند add رد می‌شود و duplicate-detect ریموت را می‌بندد
+  const byPanel = new Map<string, number[]>();
+  for (const ref of meta.refs) {
+    const arr = byPanel.get(ref.panelId) || [];
+    arr.push(ref.inboundId);
+    byPanel.set(ref.panelId, arr);
+  }
+  const { addClient } = await import("./panel");
+  const { getPanelConnection } = await import("./panel-manager");
+  const createdPanels: string[] = [];
+  let remoteComplete = 0;
+  for (const [panelId, inboundIds] of byPanel) {
+    const present = panelResult.panels
+      .find((b) => b.panelId === panelId)
+      ?.inbounds.some((inb) => inboundIds.includes(inb.id) && (inb.clients.some((c) => c.email === meta.email) || inb.clientStats.some((c) => c.email === meta.email)));
+    if (present) { remoteComplete++; createdPanels.push(panelId); continue; }
+    const conn = await getPanelConnection(panelId);
+    if (!conn.ok) continue;
+    const r = await addClient(conn.conn as TypePanelAuth, inboundIds, "vless", {
+      id: uuid, password: uuid, email: meta.email,
+      limitIp: meta.ipLimit, totalGB: meta.trafficGB * 1024 * 1024 * 1024,
+      expiryTime: meta.expiryTime, enable: true, subId: meta.subId,
+    } as never);
+    if (r.ok) { remoteComplete++; createdPanels.push(panelId); }
+  }
+  if (remoteComplete < byPanel.size) {
+    await db.operationJournal.update({ where: { id: journalId }, data: { status: "NEEDS_REPAIR", lastError: "resume: remote incomplete" } });
+    return { ok: false, error: "عملیات ساخت قبلی هنوز روی همهٔ پنل‌ها کامل نشده — پس از رفع مشکل، همان درخواست را تکرار کنید", status: 409 };
+  }
+  await finishCreateAtomically(journalId, reseller, { email: meta.email, subId: meta.subId, refs: meta.refs, trafficGB: meta.trafficGB, name: meta.name });
+  await db.operationJournal.update({
+    where: { id: journalId },
+    data: { metadata: JSON.stringify({ name: meta.name, trafficGB: meta.trafficGB, expiryTime: meta.expiryTime, ipLimit: meta.ipLimit, refs: meta.refs, subId: meta.subId, email: meta.email, done: true }) },
+  });
+  const subLink = await buildSubLink(meta.subId, reseller, meta.refs[0]?.panelId || "");
+  return { ok: true, email: meta.email, subId: meta.subId, subLink };
+}
 
 /**
  * finalize اتمیک CREATE — در یک تراکنش: ثبت ResellerUser (اگر نیست) + SUCCESS + reservedGB=0.
@@ -158,6 +211,39 @@ async function createResellerUserCoreInner(
   snapshot: AllPanelsResult | null,
   opts: { checkPool: boolean }
 ): Promise<CoreUserResult> {
+  // ---- بازیابی idempotent با requestId (قبل از هر محاسبهٔ جدید) ----
+  if (params.requestId) {
+    const key = `create-req:${params.requestId}`;
+    const j = await db.operationJournal.findFirst({
+      where: { resellerId: reseller.id, idempotencyKey: key, type: "CREATE" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (j) {
+      const meta = JSON.parse(j.metadata || "{}") as {
+        email?: string; subId?: string; trafficGB?: number; expiryTime?: number; ipLimit?: number;
+        refs?: InboundRef[]; name?: string; done?: boolean;
+      };
+      // payload متفاوت با عملیات اصلی → تعارض (معنای عملیات عوض نمی‌شود)
+      const samePayload =
+        meta.trafficGB === params.trafficGB &&
+        meta.expiryTime === params.expiryTime &&
+        meta.ipLimit === params.ipLimit &&
+        JSON.stringify(meta.refs) === JSON.stringify(params.refs);
+      if (!samePayload) {
+        return { ok: false, error: "این شناسهٔ درخواست قبلاً با پارامترهای متفاوت استفاده شده — عملیات جدید نیاز به شناسهٔ جدید دارد", status: 409 };
+      }
+      if (j.status === "SUCCESS" && meta.done && (meta.email || j.email)) {
+        // عملیات قبلاً کامل شده — همان نتیجه را idempotent برگردان
+        const subLink = await buildSubLink(meta.subId || "", reseller, meta.refs?.[0]?.panelId || "");
+        return { ok: true, email: String(meta.email || j.email), subId: meta.subId || "", subLink };
+      }
+      // عملیات نیمه‌کاره — ایمیل اصلی روی خود ژورنال ذخیره شده (fail-safe)
+      if (meta.subId && (meta.email || j.email)) {
+        return await resumeCreateFromJournal(reseller, j.id, { email: String(meta.email || j.email), subId: meta.subId!, trafficGB: meta.trafficGB ?? params.trafficGB, expiryTime: meta.expiryTime ?? params.expiryTime, ipLimit: meta.ipLimit ?? params.ipLimit, refs: meta.refs ?? params.refs, name: meta.name || params.name }, snapshot);
+      }
+    }
+  }
+
   // ---- نام ----
   const nameCheck = validateUsername(params.name.trim());
   if (!nameCheck.ok) return { ok: false, error: nameCheck.msg, status: 400 };
@@ -177,17 +263,19 @@ async function createResellerUserCoreInner(
   if (!selection.ok) return { ok: false, error: selection.msg, status: 403 };
 
   // ---- پول ترافیک (در ساخت گروهی پیش‌موجه بررسی شده — skip) ----
-  if (opts.checkPool) {
-    // وضعیت مرجع سهمیه — رزروهای CREATE فعال در remaining لحاظ شده‌اند
-    const { getQuotaState } = await import("./accounting-ops");
+  {
+    // C1 + مرجع سهمیه — برای هر مسیر (حتی داخل قفل گروهی) نگهبان نامحدودسازی اعمال می‌شود
+    const { getQuotaState, validateRequestedUserQuota } = await import("./accounting-ops");
     const quota = await getQuotaState(reseller.id, reseller);
+    const vq = validateRequestedUserQuota(quota, params.trafficGB);
+    if (!vq.ok) return { ok: false, error: vq.msg, status: 403 };
     if (!quota.unlimited && params.trafficGB > quota.remaining) {
       return { ok: false, error: `پول ترافیک کافی نیست — باقیماندهٔ مؤثر شما: ${Math.round(quota.remaining * 100) / 100} گیگ (شامل رزروهای فعال)`, status: 403 };
     }
   }
 
   // ---- اینباندهای زنده همه پنل‌ها ----
-  const panelResult = snapshot || (await getAllPanelInbounds());
+  const panelResult = snapshot || (await getAllPanelInboundsFresh());
   if (!panelResult.ok) {
     return { ok: false, error: panelResult.msg || "هیچ پنلی در دسترس نیست", status: 502 };
   }
@@ -217,7 +305,19 @@ async function createResellerUserCoreInner(
   } else {
     email = `${name}-${randomHex(4)}`;
   }
-  const subId = (params.subId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) || randomHex(16);
+  let subId = (params.subId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) || "";
+  if (params.subId && subId) {
+    // پل/کلاینت subId مشخص داده — تصادم با کاربر دیگر ممنوع
+    const clash = await db.resellerUser.findFirst({ where: { subId } });
+    if (clash) return { ok: false, error: "این شناسهٔ اشتراک (subId) قبلاً به کاربر دیگری اختصاص یافته است", status: 409 };
+  } else {
+    // تولید با اطمینان یکتایی سراسری
+    for (let attempt = 0; attempt < 3; attempt++) {
+      subId = randomHex(16);
+      const clash = await db.resellerUser.findFirst({ where: { subId } });
+      if (!clash) break;
+    }
+  }
   const uuid = (params.exactUuid || "").trim() || randomUuid();
 
   // گروه‌بندی refs به تفکیک پنل (هدف تغییرناپذیر عملیات)
@@ -262,7 +362,7 @@ async function createResellerUserCoreInner(
   // هویت ماندگار: ایمیل نهایی/هدف پنل‌ها/سهمیه/انقضا از این لحظه قابل بازیابی‌اند
   const createJournal = await db.operationJournal.create({
     data: {
-      idempotencyKey: `create:${params.name}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`,
+      idempotencyKey: params.requestId ? `create-req:${params.requestId}` : `create:${params.name}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`,
       resellerId: reseller.id,
       email,
       type: "CREATE",
@@ -344,6 +444,12 @@ async function createResellerUserCoreInner(
 
   // ---- finalize اتمیک: ثبت محلی + بستن ژورنال + آزادسازی رزرو در «یک» تراکنش ----
   await finishCreateAtomically(createJournal.id, reseller, { email, subId, refs, trafficGB: params.trafficGB, name: params.name });
+  if (params.requestId) {
+    await db.operationJournal.update({
+      where: { id: createJournal.id },
+      data: { metadata: JSON.stringify({ name: params.name, trafficGB: params.trafficGB, expiryTime: params.expiryTime, ipLimit: params.ipLimit, refs, subId, email, done: true }) },
+    });
+  }
 
   const subLink = await buildSubLink(subId, reseller, refs[0].panelId || "");
   await logActivity({

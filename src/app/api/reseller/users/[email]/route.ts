@@ -108,15 +108,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     // ---- سهمیه و پول ----
     const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : tracked.trafficGB;
 
-    if (trafficGB !== tracked.trafficGB) {
-      // وضعیت مرجع سهمیه — رزروهای CREATE فعال هم لحاظ می‌شوند
-      const quota = await getQuotaState(reseller.id, reseller);
-      const othersAllocated = quota.allocated - tracked.trafficGB;
-      const availableForThis = quota.pool - othersAllocated - quota.reserved - quota.consumed;
-      if (!quota.unlimited && trafficGB > availableForThis) {
-        return NextResponse.json({ error: `پول ترافیک کافی نیست — باقیماندهٔ مؤثر شما: ${Math.max(0, Math.round(availableForThis * 100) / 100)} گیگ (شامل رزروهای فعال)` }, { status: 403 });
-      }
-    }
+    // اعتبارسنجی سهمیه در سرویس مشترک updateUserByJournal انجام می‌شود (شامل رزرو دلتا و رزرو خودِ عملیات resume)
 
     let expiryTime = current.expiryTime || 0;
     if (body.expiryDate) expiryTime = new Date(body.expiryDate + "T23:59:59").getTime();

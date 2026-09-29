@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
-import { getAllPanelInbounds, getPanelConnection, type PanelBundle } from "./panel-manager";
+import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
 import { deleteClient, resetClientTraffic, type PanelAuth } from "./panel";
 import { logActivity } from "./logger";
 
@@ -26,6 +26,21 @@ function classifyOpError(msg: string | undefined): PanelOpResult {
   const m = (msg || "").toLowerCase();
   if (MISSING_MARKERS.some((k) => m.includes(k.toLowerCase()))) return "ALREADY_MISSING";
   return "FAILED";
+}
+
+/**
+ * اعتبارسنج مرجع سهمیهٔ کاربر — تنها نگهبان «کاربر نامحدود برای نمایندهٔ محدود ممنوع».
+ * همهٔ مسیرهای ساخت/ویرایش (داشبورد، گروهی، پل) موظف‌اند قبل از هر اثر ماندگار این را صدا بزنند.
+ */
+export function validateRequestedUserQuota(
+  quotaState: QuotaState,
+  requestedTrafficGB: number
+): { ok: true } | { ok: false; msg: string } {
+  if (quotaState.unlimited) return { ok: true }; // نمایندهٔ نامحدود: ۰ = نامحدود مجاز (رفتار قدیمی)
+  if (!Number.isFinite(requestedTrafficGB) || requestedTrafficGB <= 0) {
+    return { ok: false, msg: "پول ترافیک شما محدود است — سهمیهٔ کاربر باید عددی مثبت باشد (۰/نامحدود مجاز نیست)" };
+  }
+  return { ok: true };
 }
 
 export type QuotaState = {
@@ -58,7 +73,7 @@ export async function getActiveReservationsGB(resellerId: string): Promise<numbe
   const rows = await db.operationJournal.findMany({
     where: {
       resellerId,
-      type: "CREATE",
+      type: { in: ["CREATE", "UPDATE"] },
       status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] },
     },
     select: { reservedGB: true },
@@ -218,7 +233,7 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
     const req = await getRequiredUserPanelIds(tracked);
     if (!req.ok) return { ok: false, status: 409, msg: req.msg };
 
-    const snapshot = await getAllPanelInbounds();
+    const snapshot = await getAllPanelInboundsFresh();
     const readable = assertRequiredPanelsReadable(snapshot, req.panelIds);
     if (!readable.ok) return { ok: false, status: 502, msg: `حذف انجام نشد: ${readable.msg}` };
 
@@ -249,8 +264,12 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
     }
 
     await commitJournalAccounting(journal.id, resellerId, usageGB);
-    await db.resellerUser.delete({ where: { id: tracked.id } });
-    await db.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
+    // حذف محلی + بستن ژورنال در «یک» تراکنش (crash-safe)؛ اگر رکورد قبلاً حذف شده، فقط ژورنال بسته می‌شود
+    await db.$transaction(async (tx) => {
+      const stillThere = await tx.resellerUser.findUnique({ where: { id: tracked.id } });
+      if (stillThere) await tx.resellerUser.delete({ where: { id: tracked.id } });
+      await tx.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
+    });
     await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "حذف کاربر", detail: `${email}${usageGB > 0 ? ` | مصرف قطعی: ${usageGB} گیگ` : ""}`, resellerId });
     return { ok: true, debitedGB: usageGB };
   });
@@ -269,7 +288,7 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     const req = await getRequiredUserPanelIds(tracked);
     if (!req.ok) return { ok: false, status: 409, msg: req.msg };
 
-    const snapshot = await getAllPanelInbounds();
+    const snapshot = await getAllPanelInboundsFresh();
     const readable = assertRequiredPanelsReadable(snapshot, req.panelIds);
     if (!readable.ok) return { ok: false, status: 502, msg: `ریست انجام نشد: ${readable.msg}` };
 
@@ -323,24 +342,51 @@ export async function updateUserByJournal(
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
 
+    // C1: نمایندهٔ محدود هرگز کاربر نامحدود نمی‌سازد
+    const quotaBefore = await getQuotaState(resellerId);
+    const vq = validateRequestedUserQuota(quotaBefore, desired.trafficGB);
+    if (!vq.ok) return { ok: false, status: 403, msg: vq.msg };
+
+    // ژورنال UPDATE فعالِ همین کاربر = resume؛ رزرو خودش نباید_again حساب شود
+    const existingJournal = await findResumableJournal(resellerId, email, "UPDATE");
+    const ownReserved = existingJournal?.status ? (await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { reservedGB: true } }))?.reservedGB ?? 0 : 0;
+    // payload resume باید با هدف اصلی یکی باشد
+    if (existingJournal) {
+      const meta = JSON.parse((await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { metadata: true } }))?.metadata || "{}") as { newTrafficGB?: number };
+      if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB) {
+        return { ok: false, status: 409, msg: "عملیات ویرایش در جریان با مقدار متفاوتی تعریف شده — ابتدا همان را تمام کنید" };
+      }
+    }
+
+    // C2: دلتای افزایش سهمیه باید قبل از اولین اثر ریموت رزرو شود
+    const delta = Math.max(0, desired.trafficGB - loaded.tracked.trafficGB);
+    if (!quotaBefore.unlimited && delta > 0) {
+      const reservedOthers = Math.max(0, quotaBefore.reserved - ownReserved);
+      const available = quotaBefore.pool - quotaBefore.allocated - reservedOthers - quotaBefore.consumed;
+      if (delta > available) {
+        return { ok: false, status: 403, msg: `پول ترافیک برای این افزایش کافی نیست — باقیماندهٔ مؤثر: ${Math.round(available * 100) / 100} گیگ` };
+      }
+    }
+
     // مانع تداخل با DELETE/RESET فعال (UPDATE فعالِ خودش = resume)
     const conflict = await assertNoConflictingOperation(resellerId, email, "UPDATE" as never);
     if (conflict) return conflict;
 
     // resume همان ژورنال یا ایجاد یکتا
-    let journal = await findResumableJournal(resellerId, email, "UPDATE");
+    let journal = existingJournal;
     if (!journal) {
       const req = await getRequiredUserPanelIds(loaded.tracked);
       journal = await db.operationJournal.create({
         data: {
           idempotencyKey: opKey("update", loaded.tracked.id),
           resellerId, userId: loaded.tracked.id, email, type: "UPDATE", status: "RUNNING",
+          reservedGB: delta,
           targetPanels: JSON.stringify(req.ok ? req.panelIds : []),
           metadata: JSON.stringify({ newTrafficGB: desired.trafficGB, note: desired.note }),
         },
       });
     } else {
-      // همان ژورنال: PARTIAL → RUNNING (ادامهٔ همان عملیات، نه عملیات جدید)
+      // همان ژورنال: PARTIAL → RUNNING (ادامهٔ همان عملیات، نه عملیات جدید) — رزرو دلتا حفظ می‌شود
       await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null } });
     }
 
@@ -359,7 +405,7 @@ export async function updateUserByJournal(
       await commitLocal(tx);
       await tx.operationJournal.update({
         where: { id: jid },
-        data: { status: "SUCCESS", completedPanels: jTargets, failedPanels: "[]" },
+        data: { status: "SUCCESS", reservedGB: 0, completedPanels: jTargets, failedPanels: "[]" },
       });
     });
     return { ok: true };

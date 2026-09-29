@@ -502,15 +502,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
         ? Math.max(0, Number(payload.trafficGB) || 0)
         : tracked.trafficGB;
   // سرویس مشترک UPDATE — resumable
-  if (trafficGB !== tracked.trafficGB) {
-    // وضعیت مرجع سهمیه — همان قاعدهٔ داشبورد (رزروها لحاظ می‌شوند)
-    const quota = await getQuotaState(reseller.id, reseller);
-    const othersAllocated = quota.allocated - tracked.trafficGB;
-    const availableForThis = quota.pool - othersAllocated - quota.reserved - quota.consumed;
-    if (trafficGB > availableForThis) {
-      return xui(false, `پول ترافیک کافی نیست — باقیماندهٔ مؤثر: ${Math.max(0, Math.round(availableForThis * 100) / 100)} گیگ (شامل رزروهای فعال)`);
-    }
-  }
+  // اعتبارسنجی سهمیه در سرویس مشترک updateUserByJournal
 
   const expiryTime = payload.expiryTime !== undefined ? Math.max(0, Number(payload.expiryTime) || 0) : undefined;
   const enable = payload.enable !== undefined ? !!payload.enable : undefined;

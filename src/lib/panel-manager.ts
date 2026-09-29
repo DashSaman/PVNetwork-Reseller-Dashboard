@@ -92,37 +92,70 @@ export type AllPanelsResult = {
   errors: { panelId: string; panelName: string; msg: string }[];
 };
 
-/** دریافت اینباندهای همه پنل‌ها (پنل‌های قطع‌شده خطایشان جداگانه برمی‌گردد) */
-export async function getAllPanelInbounds(): Promise<AllPanelsResult> {
+/** دریافت اینباندهای همه پنل‌ها — پنل‌های مستقل به‌صورت هم‌زمان خوانده می‌شوند (پنل کند، بقیه را نگه نمی‌دارد) */
+export async function getAllPanelInboundsFresh(): Promise<AllPanelsResult> {
   const panels = await getAllPanels();
   if (panels.length === 0) {
     return { ok: false, msg: "اتصال پنل تنظیم نشده است. ابتدا از بخش تنظیمات، پنل ثنایی را متصل کنید.", panels: [], errors: [] };
   }
-  const bundles: PanelBundle[] = [];
-  const errors: { panelId: string; panelName: string; msg: string }[] = [];
-
-  for (const p of panels) {
-    if (!p.active) continue;
-    const conn = await getPanelConnection(p.id);
-    if (!conn.ok) {
-      errors.push({ panelId: p.id, panelName: p.name, msg: conn.msg });
-      continue;
-    }
-    let r = await getInbounds(conn.conn);
-    if (!r.ok || !r.data) {
-      // نشست شاید منقضی شده — یک بار تلاش مجدد
-      sessionCache.delete(p.id);
-      const retryConn = await getPanelConnection(p.id);
-      if (retryConn.ok) r = await getInbounds(retryConn.conn);
-    }
-    if (!r.ok || !r.data) {
-      errors.push({ panelId: p.id, panelName: p.name, msg: r.msg || "دریافت اینباندها ناموفق بود" });
-      continue;
-    }
-    bundles.push({ panelId: p.id, panelName: p.name, inbounds: r.data });
+  const active = panels.filter((p) => p.active);
+  if (active.length === 0) {
+    return { ok: false, msg: "هیچ پنل فعالی وجود ندارد", panels: [], errors: [] };
   }
 
+  const work = active.map(async (p) => {
+    let r = await getInboundsForPanel(p);
+    if (!r.ok) {
+      sessionCache.delete(p.id);
+      r = await getInboundsForPanel(p);
+    }
+    return { p, r };
+  });
+  const settled = await Promise.allSettled(work);
+
+  const bundles: PanelBundle[] = [];
+  const errors: { panelId: string; panelName: string; msg: string }[] = [];
+  for (const item of settled) {
+    if (item.status === "fulfilled") {
+      const { p, r } = item.value;
+      if (r.ok && r.data) bundles.push({ panelId: p.id, panelName: p.name, inbounds: r.data });
+      else errors.push({ panelId: p.id, panelName: p.name, msg: r.msg || "دریافت اینباندها ناموفق بود" });
+    } else {
+      errors.push({ panelId: "?", panelName: "?", msg: `خطای غیرمنتظره: ${(item.reason as Error)?.message || "unknown"}` });
+    }
+  }
   return { ok: bundles.length > 0, panels: bundles, errors, msg: bundles.length === 0 ? errors[0]?.msg : undefined };
+}
+
+async function getInboundsForPanel(p: PanelConfig): Promise<{ ok: boolean; data?: PanelInbound[]; msg?: string }> {
+  const conn = await getPanelConnection(p.id);
+  if (!conn.ok) return { ok: false, msg: conn.msg };
+  const r = await getInbounds(conn.conn);
+  return r.ok && r.data ? { ok: true, data: r.data } : { ok: false, msg: r.msg || "دریافت اینباندها ناموفق بود" };
+}
+
+// ---- single-flight خواندنی: هم‌زمانی + TTL بسیار کوتاه — هرگز برای عملیات تخریبی/حسابداری ----
+type Flight = { at: number; promise: Promise<AllPanelsResult> };
+const readFlight: { current: Flight | null } = ((globalThis as { __pvnetReadFlight?: { current: Flight | null } }).__pvnetReadFlight ??= { current: null });
+const READ_TTL_MS = 1500;
+
+/**
+ * snapshot پنل‌ها برای مسیرهای «فقط خواندنی» (لیست کاربران/bootstrap/آمار):
+ * درخواست‌های هم‌زمان یک Promise مشترک می‌گیرند و تا ۱.۵ ثانیه نتیجهٔ تازه بازاستفاده می‌شود.
+ * مسیرهای تخریفی/حسابداری باید getAllPanelInboundsFresh را مستقیم صدا بزنند (هرگز stale).
+ */
+export async function getAllPanelInbounds(): Promise<AllPanelsResult> {
+  const now = Date.now();
+  if (readFlight.current && now - readFlight.current.at < READ_TTL_MS) {
+    return readFlight.current.promise;
+  }
+  const promise = getAllPanelInboundsFresh();
+  readFlight.current = { at: now, promise };
+  try {
+    return await promise;
+  } finally {
+    if (readFlight.current && readFlight.current.promise === promise) readFlight.current = null;
+  }
 }
 
 /** سازگاری با کد قبلی — اینباندهای پنل اصلی */
