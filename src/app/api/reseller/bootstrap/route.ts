@@ -81,7 +81,7 @@ export async function GET() {
 
   const quota = await getQuotaState(reseller.id, reseller);
 
-  return NextResponse.json({
+  const res = NextResponse.json({
     users: rows,
     inbounds,
     // bootstrap هیچ بررسی زنده انجام نمی‌دهد — خطای اتصال نمی‌گوید؛ وضعیت زنده live-users تعیین می‌کند
@@ -102,4 +102,6 @@ export async function GET() {
       domainVerified: reseller.domainVerified,
     },
   });
+  res.headers.set("Cache-Control", "private, no-store, max-age=0");
+  return res;
 }

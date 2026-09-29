@@ -112,13 +112,18 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   const [permissions, setPermissions] = useState<ResellerPermissions | null>(null);
   const [whitelabel, setWhitelabel] = useState<WhitelabelInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [liveLoaded, setLiveLoaded] = useState(false); // داده زنده آیکار می‌کند
+  const [liveLoaded, setLiveLoaded] = useState(false);
+  const [livePending, setLivePending] = useState(true);
+  const [lastLiveAt, setLastLiveAt] = useState(0);
+  const liveInFlight = useRef(false);
+  const LIVE_STALE_MS = 20000; // داده زنده آیکار می‌کند
   const [panelError, setPanelError] = useState("");
   const [stats, setStats] = useState<Record<string, number | boolean> | null>(null);
   const [charts, setCharts] = useState<StatsCharts | null>(null);
 
   // اولین صفحه فقط بوت‌استرپ (یک snapshot پنل‌ها) — آمار/نمودارِ تب دیگر on-demand بار می‌شود
   const load = useCallback(async () => {
+    setLiveLoaded(false); // اجازه live refresh
     setLoading(true);
     const b = await api<{
       users: ResellerUserRow[];
@@ -140,27 +145,61 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     }
   }, []);
 
+  /** یک تابع مشترک برای refresh داده زنده */
+  const refreshLiveUsers = useCallback(async () => {
+    if (liveInFlight.current) return;
+    liveInFlight.current = true;
+    try {
+      const r = await api<{
+        users: { email: string; usedGB: number | null; totalGB: number; expiryTime: number; enable: boolean }[];
+        panelConnected: boolean;
+        dataComplete: boolean;
+        panelErrors?: { panelName: string; msg: string }[];
+      }>('/api/reseller/live-users');
+      if (r.ok && r.data) {
+        setUsers((prev) => prev.map((u) => {
+          const live = r.data!.users.find((l) => l.email === u.email);
+          if (!live) return u;
+          return {
+            ...u,
+            usedGB: live.usedGB !== null ? live.usedGB : u.usedGB,
+            totalGB: live.totalGB || u.totalGB,
+            expiryTime: live.expiryTime || u.expiryTime,
+            enable: live.enable,
+          };
+        }));
+        setLiveLoaded(true);
+        setLivePending(false);
+        setLastLiveAt(Date.now());
+        if (r.data.panelConnected) setPanelError('');
+        else setPanelError('اطلاعات زندهٔ پنل موقتاً در دسترس نیست — اطلاعات ذخیره‌شده نمایش داده می‌شود');
+      }
+    } catch { /* silently */ } finally {
+      liveInFlight.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
 
-  // داده زندهٔ مصرف — async بعد از رندر اولیه (صفحه بلاک نمی‌شود)
+  // داده زنده — اولین fetch
   useEffect(() => {
     if (!users.length || liveLoaded) return;
-    let alive = true;
-    void (async () => {
-      const r = await api<{ users: { email: string; usedGB: number; totalGB: number; expiryTime: number; enable: boolean }[]; panelErrors?: { panelName: string; msg: string }[] }>("/api/reseller/live-users");
-      if (!alive || !r.ok || !r.data) return;
-      setUsers((prev) => prev.map((u) => {
-        const live = r.data!.users.find((l) => l.email === u.email);
-        return live ? { ...u, usedGB: live.usedGB, totalGB: live.totalGB || u.totalGB, expiryTime: live.expiryTime || u.expiryTime, enable: live.enable } : u;
-      }));
-      setPanelError(""); // live موفق → هیچ خطای پنلی نشان نده
-      setLiveLoaded(true);
-    })();
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [users.length, liveLoaded]);
+    void refreshLiveUsers();
+  }, [users.length, liveLoaded, refreshLiveUsers]);
+
+  // foreground + stale → refresh
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastLiveAt > LIVE_STALE_MS && !livePending) {
+        void refreshLiveUsers();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [lastLiveAt, livePending, refreshLiveUsers]);
+
 
 
   // آمار و نمودارها فقط با باز شدن تب «آمار و مصرف» — صفحهٔ کاربران هرگز منتظر آن‌ها نمی‌ماند
@@ -878,8 +917,8 @@ function UsersTab({
       method: "PUT",
       body: JSON.stringify({
         ...editForm,
-        trafficGB: Math.max(0, Math.floor(Number(editForm.trafficGB) || 0)),
-        ipLimit: Math.max(0, Math.floor(Number(editForm.ipLimit) || 0)),
+        trafficGB: Math.max(0, Math.floor(parseNumberInput(editForm.trafficGB) || 0)),
+        ipLimit: Math.max(0, Math.floor(parseNumberInput(editForm.ipLimit) || 0)),
       }),
     });
     setBusy(false);

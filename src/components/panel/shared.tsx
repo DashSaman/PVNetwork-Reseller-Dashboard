@@ -107,6 +107,11 @@ export function expiryLabel(expiryTime: number): { text: string; tone: "ok" | "w
   return { text: `${days} روز مانده`, tone: "ok" };
 }
 
+/** مصرف ترافیک — 0 گیگ واقعی است نه نامحدود */
+export function formatUsageGB(gb: number): string {
+  return faNum(Math.round(gb * 100) / 100) + " گیگ";
+}
+
 export function gbLabel(gb: number): string {
   return gb > 0 ? `${faNum(Math.round(gb * 100) / 100)} گیگ` : "نامحدود";
 }
