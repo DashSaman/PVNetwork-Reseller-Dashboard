@@ -73,6 +73,42 @@ async function compensatePartialCreate(
   return allOk;
 }
 
+
+/**
+ * finalize اتمیک CREATE — در یک تراکنش: ثبت ResellerUser (اگر نیست) + SUCCESS + reservedGB=0.
+ * idempotent: تکرار (بازیابی پس از کرش) هیچ ردیف تکراری/دوباره‌حسابی نمی‌سازد.
+ */
+async function finishCreateAtomically(
+  journalId: string,
+  reseller: ResellerWithInbounds,
+  info: { email: string; subId: string; refs: InboundRef[]; trafficGB: number; name: string }
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    const j = await tx.operationJournal.findUnique({ where: { id: journalId } });
+    if (!j || j.status === "SUCCESS") return; // idempotent
+    const existing = await tx.resellerUser.findUnique({
+      where: { resellerId_email: { resellerId: reseller.id, email: info.email } },
+    });
+    if (!existing) {
+      await tx.resellerUser.create({
+        data: {
+          resellerId: reseller.id,
+          email: info.email,
+          name: info.name.trim().slice(0, 60) || null,
+          subId: info.subId,
+          inboundIds: stringifyInboundRefs(info.refs),
+          panelId: info.refs[0].panelId || "",
+          trafficGB: info.trafficGB,
+        },
+      });
+    }
+    await tx.operationJournal.update({
+      where: { id: journalId },
+      data: { status: "SUCCESS", reservedGB: 0, completedPanels: j.targetPanels, failedPanels: "[]" },
+    });
+  });
+}
+
 /** لاگ فعالیت یتیم — وضعیت ژورنال در createJournal تنظیم شده است */
 async function recordOrphanRepair(
   reseller: ResellerWithInbounds,
@@ -142,12 +178,12 @@ async function createResellerUserCoreInner(
 
   // ---- پول ترافیک (در ساخت گروهی پیش‌موجه بررسی شده — skip) ----
   if (opts.checkPool) {
-    const { getAllocatedGB, getConsumedGB, validatePoolAllocation, getEffectiveRemainingGB } = await import("./reseller-helpers");
-    const [allocatedGB, consumedGB, remainingGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id), getEffectiveRemainingGB(reseller)]);
-    // باقیماندهٔ مؤثر شامل رزروهای فعال است — یتیم NEEDS_REPAIR سهمیه را قفل نگه می‌دارد
-    const reservedGB = Math.max(0, reseller.trafficPoolGB - allocatedGB - consumedGB - remainingGB);
-    const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB + reservedGB, params.trafficGB, 0, consumedGB);
-    if (!pool.ok) return { ok: false, error: pool.msg, status: 403 };
+    // وضعیت مرجع سهمیه — رزروهای CREATE فعال در remaining لحاظ شده‌اند
+    const { getQuotaState } = await import("./accounting-ops");
+    const quota = await getQuotaState(reseller.id, reseller);
+    if (!quota.unlimited && params.trafficGB > quota.remaining) {
+      return { ok: false, error: `پول ترافیک کافی نیست — باقیماندهٔ مؤثر شما: ${Math.round(quota.remaining * 100) / 100} گیگ (شامل رزروهای فعال)`, status: 403 };
+    }
   }
 
   // ---- اینباندهای زنده همه پنل‌ها ----
@@ -170,20 +206,7 @@ async function createResellerUserCoreInner(
     }
   }
 
-  // ---- ژورنال CREATE — رزرو ماندگار قبل از هر اثر ریموت (crash-safe) ----
-  const createJournal = await db.operationJournal.create({
-    data: {
-      idempotencyKey: `create:${params.name}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`,
-      resellerId: reseller.id,
-      email: "pending",
-      type: "CREATE",
-      status: "RUNNING",
-      reservedGB: params.trafficGB,
-      metadata: JSON.stringify({ name: params.name, trafficGB: params.trafficGB, expiryTime: params.expiryTime, ipLimit: params.ipLimit, refs }),
-    },
-  });
-
-  // ---- شناسه‌ها ----
+  // ---- شناسه‌ها (قبل از هر اثر ماندگار/ریموت — همهٔ validation سبک اینجا تمام می‌شود) ----
   // پل 3x-ui (ربات میرزا): ایمیل دقیق و subId دلخواه ربات؛ در داشبورد: پسوند تصادفی
   let email: string;
   if (params.exactEmail) {
@@ -197,22 +220,60 @@ async function createResellerUserCoreInner(
   const subId = (params.subId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) || randomHex(16);
   const uuid = (params.exactUuid || "").trim() || randomUuid();
 
-  // عدم تکراری بودن ایمیل در همه پنل‌ها
-  for (const bundle of panelResult.panels) {
-    for (const inb of bundle.inbounds) {
-      if (inb.clientStats.some((c) => c.email === email) || inb.clients.some((c) => c.email === email)) {
-        return { ok: false, error: "این نام در پنل تکراری است، نام دیگری انتخاب کنید", status: 409 };
-      }
-    }
-  }
-
-  // ---- افزودن به پنل‌ها (گروه‌بندی refs به تفکیک پنل) ----
+  // گروه‌بندی refs به تفکیک پنل (هدف تغییرناپذیر عملیات)
   const byPanel = new Map<string, number[]>();
   for (const ref of refs) {
     const arr = byPanel.get(ref.panelId) || [];
     arr.push(ref.inboundId);
     byPanel.set(ref.panelId, arr);
   }
+  const targetPanelIds = [...byPanel.keys()];
+
+  // عدم تکراری بودن ایمیل — با بازیابی عملیات قبلی (crash-after-remote)
+  let remotePresentPanels = 0;
+  for (const bundle of panelResult.panels) {
+    for (const inb of bundle.inbounds) {
+      if (inb.clientStats.some((c) => c.email === email) || inb.clients.some((c) => c.email === email)) {
+        remotePresentPanels++;
+        break;
+      }
+    }
+  }
+  if (remotePresentPanels > 0) {
+    // آیا این، ادامهٔ عملیات CREATE قبلیِ همین نماینده است که ریموت کامل شده ولی محلی بسته نشده؟
+    const stale = await db.operationJournal.findFirst({
+      where: { resellerId: reseller.id, email, type: "CREATE", status: { in: ["RUNNING", "PARTIAL", "NEEDS_REPAIR"] } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (stale && remotePresentPanels >= targetPanelIds.length) {
+      // بازیابی: ثبت محلی idempotent و بستن همان ژورنال (بدون ساخت مجدد ریموت)
+      await finishCreateAtomically(stale.id, reseller, { email, subId, refs, trafficGB: params.trafficGB, name: params.name });
+      const subLink = await buildSubLink(subId, reseller, refs[0].panelId || "");
+      return { ok: true, email, subId, subLink };
+    }
+    if (stale) {
+      // ریموت ناقص مانده از عملیات قبلی — همچنان NEEDS_REPAIR با رزرو فعال
+      return { ok: false, error: "عملیات ساخت قبلی برای همین نام نیمه‌کاره است — پس از رفع مشکل پنل‌ها همان درخواست را تکرار کنید", status: 409 };
+    }
+    return { ok: false, error: "این نام در پنل تکراری است، نام دیگری انتخاب کنید", status: 409 };
+  }
+
+  // ---- ژورنال CREATE + رزرو — فقط پس از اتمام کامل validation بدون عارضهٔ ریموت ----
+  // هویت ماندگار: ایمیل نهایی/هدف پنل‌ها/سهمیه/انقضا از این لحظه قابل بازیابی‌اند
+  const createJournal = await db.operationJournal.create({
+    data: {
+      idempotencyKey: `create:${params.name}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`,
+      resellerId: reseller.id,
+      email,
+      type: "CREATE",
+      status: "RUNNING",
+      reservedGB: params.trafficGB,
+      targetPanels: JSON.stringify(targetPanelIds),
+      metadata: JSON.stringify({ name: params.name, trafficGB: params.trafficGB, expiryTime: params.expiryTime, ipLimit: params.ipLimit, refs, subId }),
+    },
+  });
+
+  // ---- افزودن به پنل‌ها (به ترتیب هدف تغییرناپذیر) ----
   const createdPanels: string[] = [];
   for (const [panelId, inboundIds] of byPanel) {
     const conn = await getPanelConnection(panelId);
@@ -281,24 +342,8 @@ async function createResellerUserCoreInner(
     createdPanels.push(panelId);
   }
 
-  // ---- ثبت در دیتابیس + لاگ ----
-  await db.resellerUser.create({
-    data: {
-      resellerId: reseller.id,
-      email,
-      name: params.name.trim().slice(0, 60) || null,
-      subId,
-      inboundIds: stringifyInboundRefs(refs),
-      panelId: refs[0].panelId || "",
-      trafficGB: params.trafficGB,
-    },
-  });
-
-  // تبدیل رزرو به تخصیص عادی — رزرو آزاد، رکورد محلی ثبت شد (یک‌بار)
-  await db.operationJournal.update({
-    where: { id: createJournal.id },
-    data: { status: "SUCCESS", reservedGB: 0, email, completedPanels: JSON.stringify([...byPanel.keys()]) },
-  });
+  // ---- finalize اتمیک: ثبت محلی + بستن ژورنال + آزادسازی رزرو در «یک» تراکنش ----
+  await finishCreateAtomically(createJournal.id, reseller, { email, subId, refs, trafficGB: params.trafficGB, name: params.name });
 
   const subLink = await buildSubLink(subId, reseller, refs[0].panelId || "");
   await logActivity({

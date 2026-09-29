@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, getAllocatedGB, getConsumedGB, getEffectiveRemainingGB, withResellerLock, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, withResellerLock, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
+import { getQuotaState } from "@/lib/accounting-ops";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 import { createResellerUserCoreWithinResellerLock } from "@/lib/user-create";
 import { db } from "@/lib/db";
@@ -43,12 +44,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "پول ترافیک شما محدود است — سهمیه هر کاربر باید عددی مثبت باشد" }, { status: 400 });
     }
     if (reseller.trafficPoolGB > 0) {
-      const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id), getConsumedGB(reseller.id)]);
+      // وضعیت سهمیه فقط از تابع مرجع — رزروهای فعال CREATE لحاظ می‌شوند
+      const quota = await getQuotaState(reseller.id, reseller);
       const need = trafficGB * count;
-      const remaining = reseller.trafficPoolGB - allocatedGB - consumedGB;
-      if (need > remaining) {
+      if (need > quota.remaining) {
         return NextResponse.json(
-          { error: `ظرفیت پول کافی نیست — برای ${count} کاربر × ${trafficGB} گیگ، ${need} گیگ لازم است اما فقط ${Math.max(0, Math.floor(remaining))} گیگ باقی مانده` },
+          { error: `ظرفیت پول کافی نیست — برای ${count} کاربر × ${trafficGB} گیگ، ${need} گیگ لازم است اما فقط ${Math.max(0, Math.floor(quota.remaining))} گیگ باقی مانده` },
           { status: 403 }
         );
       }

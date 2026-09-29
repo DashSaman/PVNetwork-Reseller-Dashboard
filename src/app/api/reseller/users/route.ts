@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { buildSubLink } from "@/lib/panel-manager";
-import { getResellerWithAccess, bytesToGB, getConsumedGB, getEffectiveRemainingGB, type InboundRef } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, bytesToGB, getConsumedGB, getEffectiveRemainingGB, canonicalUsageByEmail, type InboundRef } from "@/lib/reseller-helpers";
 import { createResellerUserCore } from "@/lib/user-create";
 import { sendThresholdAlerts, type ThresholdAlert } from "@/lib/telegram";
 
@@ -130,6 +130,9 @@ export async function GET() {
       });
     }
   }
+
+  // مصرف کانونی از تک‌منبع (برندهٔ هر پنل، جمع بین پنل‌ها) — ترافیک هرگز جداگانه محاسبه نمی‌شود
+  const usageByEmail = canonicalUsageByEmail(panelResult.panels.map((b) => ({ panelId: b.panelId, inbounds: b.inbounds })));
 
   const allocatedGB = trackedUsers.reduce((s, u) => s + (u.trafficGB || 0), 0);
   const consumedGB = await getConsumedGB(reseller.id);

@@ -23,7 +23,7 @@ import {
   type PanelAuth,
 } from "@/lib/panel";
 import { randomUuid } from "@/lib/crypto";
-import { deleteUserByJournal, hasActiveOperation } from "@/lib/accounting-ops";
+import { deleteUserByJournal, updateUserByJournal, getQuotaState } from "@/lib/accounting-ops";
 import { logActivity } from "@/lib/logger";
 
 type Ctx = { params: Promise<{ email: string }> };
@@ -39,7 +39,6 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const reseller = await getResellerWithAccess(session.uid);
     if (!reseller) return NextResponse.json({ error: "حساب شما فعال نیست" }, { status: 403 });
 
-    return withResellerLock(reseller.id, async () => {
     const tracked = await db.resellerUser.findUnique({
       where: { resellerId_email: { resellerId: reseller.id, email } },
     });
@@ -104,28 +103,19 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       current = { totalGB: 0, expiryTime: 0, enable: true, subId: tracked.subId || "", protocol: anyInbound?.protocol || "vless" };
     }
 
-    // مانع تداخل با عملیات تخریبی فعال
-    if (await hasActiveOperation(reseller.id, email, ["DELETE", "RESET"])) {
-      return NextResponse.json({ error: "عملیات حذف/ریست دیگری برای این کاربر در جریان است — پس از پایان آن دوباره تلاش کنید" }, { status: 409 });
-    }
-    const updateJournal = await db.operationJournal.create({
-      data: {
-        idempotencyKey: `update-op:${tracked.id}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
-        resellerId: reseller.id, userId: tracked.id, email, type: "UPDATE", status: "RUNNING",
-        targetPanels: JSON.stringify(currentRefs.map((r) => r.panelId)),
-      },
-    });
+    // سرویس مشترک UPDATE — resumable: retry همان ژورنال PARTIAL را ادامه می‌دهد
 
     // ---- سهمیه و پول ----
     const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : tracked.trafficGB;
-    await db.operationJournal.update({ where: { id: updateJournal.id }, data: { metadata: JSON.stringify({ oldTrafficGB: tracked.trafficGB, newTrafficGB: trafficGB }) } });
+
     if (trafficGB !== tracked.trafficGB) {
-      const [allocatedGB, consumedGB] = await Promise.all([
-        getAllocatedGB(reseller.id, tracked.id),
-        getConsumedGB(reseller.id),
-      ]);
-      const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, trafficGB, tracked.trafficGB, consumedGB);
-      if (!pool.ok) return NextResponse.json({ error: pool.msg }, { status: 403 });
+      // وضعیت مرجع سهمیه — رزروهای CREATE فعال هم لحاظ می‌شوند
+      const quota = await getQuotaState(reseller.id, reseller);
+      const othersAllocated = quota.allocated - tracked.trafficGB;
+      const availableForThis = quota.pool - othersAllocated - quota.reserved - quota.consumed;
+      if (!quota.unlimited && trafficGB > availableForThis) {
+        return NextResponse.json({ error: `پول ترافیک کافی نیست — باقیماندهٔ مؤثر شما: ${Math.max(0, Math.round(availableForThis * 100) / 100)} گیگ (شامل رزروهای فعال)` }, { status: 403 });
+      }
     }
 
     let expiryTime = current.expiryTime || 0;
@@ -224,25 +214,27 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       if (!upd.ok) errors.push(`ویرایش: ${upd.msg}`);
     }
 
-    if (errors.length) {
-      await db.operationJournal.update({
-        where: { id: updateJournal.id },
-        data: { status: "PARTIAL", lastError: errors.join(" | ") },
-      });
-      return NextResponse.json({ error: `ویرایش ناقص بود: ${errors.join(" | ")}`, partial: true }, { status: 502 });
+    const updateRes = await updateUserByJournal(
+      reseller.id,
+      email,
+      { trafficGB },
+      async () => errors,
+      async (tx) => {
+        await tx.resellerUser.update({
+          where: { id: tracked.id },
+          data: {
+            name: body.name !== undefined ? body.name.trim().slice(0, 60) || null : tracked.name,
+            inboundIds: stringifyInboundRefs(newRefs),
+            panelId: newRefs[0]?.panelId || tracked.panelId || "",
+            trafficGB,
+            subId: body.subId !== undefined ? body.subId : tracked.subId,
+          },
+        });
+      }
+    );
+    if (!updateRes.ok) {
+      return NextResponse.json({ error: updateRes.msg, partial: updateRes.partial === true }, { status: updateRes.status });
     }
-
-    await db.operationJournal.update({ where: { id: updateJournal.id }, data: { status: "SUCCESS" } });
-    await db.resellerUser.update({
-      where: { id: tracked.id },
-      data: {
-        name: body.name !== undefined ? body.name.trim().slice(0, 60) || null : tracked.name,
-        inboundIds: stringifyInboundRefs(newRefs),
-        panelId: newRefs[0]?.panelId || tracked.panelId || "",
-        trafficGB,
-        subId: body.subId !== undefined ? body.subId : tracked.subId,
-      },
-    });
 
     await logActivity({
       actorType: "RESELLER",
@@ -254,7 +246,6 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
     const subLink = await buildSubLink(body.subId !== undefined ? body.subId : current.subId, reseller, newRefs[0]?.panelId || primaryPanelId);
     return NextResponse.json({ ok: true, subLink });
-  });
   } catch (e) {
     console.error("update user error:", e);
     return NextResponse.json({ error: "خطای داخلی در ویرایش کاربر" }, { status: 500 });

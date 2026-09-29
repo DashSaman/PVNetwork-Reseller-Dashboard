@@ -113,7 +113,10 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
     down += panelDown;
   }
 
-  const usedGB = Math.round(((up + down) / 1073741824) * 100) / 100;
+  // ترافیک از تک‌منبع کانونی (برندهٔ هر پنل، جمع بین پنل‌ها) — متادیتا (سهمیه/انقضا/لینک‌ها) از حلقه
+  const { canonicalUserUsage } = await import("./reseller-helpers");
+  const canon = canonicalUserUsage(panelResult.panels, email);
+  const usedGB = Math.round((canon.usedBytes / 1073741824) * 100) / 100;
   const totalGB = Math.round((total / 1073741824) * 100) / 100;
   const daysLeft = expiryTime > 0 ? Math.ceil((expiryTime - Date.now()) / 86400000) : undefined;
   const usagePct = totalGB > 0 ? Math.min(100, Math.round((usedGB / totalGB) * 100)) : undefined;

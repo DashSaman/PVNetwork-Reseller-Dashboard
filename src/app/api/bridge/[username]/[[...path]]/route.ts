@@ -16,7 +16,7 @@ import {
   type InboundRef,
   type ResellerWithInbounds,
 } from "@/lib/reseller-helpers";
-import { deleteUserByJournal, resetUserByJournal, hasActiveOperation } from "@/lib/accounting-ops";
+import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
 import { logActivity } from "@/lib/logger";
@@ -185,6 +185,8 @@ async function bridgeInboundList(reseller: ResellerWithInbounds) {
 async function bridgeClientList(reseller: ResellerWithInbounds) {
   const panelResult = await getAllPanelInbounds();
   const tracked = await db.resellerUser.findMany({ where: { resellerId: reseller.id } });
+  const { canonicalUsageByEmail } = await import("@/lib/reseller-helpers");
+  const usage = panelResult.ok ? canonicalUsageByEmail(panelResult.panels.map((b) => ({ panelId: b.panelId, inbounds: b.inbounds }))) : new Map();
   const obj = tracked.map((t) => {
     // پیدا کردن رکورد زنده کاربر در پنل‌ها (uuid/password/آمار)
     let record: Record<string, unknown> = {};
@@ -216,8 +218,8 @@ async function bridgeClientList(reseller: ResellerWithInbounds) {
       totalGB: t.trafficGB > 0 ? gbToBytes(t.trafficGB) : 0,
       expiryTime: record.expiryTime ?? 0,
       enable: record.enable ?? true,
-      up,
-      down,
+      up: usage.get(t.email)?.upBytes ?? up,
+      down: usage.get(t.email)?.downBytes ?? down,
     };
   });
   return xui(true, "", obj);
@@ -367,6 +369,9 @@ async function bridgeGetClientTraffics(reseller: ResellerWithInbounds, email: st
     }
   }
 
+  // مصرف از تک‌منبع کانونی: برندهٔ هر پنل، جمع بین پنل‌ها (نه max سراسری)
+  const { canonicalUserUsage } = await import("@/lib/reseller-helpers");
+  const canon = canonicalUserUsage(panelResult.panels.map((b) => ({ panelId: b.panelId, inbounds: b.inbounds })), email);
   const obj = {
     id: live?.id || "",
     uuid: live?.id || "",
@@ -376,8 +381,8 @@ async function bridgeGetClientTraffics(reseller: ResellerWithInbounds, email: st
     subId: tracked.subId || live?.subId || "",
     limitIp: live?.limitIp ?? 0,
     total: stats?.total || (tracked.trafficGB > 0 ? gbToBytes(tracked.trafficGB) : 0),
-    up: stats?.up || 0,
-    down: stats?.down || 0,
+    up: canon.upBytes,
+    down: canon.downBytes,
     expiryTime: stats?.expiryTime || 0,
     enable: stats?.enable ?? live?.enable ?? true,
     inboundId,
@@ -496,23 +501,15 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
       : payload.trafficGB !== undefined
         ? Math.max(0, Number(payload.trafficGB) || 0)
         : tracked.trafficGB;
-  return withResellerLock(reseller.id, async () => {
-  // مانع تداخل با عملیات تخریبی فعال
-  if (await hasActiveOperation(reseller.id, email, ["DELETE", "RESET"])) {
-    return xui(false, "عملیات حذف/ریست دیگری برای این کاربر در جریان است");
-  }
-  const updateJournal = await db.operationJournal.create({
-    data: {
-      idempotencyKey: `bridge-update-op:${tracked.id}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
-      resellerId: reseller.id, userId: tracked.id, email, type: "UPDATE", status: "RUNNING",
-      targetPanels: "[]",
-      metadata: JSON.stringify({ oldTrafficGB: tracked.trafficGB, newTrafficGB: trafficGB }),
-    },
-  });
+  // سرویس مشترک UPDATE — resumable
   if (trafficGB !== tracked.trafficGB) {
-    const [allocatedGB, consumedGB] = await Promise.all([getAllocatedGB(reseller.id, tracked.id), getConsumedGB(reseller.id)]);
-    const pool = validatePoolAllocation(reseller.trafficPoolGB, allocatedGB, trafficGB, tracked.trafficGB, consumedGB);
-    if (!pool.ok) return xui(false, pool.msg);
+    // وضعیت مرجع سهمیه — همان قاعدهٔ داشبورد (رزروها لحاظ می‌شوند)
+    const quota = await getQuotaState(reseller.id, reseller);
+    const othersAllocated = quota.allocated - tracked.trafficGB;
+    const availableForThis = quota.pool - othersAllocated - quota.reserved - quota.consumed;
+    if (trafficGB > availableForThis) {
+      return xui(false, `پول ترافیک کافی نیست — باقیماندهٔ مؤثر: ${Math.max(0, Math.round(availableForThis * 100) / 100)} گیگ (شامل رزروهای فعال)`);
+    }
   }
 
   const expiryTime = payload.expiryTime !== undefined ? Math.max(0, Number(payload.expiryTime) || 0) : undefined;
@@ -525,7 +522,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   const panelResult = await getAllPanelInbounds();
   if (!panelResult.ok) return xui(false, panelResult.msg || "هیچ پنلی در دسترس نیست");
   const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
-  await db.operationJournal.update({ where: { id: updateJournal.id }, data: { targetPanels: JSON.stringify(refs.map((r) => r.panelId)) } });
+
   const errors: string[] = [];
   const donePanels = new Set<string>();
   for (const ref of refs) {
@@ -549,16 +546,19 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     });
     if (!upd.ok) errors.push(upd.msg || "ویرایش ناموفق");
   }
-  if (errors.length) {
-    await db.operationJournal.update({ where: { id: updateJournal.id }, data: { status: "PARTIAL", lastError: errors.join(" | ") } });
-    return xui(false, `ویرایش ناقص بود: ${errors.join(" | ")}`);
-  }
-
-  await db.operationJournal.update({ where: { id: updateJournal.id }, data: { status: "SUCCESS" } });
-  await db.resellerUser.update({
-    where: { id: tracked.id },
-    data: { trafficGB, ...(newSubId ? { subId: newSubId } : {}) },
-  });
+  const updateRes = await updateUserByJournal(
+    reseller.id,
+    email,
+    { trafficGB },
+    async () => errors,
+    async (tx) => {
+      await tx.resellerUser.update({
+        where: { id: tracked.id },
+        data: { trafficGB, ...(newSubId ? { subId: newSubId } : {}) },
+      });
+    }
+  );
+  if (!updateRes.ok) return xui(false, updateRes.msg);
   await logActivity({
     actorType: "RESELLER",
     actorName: reseller.username,
@@ -567,7 +567,6 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     resellerId: reseller.id,
   });
   return xui(true, "");
-  });
 }
 
 async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string) {

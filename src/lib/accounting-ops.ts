@@ -28,6 +28,31 @@ function classifyOpError(msg: string | undefined): PanelOpResult {
   return "FAILED";
 }
 
+export type QuotaState = {
+  pool: number; allocated: number; consumed: number; reserved: number;
+  remaining: number; unlimited: boolean;
+};
+
+/**
+ * وضعیت سهمیهٔ نماینده — تابع مرجع و واحد؛ همهٔ مسیرهای create/bulk/PUT/پل باید از همین استفاده کنند.
+ * remaining = pool − allocated − reserved − consumed (رزروهای CREATE فعال لحاظ می‌شوند)
+ */
+export async function getQuotaState(resellerId: string, reseller?: { trafficPoolGB: number }): Promise<QuotaState> {
+  const row = reseller ?? (await db.reseller.findUnique({ where: { id: resellerId }, select: { trafficPoolGB: true } }));
+  const pool = row?.trafficPoolGB ?? 0;
+  const { getAllocatedGB, getConsumedGB } = await import("./reseller-helpers");
+  const [allocated, consumed, reserved] = await Promise.all([
+    getAllocatedGB(resellerId),
+    getConsumedGB(resellerId),
+    getActiveReservationsGB(resellerId),
+  ]);
+  return {
+    pool, allocated, consumed, reserved,
+    unlimited: pool <= 0,
+    remaining: pool > 0 ? Math.max(0, pool - allocated - reserved - consumed) : 0,
+  };
+}
+
 /** رزروهای فعال سهمیه — باید در remaining لحاظ شوند (ضد بازیابی سهمیه از یتیم NEEDS_REPAIR) */
 export async function getActiveReservationsGB(resellerId: string): Promise<number> {
   const rows = await db.operationJournal.findMany({
@@ -277,5 +302,66 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     await db.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
     await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "ریست ترافیک کاربر", detail: `${email}${usageGB > 0 ? ` | مصرف قطعی: ${usageGB} گیگ` : ""}`, resellerId });
     return { ok: true, debitedGB: usageGB };
+  });
+}
+
+
+/**
+ * ویرایش کاربر — سرویس مشترک داشبورد و پل، ژورنال RESUMABLE:
+ * retry همان ژورنال PARTIAL را ادامه می‌دهد (RUNNING → SUCCESS)، هرگز ژورنال دوم نمی‌سازد.
+ * applyRemote: اجرای عملیات ریموت توسط route (منطق attach/detach خودش) — خروجی: لیست خطاها
+ * commitLocal: ثبت نهایی محلی (ResellerUser) توسط route
+ */
+export async function updateUserByJournal(
+  resellerId: string,
+  email: string,
+  desired: { trafficGB: number; note?: string },
+  applyRemote: () => Promise<string[]>,
+  commitLocal: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<void>
+): Promise<{ ok: true } | { ok: false; status: number; msg: string; partial?: boolean }> {
+  return withResellerLock(resellerId, async () => {
+    const loaded = await loadWithinLock(resellerId, email);
+    if ("err" in loaded) return loaded.err;
+
+    // مانع تداخل با DELETE/RESET فعال (UPDATE فعالِ خودش = resume)
+    const conflict = await assertNoConflictingOperation(resellerId, email, "UPDATE" as never);
+    if (conflict) return conflict;
+
+    // resume همان ژورنال یا ایجاد یکتا
+    let journal = await findResumableJournal(resellerId, email, "UPDATE");
+    if (!journal) {
+      const req = await getRequiredUserPanelIds(loaded.tracked);
+      journal = await db.operationJournal.create({
+        data: {
+          idempotencyKey: opKey("update", loaded.tracked.id),
+          resellerId, userId: loaded.tracked.id, email, type: "UPDATE", status: "RUNNING",
+          targetPanels: JSON.stringify(req.ok ? req.panelIds : []),
+          metadata: JSON.stringify({ newTrafficGB: desired.trafficGB, note: desired.note }),
+        },
+      });
+    } else {
+      // همان ژورنال: PARTIAL → RUNNING (ادامهٔ همان عملیات، نه عملیات جدید)
+      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null } });
+    }
+
+    const errors = await applyRemote();
+    if (errors.length > 0) {
+      await db.operationJournal.update({
+        where: { id: journal.id },
+        data: { status: "PARTIAL", lastError: errors.join(" | ") },
+      });
+      return { ok: false, status: 502, partial: true, msg: "ویرایش ناقص بود: " + errors.join(" | ") };
+    }
+
+    const jid = journal.id;
+    const jTargets = journal.targetPanels;
+    await db.$transaction(async (tx) => {
+      await commitLocal(tx);
+      await tx.operationJournal.update({
+        where: { id: jid },
+        data: { status: "SUCCESS", completedPanels: jTargets, failedPanels: "[]" },
+      });
+    });
+    return { ok: true };
   });
 }

@@ -177,45 +177,25 @@ export async function getRemainingGB(reseller: { id: string; trafficPoolGB: numb
 }
 
 /**
- * تجمیع کانونی مصرف یک کاربر از روی snapshot پنل‌ها — تنها مرجع محاسبه مصرف.
- * معناشناسی 3x-ui: شمارنده هر ایمیل در هر پنل یکتاست و در چند اینباندِ همان پنل تکرار نمایش داده می‌شود
- * ← داخل هر پنل بیشینه (up+down)، بین پنل‌ها جمع. همین منطق باید در UI، بدهکارسازی، هشدارها و پل استفاده شود.
+ * محاسبهٔ کانونی برای همهٔ ایمیل‌های snapshot — نسخهٔ bulk همان منطق تک‌منبع
+ * (برندهٔ هر پنل = رکورد با بیشینهٔ up+down؛ بین پنل‌ها جمع برنده‌ها)
  */
-export function canonicalUserUsageBytes(
-  panels: { panelId: string; inbounds: { clientStats: { email: string; up?: number; down?: number }[] }[] }[],
-  email: string
-): number {
-  let totalBytes = 0;
+export function canonicalUsageByEmail(
+  panels: { panelId: string; inbounds: { clientStats: { email: string; up?: number; down?: number }[] }[] }[]
+): Map<string, CanonicalUsage> {
+  const winners = new Map<string, { up: number; down: number }>();
   for (const bundle of panels) {
-    let panelBytes = 0;
     for (const inb of bundle.inbounds) {
-      const st = inb.clientStats.find((c) => c.email === email);
-      if (st) panelBytes = Math.max(panelBytes, (st.up || 0) + (st.down || 0));
+      for (const st of inb.clientStats) {
+        const cur = { up: st.up || 0, down: st.down || 0 };
+        const prev = winners.get(st.email);
+        if (!prev || cur.up + cur.down > prev.up + prev.down) winners.set(st.email, cur);
+      }
     }
-    totalBytes += panelBytes;
   }
-  return totalBytes;
-}
-
-/**
- * بدهکارسازی مصرف کاربر هنگام حذف/ریست — ضد دور زدن پول ترافیک.
- * <b>fail-closed</b>: اگر پنل‌ها قابل خواندن نباشند، عملیات تخریبی نباید ادامه یابد وگرنه
- * نماینده می‌تواند با قطعی پنل، سهمیه بازیابی کند. مصرف صفر خطا نیست (skip).
- */
-export async function debitUsedTraffic(
-  resellerId: string,
-  email: string
-): Promise<{ ok: true; debitedGB: number } | { ok: false; msg: string }> {
-  const { getAllPanelInbounds } = await import("./panel-manager");
-  const snapshot = await getAllPanelInbounds();
-  if (!snapshot.ok) {
-    return { ok: false, msg: snapshot.msg || "پنل‌ها در دسترس نیستند — برای جلوگیری از کاهش حساب، عملیات انجام نشد" };
-  }
-  const usedBytes = canonicalUserUsage(snapshot.panels, email).usedBytes;
-  const gb = Math.round((usedBytes / (1024 * 1024 * 1024)) * 10000) / 10000;
-  if (gb <= 0) return { ok: true, debitedGB: 0 };
-  await db.reseller.update({ where: { id: resellerId }, data: { consumedGB: { increment: gb } } });
-  return { ok: true, debitedGB: gb };
+  const out = new Map<string, CanonicalUsage>();
+  for (const [email, v] of winners) out.set(email, { upBytes: v.up, downBytes: v.down, usedBytes: v.up + v.down });
+  return out;
 }
 
 /**
