@@ -17,7 +17,7 @@ export async function GET() {
   const reseller = await getResellerWithAccess(session.uid);
   if (!reseller) return NextResponse.json({ error: "حساب شما فعال نیست" }, { status: 403 });
 
-  const panelResult = await getAllPanelInbounds(); // مسیر خواندنی — single-flight با بقیه صفحات
+  const panelResult = { ok: false, panels: [] as { panelId: string; panelName: string; inbounds: { id: number; tag: string; remark: string; protocol: string; port: number; clientStats: { email: string; up?: number; down?: number; total?: number; expiryTime?: number; enable?: boolean }[]; clients: unknown[] }[] }[], errors: [] as { panelId: string; panelName: string; msg: string }[] };
   const primaryPanel = await db.panelConfig.findFirst({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   const primaryPanelId = primaryPanel?.id || "";
   const allowed = new Set(reseller.inbounds.map((i) => refKey({ panelId: i.panelId, inboundId: i.inboundId })));
@@ -64,9 +64,9 @@ export async function GET() {
       inboundTags: tagsByEmail.get(email) || ["در پنل یافت نشد"],
       protocol: protoByEmail.get(email) || "-",
       totalGB: agg?.total ? bytesToGB(agg.total) : 0,
-      usedGB: bytesToGB(usage.get(email)?.usedBytes || 0),
-      expiryTime: agg?.expiryTime || 0,
-      enable: agg?.enable ?? false,
+      usedGB: 0, // live-users جدا آپدیت می‌کند
+      expiryTime: 0, // live-users جدا آپدیت می‌کند
+      enable: true, // live-users جدا آپدیت می‌کند
       subId: tracked.subId || null,
       subLink,
       trafficGB: tracked.trafficGB,
@@ -98,7 +98,7 @@ export async function GET() {
   return NextResponse.json({
     users: rows,
     inbounds,
-    panelError: panelResult.ok ? "" : panelResult.msg || "هیچ پنلی در دسترس نیست",
+    panelError: panelResult.ok ? "" : (panelResult as { msg?: string }).msg || "هیچ پنلی در دسترس نیست",
     panelErrors: panelResult.errors.length ? panelResult.errors : undefined,
     permissions: {
       multiLocation: reseller.multiLocation,

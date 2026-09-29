@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
-import { getAllPanelInbounds } from "@/lib/panel-manager";
+import { getAllPanelInboundsForUi } from "@/lib/panel-manager";
 
 export async function GET() {
   const admin = await requireAdmin();
@@ -11,7 +11,7 @@ export async function GET() {
     db.reseller.count(),
     db.resellerUser.count(),
     db.activityLog.count(),
-    getAllPanelInbounds().catch(() => ({ ok: false as const, msg: "پنل در دسترس نیست", panels: [], errors: [] })),
+    getAllPanelInboundsForUi().catch(() => ({ ok: false as const, msg: "پنل در دسترس نیست", panels: [], errors: [] })),
   ]);
 
   const activeResellers = await db.reseller.count({ where: { active: true } });

@@ -200,7 +200,7 @@ function OverviewTab({
     void load();
   }, [load]);
 
-  if (loading || !data) {
+  if (!data) {
     return (
       <div className="flex items-center justify-center gap-2 py-24 text-muted-foreground">
         <span className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />

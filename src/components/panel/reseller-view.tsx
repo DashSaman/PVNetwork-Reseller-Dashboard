@@ -112,6 +112,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   const [permissions, setPermissions] = useState<ResellerPermissions | null>(null);
   const [whitelabel, setWhitelabel] = useState<WhitelabelInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [liveLoaded, setLiveLoaded] = useState(false); // داده زنده آیکار می‌کند
   const [panelError, setPanelError] = useState("");
   const [stats, setStats] = useState<Record<string, number | boolean> | null>(null);
   const [charts, setCharts] = useState<StatsCharts | null>(null);
@@ -142,6 +143,24 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   useEffect(() => {
     void load();
   }, [load]);
+
+  // داده زندهٔ مصرف — async بعد از رندر اولیه (صفحه بلاک نمی‌شود)
+  useEffect(() => {
+    if (!users.length || liveLoaded) return;
+    let alive = true;
+    void (async () => {
+      const r = await api<{ users: { email: string; usedGB: number; totalGB: number; expiryTime: number; enable: boolean }[]; panelErrors?: { panelName: string; msg: string }[] }>("/api/reseller/live-users");
+      if (!alive || !r.ok || !r.data) return;
+      setUsers((prev) => prev.map((u) => {
+        const live = r.data!.users.find((l) => l.email === u.email);
+        return live ? { ...u, usedGB: live.usedGB, totalGB: live.totalGB || u.totalGB, expiryTime: live.expiryTime || u.expiryTime, enable: live.enable } : u;
+      }));
+      setLiveLoaded(true);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [users.length, liveLoaded]);
+
 
   // آمار و نمودارها فقط با باز شدن تب «آمار و مصرف» — صفحهٔ کاربران هرگز منتظر آن‌ها نمی‌ماند
   useEffect(() => {

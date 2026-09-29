@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { decryptSecret } from "./crypto";
-import { panelLogin, getInbounds, getOnlineEmails, getClientIps, getClientIpsLegacy, type PanelAuth, type PanelInbound } from "./panel";
+import { panelLogin, getInbounds, getOnlineEmails, getClientIps, getClientIpsLegacy, type PanelAuth, type PanelInbound, type PanelClientStat } from "./panel";
 import type { PanelConfig } from "@prisma/client";
 
 /**
@@ -133,6 +133,87 @@ async function getInboundsForPanel(p: PanelConfig): Promise<{ ok: boolean; data?
   const r = await getInbounds(conn.conn);
   return r.ok && r.data ? { ok: true, data: r.data } : { ok: false, msg: r.msg || "دریافت اینباندها ناموفق بود" };
 }
+
+/**
+ * خواندن پنل‌ها برای رابط کاربری (نمایش) — ددلاین کوتاه ۳ ثانیه، بدون retry.
+ * هر پنل مستقل با AbortSignal.timeout خودش قطع می‌شود؛ پنل کند → unavailable، بقیه سالم برمی‌گردند.
+ * هرگز برای عملیات تخریبی/حسابداری استفاده نشود — آن‌ها getAllPanelInboundsFresh می‌گیرند.
+ */
+export const UI_READ_TIMEOUT_MS = 3000;
+
+export async function getAllPanelInboundsForUi(): Promise<AllPanelsResult> {
+  const panels = (await getAllPanels()).filter((p) => p.active);
+  if (panels.length === 0) {
+    return { ok: false, msg: "هیچ پنل فعالی وجود ندارد", panels: [], errors: [] };
+  }
+  const tasks = panels.map(async (p) => {
+    try {
+      const conn = await getPanelConnection(p.id);
+      if (!conn.ok) return { p, ok: false, msg: conn.msg };
+      // fetch با ددلاین کوتاه UI — نه ۲۰ ثانیهٔ mutation
+      const r = await getInboundsWithTimeout(conn.conn, UI_READ_TIMEOUT_MS);
+      return r.ok && r.data
+        ? { p, ok: true, data: r.data }
+        : { p, ok: false, msg: r.msg || "timeout/failed" };
+    } catch {
+      return { p, ok: false, msg: "UI deadline exceeded" };
+    }
+  });
+  const settled = await Promise.allSettled(tasks);
+  const bundles: PanelBundle[] = [];
+  const errors: { panelId: string; panelName: string; msg: string }[] = [];
+  for (const item of settled) {
+    if (item.status === "fulfilled") {
+      const { p, ok, data, msg } = item.value;
+      if (ok && data) bundles.push({ panelId: p.id, panelName: p.name, inbounds: data });
+      else errors.push({ panelId: p.id, panelName: p.name, msg: msg || "unavailable" });
+    }
+  }
+  return {
+    ok: bundles.length > 0,
+    panels: bundles,
+    errors,
+    msg: bundles.length === 0 ? errors[0]?.msg : undefined,
+  };
+}
+
+async function getInboundsWithTimeout(
+  conn: PanelAuth,
+  timeoutMs: number
+): Promise<{ ok: boolean; data?: PanelInbound[]; msg?: string }> {
+  const { getInbounds } = await import("./panel");
+  try {
+    // ابزار کوتاه: fetch مستقیم با AbortSignal کوتاه — دور زدن timeout ۲۰s
+    const signal = AbortSignal.timeout(timeoutMs);
+    const base = normalize(conn.baseUrl);
+    const headers: Record<string, string> = { Accept: "application/json", "User-Agent": "PvNetWork/1.0-UI" };
+    if (conn.token) headers.Authorization = `Bearer ${conn.token}`;
+    else if (conn.cookie) { headers.Cookie = conn.cookie; if (conn.csrf) headers["X-CSRF-Token"] = conn.csrf; }
+    const res = await fetch(`${base}/panel/api/inbounds/list`, { headers, signal });
+    const j = (await res.json().catch(() => null)) as { success?: boolean; obj?: unknown } | null;
+    if (res.ok && j?.success && Array.isArray(j.obj)) {
+      // parse سبک — فقط آمار کلاینت‌ها لازم است برای UI
+      const list = j.obj as RawInboundLite[];
+      const inbounds: PanelInbound[] = list.map((raw) => ({
+        id: raw.id, port: raw.port, protocol: raw.protocol,
+        tag: raw.tag || `inbound-${raw.id}`, remark: raw.remark || raw.tag || `inbound-${raw.id}`,
+        up: raw.up || 0, down: raw.down || 0, total: raw.total || 0,
+        clients: [], clientStats: raw.clientStats || [], stream: null,
+      }));
+      return { ok: true, data: inbounds };
+    }
+    return { ok: false, msg: `UI read failed (HTTP ${res.status})` };
+  } catch (e) {
+    const msg = (e as Error).name === "TimeoutError" ? `UI deadline (${timeoutMs}ms) exceeded` : `UI read error: ${(e as Error).message}`;
+    return { ok: false, msg };
+  }
+}
+
+type RawInboundLite = {
+  id: number; port: number; protocol: string; tag?: string; remark?: string;
+  up?: number; down?: number; total?: number;
+  clientStats?: PanelClientStat[];
+};
 
 // ---- single-flight خواندنی: هم‌زمانی + TTL بسیار کوتاه — هرگز برای عملیات تخریبی/حسابداری ----
 type Flight = { at: number; promise: Promise<AllPanelsResult> };
