@@ -1,314 +1,184 @@
-# PVNetwork — Reseller Dashboard for 3x-ui
+# PVNetwork — Reseller Dashboard for 3x-ui | داشبورد نمایندگی PVNetwork
 
-> 🇮🇷 نسخه فارسی این مستند: [README.fa.md](README.fa.md)
+> 🇮🇷 [نسخهٔ فارسی](README.fa.md) | 🇬🇧 English
 
-PVNetwork is a self-hosted reseller dashboard for one or more existing 3x-ui servers. It gives the system owner a central admin panel for resellers, traffic pools, inbound permissions, users, white-label domains, 2FA, activity logs, subscription links, QR codes and related operations.
+[![Deploy](https://img.shields.io/badge/deploy-one%20line-10615b)](#-quick-start)
 
-![Dashboard overview](docs/screenshots/02-admin-overview.png)
+A self-hosted reseller dashboard for one or more existing 3x-ui servers — traffic pools, multi-panel management, Mirza bot sales, white-label branding, 2FA, subscription portal, and hardened accounting.
 
-> The default one-line installer is **dashboard-only**. It does not install 3x-ui, Xray, or Caddy, and it does not replace unrelated services already running on the server.
-
-## Quick start
-
-Run as `root` on Ubuntu or Debian:
+## ⚡ Quick Start
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
 ```
 
-The installer asks for the panel hostname, for example:
+That's it. The installer asks for your panel domain, handles Docker, Apache TLS, Let's Encrypt, and database setup — all in one command. Your existing 3x-ui servers, Xray, and other services are **never touched**.
+
+## 📸 Complete Visual Guide
+
+### 1. Login | ورود
+
+| | |
+|---|---|
+| ![Login](docs/screenshots/01-login.png) | **EN:** Secure login for admin and resellers. Supports 2FA (TOTP), rate limiting, and Persian RTL interface.<br>**FA:** ورود امن ادمین و نماینده‌ها با پشتیبانی از ورود دومرحله‌ای و رابط فارسی راست‌به‌چپ. |
+
+### 2. Admin Dashboard | داشبورد ادمین
+
+| | |
+|---|---|
+| ![Admin Overview](docs/screenshots/02-admin-overview.png) | **EN:** Main admin dashboard — reseller count, total users, traffic overview, 14-day user creation trend, traffic by location, and recent activity logs.<br>**FA:** داشبورد اصلی ادمین — تعداد نماینده‌ها، کاربران کل، نمای کلی ترافیک، روند ساخت کاربران و گزارش فعالیت‌ها. |
+
+### 3. Reseller Management | مدیریت نماینده‌ها
+
+| | |
+|---|---|
+| ![Resellers Tab](docs/screenshots/03-admin-resellers.png) | **EN:** Manage resellers — set traffic pools, allowed inbounds, permissions (multi-location, IP limit, white-label). Each reseller independently distributes their pool among users.<br>**FA:** مدیریت نماینده‌ها — تعیین پول ترافیک، اینباندهای مجاز و دسترسی‌ها. هر نماینده سهمیه‌اش را آزادانه بین کاربرانش تقسیم می‌کند. |
+
+| | |
+|---|---|
+| ![Reseller Edit](docs/screenshots/04-admin-reseller-edit.png) | **EN:** Edit reseller — traffic pool assignment with quick-pick presets, inbound permissions, and access toggles.<br>**FA:** ویرایش نماینده — تخصیص پول ترافیک با دکمه‌های سریع، دسترسی اینباند و کلیدهای کنترل. |
+
+### 4. Panel Configuration | تنظیمات پنل
+
+| | |
+|---|---|
+| ![Panels](docs/screenshots/05-admin-panels.png) | **EN:** Connect multiple 3x-ui panels — test connection, manage API tokens, subscription URLs. The first panel is the primary.<br>**FA:** اتصال چند پنل 3x-ui — تست اتصال، مدیریت API Token و آدرس سابسکریپشن. اولین پنل = پنل اصلی. |
+
+| | |
+|---|---|
+| ![Panels List](docs/screenshots/06-admin-panels-list.png) | **EN:** Connected panels list — each panel shows its URL, status, and inbound assignment count.<br>**FA:** لیست پنل‌های متصل — هر پنل با آدرس، وضعیت و تعداد اینباند اختصاص‌یافته. |
+
+### 5. Reports | گزارش‌ها
+
+| | |
+|---|---|
+| ![Reports](docs/screenshots/07-admin-reports.png) | **EN:** Activity logs — all admin and reseller operations are audited with timestamps.<br>**FA:** گزارش فعالیت‌ها — تمام عملیات ادمین و نماینده‌ها با زمان ثبت می‌شود. |
+
+### 6. Reseller — My Users | نماینده — کاربران من
+
+| | |
+|---|---|
+| ![Reseller Users](docs/screenshots/08-reseller-users.png) | **EN:** Reseller's main page — user list with canonical multi-panel traffic, quota remaining, online status. Create, edit, delete users. Fast bootstrap loading (one panel snapshot).<br>**FA:** صفحه اصلی نماینده — لیست کاربران با مصرف کانونی چندپنلی، باقیمانده پول و وضعیت آنلاین. ساخت، ویرایش و حذف کاربران. بارگذاری سریع (یک snapshot). |
+
+| | |
+|---|---|
+| ![Create User](docs/screenshots/10-reseller-create-user.png) | **EN:** Create user — mobile-friendly numeric input (accepts Persian digits), quick-pick GB presets (5-100), multi-location selection, expiry presets. Supports `Idempotency-Key` header for safe retries.<br>**FA:** ساخت کاربر — ورودی عددی موبایل‌پسند (ارقام فارسی)، دکمه‌های سریع گیگ، انتخاب لوکیشن و انقضا. با پشتیبانی از `Idempotency-Key` برای retry امن. |
+
+| | |
+|---|---|
+| ![Mobile Create](docs/screenshots/17-mobile-create-user-30-40gb.png) | **EN:** Mobile view — the create dialog works perfectly on phones. Persian digit input, 30/40 GB presets, and all controls are touch-friendly.<br>**FA:** نمای موبایل — دیالوگ ساخت کاربر روی گوشی کامل کار می‌کند. ارقام فارسی، پیشنهاد ۳۰/۴۰ گیگ و کنترل‌های لمسی. |
+
+### 7. Reseller — Stats & Usage | نماینده — آمار و مصرف
+
+| | |
+|---|---|
+| ![Stats](docs/screenshots/09-reseller-stats.png) | **EN:** Traffic statistics — usage by location, top users, traffic pool summary. Loaded lazily (only when this tab opens) for fast initial page load.<br>**FA:** آمار ترافیک — مصرف به تفکیک لوکیشن، کاربران برتر و خلاصه پول. بارگذاری تنبل (فقط با باز شدن تب) برای سرعت صفحه اول. |
+
+### 8. Reseller — Links & QR | نماینده — لینک‌ها
+
+| | |
+|---|---|
+| ![Links](docs/screenshots/11-reseller-links.png) | **EN:** User subscription links — copy, QR code, V2Ray config links for each location.<br>**FA:** لینک‌های اشتراک کاربر — کپی، QR کد و لینک‌های V2Ray برای هر لوکیشن. |
+
+### 9. Reseller — Brand & Domain | نماینده — برند و دامنه
+
+| | |
+|---|---|
+| ![Brand](docs/screenshots/13-reseller-brand.png) | **EN:** White-label branding — custom brand name, custom subscription domain with DNS verification.<br>**FA:** برند اختصاصی — نام برند سفارشی، دامنه اختصاصی سابسکریپشن با تأیید DNS. |
+
+### 10. Reseller — Account Settings | نماینده — تنظیمات حساب
+
+| | |
+|---|---|
+| ![Account](docs/screenshots/12-reseller-account.png) | **EN:** Account settings — change password, enable 2FA (TOTP), Telegram notifications.<br>**FA:** تنظیمات حساب — تغییر رمز، ورود دومرحله‌ای، اعلان‌های تلگرام. |
+
+### 11. Mirza Bot Connection | اتصال ربات میرزا
+
+| | |
+|---|---|
+| ![Mirza Bot](docs/screenshots/18-reseller-mirza-bot.png) | **EN:** Connect your Mirza bot — enable the switch, copy the panel URL and credentials, enter the inbound ID from the self-test. Full visual guide at `/guide/mirza-bot`.<br>**FA:** ربات خود را وصل کنید — سوییچ را روشن کنید، آدرس و مشخصات را کپی کنید و شناسه اینباند را از تست اتصال بگیرید. راهنمای کامل در `/guide/mirza-bot`. |
+
+| | |
+|---|---|
+| ![Bridge](docs/screenshots/19-mirza-card-bridge.png) | **EN:** Bridge connection details — the green box shows the panel URL, username, and password hint. The "Test Connection" button verifies inbound access.<br>**FA:** جزئیات اتصال پل — جعبه سبز شامل آدرس پنل، نام کاربری و راهنمای رمز. دکمه «تست اتصال ربات» دسترسی اینباند را بررسی می‌کند. |
+
+### 12. Public Subscription Portal | پرتال عمومی اشتراک
+
+| | |
+|---|---|
+| ![Portal](docs/screenshots/14-public-portal.png) | **EN:** End-user portal — subscription status, remaining traffic, expiry date, and all connection links. Accessible via `https://your-domain/sub/<subId>`.<br>**FA:** پرتال کاربر نهایی — وضعیت اشتراک، ترافیک باقیمانده، تاریخ انقضا و لینک‌های اتصال. با آدرس `https://your-domain/sub/<subId>`. |
+
+| | |
+|---|---|
+| ![Apps](docs/screenshots/15-public-apps.png) | **EN:** App recommendations — suggested V2Ray/Clash clients for each platform.<br>**FA:** اپ‌های پیشنهادی — کلاینت‌های V2Ray/Clash برای هر پلتفرم. |
+
+## 🔗 Mirza Bot Setup (Step by Step)
+
+Full visual walkthrough: [docs/guide-mirza-bot.fa.md](docs/guide-mirza-bot.fa.md) — or open `/guide/mirza-bot` on your dashboard.
+
+| Step | Action |
+|---|---|
+| 1 | Settings → "ربات میرزا پنل" → enable switch → Save |
+| 2 | Copy Panel URL, Username, Password from the green box |
+| 3 | In your Mirza bot: Panels → Add Panel → Type: `x-ui` |
+| 4 | Paste URL, username, password |
+| 5 | Click "تست اتصال ربات" — copy the inbound ID shown |
+| 6 | Enter that ID in the bot's `inboundid` field |
+| 7 | Set `linksubx` to your 3x-ui subscription URL |
+| 8 | Save — sales now go through your panel |
+
+## 🛡️ Security & Accounting
+
+| Feature | Status |
+|---|---|
+| Limited reseller → unlimited user | ✅ Impossible |
+| Traffic pool bypass (delete/reset/recreate) | ✅ Blocked (permanent debit) |
+| Concurrent quota overspend | ✅ Atomic lock |
+| Multi-panel partial failure | ✅ Operation journal + retry |
+| Crash-safe accounting | ✅ Single transaction commit |
+| CREATE idempotency | ✅ `Idempotency-Key` header |
+| UPDATE delta reservation | ✅ Durably reserved |
+| Canonical traffic (multi-panel) | ✅ Single source |
+| subId collision | ✅ Unique index |
+| Unsafe reseller deletion | ✅ 409 when users exist |
+| Admin pool below obligations | ✅ 409 + explicit override |
+
+## 🏗️ Architecture
 
 ```text
-npanel.example.com
+Browser / Cloudflare → Apache :443 → Docker (127.0.0.1:31080) → external 3x-ui panels
+                                                            ↘ SQLite (volume-mounted)
 ```
 
-and optionally the admin username. It then:
-
-- checks the target port and existing installation state before destructive changes;
-- installs only missing host dependencies;
-- reuses an existing working Docker installation, or installs Docker if it is absent;
-- clones the application to `/opt/pv-reseller/app`;
-- stores persistent SQLite data in `/opt/pv-reseller/data`;
-- stores backups in `/opt/pv-reseller/backup`;
-- creates one Docker container named `pv-reseller-dashboard`;
-- publishes the app only on `127.0.0.1:31080`;
-- reuses Apache when it already exists, or installs Apache when it is absent;
-- adds a dedicated Apache vhost without disabling unrelated vhosts;
-- obtains a Let's Encrypt certificate with Certbot webroot validation;
-- redirects HTTP to HTTPS after keeping the ACME challenge path reachable;
-- verifies local HTTP, origin HTTPS and API health before reporting completion.
-
-No Docker Compose plugin is required.
-
-## Requirements
-
-- Ubuntu or Debian
-- root access
-- at least 4 GiB free disk space for the first image build
-- a hostname such as `npanel.example.com`
-- DNS for that hostname must reach this server, directly or through Cloudflare
-- ports 80 and 443 must be available to Apache, or already be owned by the existing Apache service
-
-The application itself is not published directly to the Internet. Docker binds only:
+## 📦 Install Layout
 
 ```text
-127.0.0.1:31080 -> pv-reseller-dashboard:3000
+/opt/pv-reseller/
+├── app/          # Git checkout
+├── data/custom.db
+├── backup/
+├── .env
+└── INITIAL_CREDENTIALS.txt
 ```
 
-Apache is the public HTTPS entry point.
-
-## Architecture
-
-```text
-Browser / Cloudflare
-        |
-        v
-   Apache :80/:443
-        |
-        v
- 127.0.0.1:31080
-        |
-        v
- pv-reseller-dashboard
-        |
-        +---- API ----> existing external 3x-ui server(s)
-        |
-        +---- SQLite --> /opt/pv-reseller/data/custom.db
-```
-
-The dashboard does not manage the lifecycle of your 3x-ui/Xray servers. Add them from the dashboard after installation.
-
-## Cloudflare
-
-Cloudflare proxying is supported and no Cloudflare API token is required by the installer.
-
-Recommended settings for the dashboard hostname after origin HTTPS is healthy:
-
-- Proxy status: **Proxied** (orange cloud)
-- SSL/TLS encryption mode: **Full (strict)**
-- Always Use HTTPS: On
-- Cache rule for the dashboard hostname: **Bypass cache**
-- Rocket Loader: Off for this hostname if it interferes with dashboard JavaScript
-
-If certificate issuance fails while the hostname is proxied, verify that HTTP requests to `/.well-known/acme-challenge/` can reach the origin. A Cloudflare configuration that redirects the ACME request into an unavailable strict-HTTPS origin can block HTTP-01 validation.
-
-## First-login credentials
-
-On first install the script generates a cryptographically random `APP_SECRET` and admin password.
-
-They are stored in:
-
-```text
-/opt/pv-reseller/.env
-```
-
-with mode `0600`. The initial credential is also recorded in:
-
-```text
-/opt/pv-reseller/INITIAL_CREDENTIALS.txt
-```
-
-That file is historical only. If the admin password is later changed inside the dashboard, the current UI password is **not** written back into `INITIAL_CREDENTIALS.txt` or `.env`.
-
-## Update
-
-Re-run the same one-line installer:
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
-```
-
-or, from an existing installation:
+## 🔄 Update
 
 ```bash
 bash /opt/pv-reseller/app/update.sh
 ```
 
-An update preserves:
+Safe: backup → additive migration → candidate build → health check → swap. Auto-rollback on failure.
 
-- `/opt/pv-reseller/.env`
-- `APP_SECRET`
-- the initial installer password value
-- the SQLite database
-- the selected panel domain and app port
+## 📋 Requirements
 
-Before replacing the running dashboard, the installer backs up the database and installer configuration. It then applies **additive-only schema migrations** to the SQLite database (new columns are added; no data is ever dropped or rewritten), builds the candidate image while the current container is still running, and replaces only `pv-reseller-dashboard`. If the new container fails local health checks and a previous image exists, the installer restores the previous dashboard image.
+- Ubuntu/Debian, root access, 4 GiB free disk
+- Domain with DNS pointing to your server
+- Ports 80/443 available
 
-Migrations are versioned inside `install.sh` (`migrate_database`); each new deployment adds only the columns it needs and skips the ones that already exist.
+---
 
-It does not restart unrelated Docker containers, Xray, 3x-ui, databases, or VPN services.
+<div align="center">
 
-## Backup and rollback
+**PvNetWork** © 2026 — [npanel.softarg.ir](https://npanel.softarg.ir)
 
-Backups are created under:
-
-```text
-/opt/pv-reseller/backup/YYYYMMDD-HHMMSS/
-```
-
-They can contain:
-
-- `custom.db`
-- `.env`
-- `.installer-env`
-- the dashboard Apache vhost files
-
-To restore a database manually, stop only the dashboard container, replace `/opt/pv-reseller/data/custom.db` with the desired backup, and start/recreate the dashboard container with the same `.env` and loopback binding.
-
-## Connect an external 3x-ui server
-
-After logging in to the dashboard:
-
-1. Open **Settings / Panels**.
-2. Choose **Add panel**.
-3. Enter a display name for the server.
-4. Enter the complete existing 3x-ui web address, including its base path when one is configured.
-5. Enter either the 3x-ui API token or its administrator username/password.
-6. Optionally set the subscription base URL and subscription path.
-7. Run **Test connection**.
-8. Save the panel.
-9. Open **Resellers** and create/edit a reseller. The inbound list is refreshed when the Resellers tab is opened, so newly connected panel inbounds are available without requiring a manual dashboard refresh.
-
-Multiple external 3x-ui servers can be added. The API endpoint `/api/admin/inbounds` aggregates their inbounds and the reseller dialog groups them by panel.
-
-## Main features
-
-- multiple 3x-ui panels
-- inbound permissions per reseller
-- reseller traffic pools
-- multi-location user creation
-- mobile-friendly numeric inputs: the traffic (GB), count and device fields accept Persian/Latin digits, can be freely cleared and retyped on phone keyboards, and offer quick-pick presets (5, 10, 15, 20, **30, 40**, 50, 100 GB)
-- white-label brand and domain settings
-- end-user subscription portal and QR codes
-- bulk user creation
-- traffic and expiry visibility
-- CSV export
-- reseller Telegram notifications
-- reseller **Mirza Panel bot** connection with two capabilities:
-
-- notifications: resellers can attach their own Telegram bot (for example the bot they run through the Mirza panel service) as a second notification channel with the same events — user created, usage ≥ 80%, upcoming expiry
-- direct selling through a **3x-ui-compatible bridge**: the reseller's Mirza bot connects to this dashboard exactly like it connects to a 3x-ui panel (panel URL + dashboard username/password). The bot is limited to the reseller's assigned inbounds and traffic pool, and every creation/deletion/reset goes through the same dashboard rules. Tested against the [botmirzapanel](https://github.com/mahdiMGF2/botmirzapanel) x-ui_single flow (login, addClient with settings body, getClientTraffics, updateClient, resetClientTraffic, delClientByEmail); in the bot's panel config the reseller enters the bridge URL, dashboard credentials, the inbound ID shown by the dashboard self-test, and the subscription base as `linksubx`.
-
-- anti-abuse traffic accounting: deleting or traffic-resetting a user records its consumed bytes as a permanent deduction from the reseller's pool, so resellers cannot recycle the pool by recreating users
-- admin and reseller TOTP 2FA
-- login rate limiting
-- activity logs
-
-### Mobile user creation and quick picks
-
-![Mobile create-user dialog with 30/40 GB presets](docs/screenshots/17-mobile-create-user-30-40gb.png)
-
-### Mirza Panel bot step-by-step guide (Persian)
-
-A full visual walkthrough for connecting the Mirza bot — including the bot field mapping table — lives at [docs/guide-mirza-bot.fa.md](docs/guide-mirza-bot.fa.md). Resellers also get the same guide inside the dashboard at `/guide/mirza-bot` (linked from the bot settings card).
-
-### Mirza Panel bot in reseller settings
-
-![Mirza Panel bot settings card](docs/screenshots/18-reseller-mirza-bot.png)
-
-## Install layout
-
-```text
-/opt/pv-reseller/
-├── app/                    # Git checkout
-├── data/
-│   └── custom.db           # persistent SQLite database
-├── backup/                 # timestamped update backups
-├── .env                    # APP_SECRET/admin bootstrap values (0600)
-├── .installer-env          # non-secret installer metadata
-└── INITIAL_CREDENTIALS.txt # first-install record (0600)
-```
-
-Docker resources created by the default installer:
-
-```text
-container: pv-reseller-dashboard
-network:   pv_reseller_net
-image:     pv-reseller-dashboard:local
-bind:      127.0.0.1:31080:3000
-```
-
-## Non-interactive install
-
-For automation, provide values as environment variables:
-
-```bash
-PANEL_DOMAIN=npanel.example.com \
-ADMIN_USERNAME=admin \
-APP_PORT=31080 \
-bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
-```
-
-Supported installer overrides:
-
-| Variable | Default | Meaning |
-|---|---:|---|
-| `PANEL_DOMAIN` | prompted | public dashboard hostname |
-| `ADMIN_USERNAME` | `admin` | initial admin username on first install |
-| `APP_PORT` | `31080` | loopback-only Docker host port |
-| `INSTALL_DIR` | `/opt/pv-reseller` | installation root |
-
-## Application environment
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `DATABASE_URL` | `file:/app/data/custom.db` | SQLite database inside the container |
-| `APP_SECRET` | generated | session/secret encryption key |
-| `ADMIN_USERNAME` | `admin` | bootstrap admin username |
-| `ADMIN_PASSWORD` | generated | bootstrap password used only when the first admin row is created |
-| `PORT` | `3000` | internal Next.js port |
-
-## Troubleshooting
-
-### Dashboard is healthy locally but public URL fails
-
-Check:
-
-```bash
-curl -I http://127.0.0.1:31080/
-apache2ctl configtest
-curl -I https://your-panel-hostname.example/
-```
-
-Also verify DNS and Cloudflare SSL mode.
-
-### Panel connection succeeds but inbounds are not shown for resellers
-
-Open the **Resellers** tab again. Current versions refresh `/api/admin/inbounds` whenever that tab is entered. If the list is still empty, test the saved 3x-ui panel from **Settings / Panels** and check the dashboard container logs.
-
-### Existing port conflict
-
-The installer refuses to kill the owner of `APP_PORT`. Choose another loopback port instead:
-
-```bash
-APP_PORT=31081 bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller-Dashboard/main/install.sh)
-```
-
-### Logs
-
-```bash
-docker logs -f pv-reseller-dashboard
-```
-
-## Legacy full-stack installer
-
-The old installer that provisioned Caddy, a local 3x-ui/Xray instance and related resources is preserved only for historical/manual use at:
-
-```text
-scripts/install-full-stack-legacy.sh
-```
-
-It is **not** the recommended installer for a server that already has infrastructure and is not used by the one-line command above.
-
-## Development
-
-The production image is built from `docker/Dockerfile` using Bun for dependency/build stages and Node.js for the standalone runtime. Prisma uses SQLite for dashboard state.
-
-Useful checks before release:
-
-```bash
-bash scripts/test-dashboard-installer.sh
-node scripts/test-inbound-refresh.mjs
-bash -n install.sh
-bash -n update.sh
-```
+</div>

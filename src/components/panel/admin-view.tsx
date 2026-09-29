@@ -79,7 +79,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 export function AdminView({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [inbounds, setInbounds] = useState<InboundInfo[]>([]);
-  const [panelConnected, setPanelConnected] = useState(false);
+  const [panelConnected, setPanelConnected] = useState<boolean | null>(null); // null = هنوز بررسی نشده
   const [brand, setBrand] = useState("PvNetwork");
 
   useEffect(() => {
@@ -98,9 +98,8 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
     }
   }, []);
 
-  useEffect(() => {
-    void loadInbounds();
-  }, [loadInbounds]);
+  // درخواست‌های اینباند فقط با باز شدن تب‌های مربوطه — نه در صفحهٔ اول
+  // (tab-change handler در line ~151 loadInbounds را صدا می‌زند)
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
@@ -183,7 +182,7 @@ function OverviewTab({
   reloadInbounds,
 }: {
   inbounds: InboundInfo[];
-  panelConnected: boolean;
+  panelConnected: boolean | null;
   reloadInbounds: () => void;
 }) {
   const [data, setData] = useState<OverviewData | null>(null);
@@ -397,7 +396,7 @@ function OverviewTab({
           </div>
           {inbounds.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">
-              {panelConnected ? "پنل فاقد اینباند است." : "پنل متصل نیست — از تب «اتصال پنل» تنظیم کنید."}
+              {panelConnected === null ? "برای مشاهدهٔ جزئیات اینباندها، تب «نماینده‌ها» را باز کنید." : panelConnected ? "پنل فاقد اینباند است." : "پنل متصل نیست — از تب «اتصال پنل» تنظیم کنید."}
             </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-64 overflow-y-auto">

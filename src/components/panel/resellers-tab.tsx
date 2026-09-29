@@ -63,7 +63,7 @@ function refKey(r: InboundRefForm): string {
   return `${r.panelId}::${r.inboundId}`;
 }
 
-export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundInfo[]; panelConnected: boolean }) {
+export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundInfo[]; panelConnected: boolean | null }) {
   const [resellers, setResellers] = useState<ResellerInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
