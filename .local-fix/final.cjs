@@ -1,47 +1,14 @@
-"use client";
+// Final hotfix — one-pass complete fix
+const fs = require("fs");
+const p = "src/components/panel/admin-view.tsx";
+let s = fs.readFileSync(p, "utf8");
 
-import { useCallback, useEffect, useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { toast } from "@/hooks/use-toast";
-import { api, StatCard, faDate, gbLabel, formatUsageGB, faNum, PvLogo } from "./shared";
-import { ResellersTab } from "./resellers-tab";
-import { PanelSettingsTab, LogsTab } from "./settings-logs";
-import { ThemeToggle } from "./theme";
-import type { InboundInfo, ActivityLogRow, Session } from "./types";
-import {
-  LayoutDashboard,
-  Users,
-  Plug,
-  History,
-  LogOut,
-  Server,
-  UserCheck,
-  ArrowUpDown,
-  ShieldCheck,
-  Globe,
-  TrendingUp,
-  Loader2,
-} from "lucide-react";
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from "recharts";
+// ============ 1) TYPE FIX ============
+const t1 = s.indexOf("type OverviewData");
+const t2 = s.indexOf("const CHART_COLORS");
+if (t1 < 0 || t2 < 0) { console.error("type markers not found"); process.exit(1); }
 
-type Tab = "overview" | "resellers" | "settings" | "logs";
-
-type OverviewData = {
+const newTypes = `type OverviewData = {
   stats: {
     resellers: number;
     activeResellers: number;
@@ -72,126 +39,22 @@ type PanelSummaryData = {
   latencyMs: number | null;
 };
 
-const CHART_COLORS = ["#0f9e99", "#f37021", "#6366f1", "#f59e0b", "#8b5cf6", "#14b8a6", "#fb7185", "#84cc16"];
+`;
 
-/** تول‌تیپ سفارشی نمودارها */
-function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name?: string; value?: number | string; color?: string }>; label?: string }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div dir="rtl" className="rounded-lg border border-border bg-popover/95 backdrop-blur px-3 py-2 shadow-lg text-xs space-y-1">
-      {label !== undefined && <div className="font-bold text-foreground">{label}</div>}
-      {payload.map((p, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: p.color }} />
-          <span className="text-muted-foreground">{p.name}:</span>
-          <span className="font-bold">{typeof p.value === "number" ? faNum(Math.round(p.value * 100) / 100) : p.value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
+s = s.slice(0, t1) + newTypes + s.slice(t2);
 
-export function AdminView({ session, onLogout }: { session: Session; onLogout: () => void }) {
-  const [tab, setTab] = useState<Tab>("overview");
-  const [inbounds, setInbounds] = useState<InboundInfo[]>([]);
-  const [panelConnected, setPanelConnected] = useState<boolean | null>(null); // null = هنوز بررسی نشده
-  const [brand, setBrand] = useState("PvNetwork");
+// ============ 2) IMPORTS ============
+s = s.replace(
+  'import { api, StatCard, faDate, gbLabel, faNum, PvLogo } from "./shared";',
+  'import { api, StatCard, faDate, gbLabel, formatUsageGB, faNum, PvLogo } from "./shared";'
+);
+s = s.replace('} from "lucide-react";', '  Loader2,\n} from "lucide-react";');
 
-  useEffect(() => {
-    api<{ brand: string }>("/api/public/brand").then((r) => {
-      if (r.ok && r.data?.brand) setBrand(r.data.brand);
-    });
-  }, []);
+// ============ 3) REPLACE OverviewTab function entirely ============
+const fnStart = s.indexOf("function OverviewTab(");
+if (fnStart < 0) { console.error("OverviewTab not found"); process.exit(1); }
 
-  const loadInbounds = useCallback(async () => {
-    const r = await api<{ inbounds: InboundInfo[] }>("/api/admin/inbounds");
-    if (r.ok && r.data) {
-      setInbounds(r.data.inbounds);
-      setPanelConnected(true);
-    } else {
-      setPanelConnected(false);
-    }
-  }, []);
-
-  // درخواست‌های اینباند فقط با باز شدن تب‌های مربوطه — نه در صفحهٔ اول
-  // (tab-change handler در line ~151 loadInbounds را صدا می‌زند)
-
-  async function logout() {
-    await api("/api/auth/logout", { method: "POST" });
-    onLogout();
-  }
-
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "overview", label: "داشبورد", icon: <LayoutDashboard className="h-4 w-4" /> },
-    { id: "resellers", label: "نماینده‌ها", icon: <Users className="h-4 w-4" /> },
-    { id: "settings", label: "تنظیمات و پنل‌ها", icon: <Plug className="h-4 w-4" /> },
-    { id: "logs", label: "گزارش‌ها", icon: <History className="h-4 w-4" /> },
-  ];
-
-  return (
-    <div className="min-h-screen flex flex-col">
-      {/* هدر */}
-      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur">
-        <div className="mx-auto max-w-7xl px-4 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <PvLogo size={38} />
-            <div className="leading-tight">
-              <div className="text-sm font-extrabold">
-                سامانه نمایندگی <span className="brand-gradient-text">{brand}</span>
-              </div>
-              <div className="text-[10px] text-muted-foreground">مدیریت کل سامانه</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden sm:inline text-xs text-muted-foreground">
-              ادمین: <span dir="ltr" className="font-semibold">{session.username}</span>
-            </span>
-            <ThemeToggle />
-            <Button size="sm" variant="outline" onClick={logout} className="hover:border-red-300 hover:text-red-500">
-              <LogOut className="h-4 w-4" /> خروج
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      {/* تب‌ها */}
-      <nav className="border-b border-border/60 bg-background/60">
-        <div className="mx-auto max-w-7xl px-4 flex gap-1 overflow-x-auto">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => {
-                setTab(t.id);
-                if (t.id === "resellers") void loadInbounds();
-              }}
-              className={`flex items-center gap-2 px-4 py-3 text-sm whitespace-nowrap border-b-2 font-medium transition-colors ${
-                tab === t.id
-                  ? "border-[var(--brand)] text-[var(--brand-deep)]"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t.icon}
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </nav>
-
-      <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6">
-        {tab === "overview" && <OverviewTab inbounds={inbounds} panelConnected={panelConnected} reloadInbounds={loadInbounds} />}
-        {tab === "resellers" && <ResellersTab inbounds={inbounds} panelConnected={panelConnected} />}
-        {tab === "settings" && <PanelSettingsTab />}
-        {tab === "logs" && <LogsTab />}
-      </main>
-
-      <footer className="border-t border-border/60 py-4 text-center text-xs text-muted-foreground mt-auto bg-background/50">
-        سامانه نمایندگی {brand} — مدیریت نماینده‌ها، کاربران و دسترسی‌ها
-      </footer>
-    </div>
-  );
-}
-
-function OverviewTab({
+const newFn = `function OverviewTab({
   inbounds,
   panelConnected,
   reloadInbounds,
@@ -246,7 +109,7 @@ function OverviewTab({
     : panelState === "OFFLINE" ? "tone-danger"
     : "";
   const panelStateText =
-    panelState === "ONLINE" ? (panel && panel.panelsCount > 1 ? `${faNum(panel.panelsCount)} پنل ثنایی متصل است` : "پنل ثنایی متصل است")
+    panelState === "ONLINE" ? (panel && panel.panelsCount > 1 ? \`\${faNum(panel.panelsCount)} پنل ثنایی متصل است\` : "پنل ثنایی متصل است")
     : panelState === "DEGRADED" ? "دریافت وضعیت زنده پنل با اختلال موقت مواجه است"
     : panelState === "OFFLINE" ? "پنل تنظیم شده است اما در حال حاضر پاسخ نمی‌دهد"
     : panelState === "NOT_CONFIGURED" ? "هیچ پنل فعالی تنظیم نشده است"
@@ -255,21 +118,21 @@ function OverviewTab({
   return (
     <div className="space-y-6">
       {/* وضعیت پنل — health state صریح */}
-      <Card className={`border card-soft ${panelStateColor}`}>
+      <Card className={\`border card-soft \${panelStateColor}\`}>
         <CardContent className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="h-11 w-11 rounded-xl flex items-center justify-center bg-black/5 dark:bg-white/5">
               {panelLoading ? (
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               ) : (
-                <Server className={`h-5 w-5 ${panelState === "ONLINE" ? "text-emerald-600 dark:text-emerald-400" : panelState === "DEGRADED" ? "text-amber-500" : panelState === "NOT_CONFIGURED" ? "text-muted-foreground" : "text-red-500 dark:text-red-400"}`} />
+                <Server className={\`h-5 w-5 \${panelState === "ONLINE" ? "text-emerald-600 dark:text-emerald-400" : panelState === "DEGRADED" ? "text-amber-500" : panelState === "NOT_CONFIGURED" ? "text-muted-foreground" : "text-red-500 dark:text-red-400"}\`} />
               )}
             </div>
             <div>
               <div className="font-bold">{panelStateText}</div>
               <div className="text-xs text-muted-foreground">
                 {panelLoading ? "در حال دریافت وضعیت زنده..."
-                : panelState === "ONLINE" && panel ? `${faNum(panel.inbounds)} اینباند · ${faNum(panel.clients)} کلاینت`
+                : panelState === "ONLINE" && panel ? \`\${faNum(panel.inbounds)} اینباند · \${faNum(panel.clients)} کلاینت\`
                 : panelState === "DEGRADED" ? "آخرین وضعیت موفق حفظ شده — در حال تلاش مجدد"
                 : panelState === "NOT_CONFIGURED" ? "از تب تنظیمات یک پنل اضافه کنید"
                 : "مهلت دریافت اطلاعات زنده تمام شد"}
@@ -284,7 +147,7 @@ function OverviewTab({
 
       {/* آمار */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="نماینده‌ها" value={faNum(stats.resellers)} sub={`فعال: ${faNum(stats.activeResellers)}`} icon={<Users className="h-4 w-4" />} tone="brand" />
+        <StatCard title="نماینده‌ها" value={faNum(stats.resellers)} sub={\`فعال: \${faNum(stats.activeResellers)}\`} icon={<Users className="h-4 w-4" />} tone="brand" />
         <StatCard title="کل کاربران نماینده‌ها" value={faNum(stats.users)} icon={<UserCheck className="h-4 w-4" />} tone="orange" />
         <StatCard
           title="ترافیک کل (آپلود)"
@@ -457,7 +320,7 @@ function OverviewTab({
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-64 overflow-y-auto">
               {inbounds.map((i, idx) => (
-                <div key={`${i.panelId}-${i.inboundId}-${idx}`} className="rounded-xl border border-border p-3 hover:border-[var(--brand)]/40 transition-colors bg-card">
+                <div key={\`\${i.panelId}-\${i.inboundId}-\${idx}\`} className="rounded-xl border border-border p-3 hover:border-[var(--brand)]/40 transition-colors bg-card">
                   <div className="text-sm font-semibold truncate" dir="ltr">{i.remark || i.tag}</div>
                   <div className="text-xs text-muted-foreground mt-1" dir="ltr">
                     {i.protocol} : {i.port} · {faNum(i.clientsCount ?? 0)} کاربر
@@ -490,3 +353,11 @@ function OverviewTab({
     </div>
   );
 }
+`;
+
+s = s.slice(0, fnStart) + newFn;
+fs.writeFileSync(p, s, "utf8");
+console.log("COMPLETE FIX APPLIED");
+console.log("has stats.panel:", s.includes("stats.panel."));
+console.log("has panelSummary:", s.includes("panelSummary"));
+console.log("has formatUsageGB:", s.includes("formatUsageGB"));
