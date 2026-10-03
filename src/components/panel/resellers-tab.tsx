@@ -192,7 +192,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
             مدیریت نماینده‌ها
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            به هر نماینده پول ترافیک بدهید — خودش آزادانه بین کاربرانش تقسیم می‌کند.
+            به هر نماینده پول ترافیک بدهید — خودش آزادانه بین کاربرانش تقسیم می‌کند. اگر ستون پول ترافیک را نمی‌بینید، صفحه را با Ctrl+Shift+R بازخوانی کنید.
           </p>
         </div>
         <Button onClick={openCreate} className="brand-gradient text-white hover:opacity-90 font-bold">
