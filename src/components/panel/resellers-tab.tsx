@@ -254,21 +254,59 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                           </div>
                         </TableCell>
                         <TableCell className="hidden lg:table-cell">
-                          <div className="space-y-1 min-w-32">
-                            <div className="text-xs text-muted-foreground" dir="ltr">
-                              {r.trafficPoolGB > 0 ? `${faNum(r.allocatedGB)} / ${faNum(r.trafficPoolGB)} GB` : "نامحدود"}
-                            </div>
-                            {r.trafficPoolGB > 0 && (
-                              <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden" dir="ltr">
-                                <div
-                                  className={`h-full rounded-full ${pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-[var(--brand)]"}`}
-                                  style={{ width: `${Math.max(3, pct)}%` }}
-                                />
+                          <div className="space-y-1.5 min-w-40">
+                            {r.trafficPoolGB > 0 ? (
+                              <>
+                                <div className="text-xs font-bold" dir="ltr">
+                                  {faNum(r.trafficPoolGB)} GB کل
+                                </div>
+                                {/* Progress bar: allocated + consumed */}
+                                <div className="h-2 w-full rounded-full bg-muted overflow-hidden flex" dir="ltr">
+                                  <div
+                                    className="h-full bg-[var(--brand)] transition-all"
+                                    style={{ width: `${Math.max(0, Math.min(100, (r.allocatedGB / r.trafficPoolGB) * 100))}%` }}
+                                  />
+                                  <div
+                                    className="h-full bg-amber-500 transition-all"
+                                    style={{ width: `${Math.max(0, Math.min(100, (r.consumedGB / r.trafficPoolGB) * 100))}%` }}
+                                  />
+                                </div>
+                                <div className="grid grid-cols-1 gap-0.5 text-[10px]">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="h-2 w-2 rounded-full bg-[var(--brand)] shrink-0"></span>
+                                    <span className="text-muted-foreground">تخصیص‌یافته:</span>
+                                    <span className="font-semibold" dir="ltr">{faNum(r.allocatedGB)} GB</span>
+                                  </div>
+                                  {r.consumedGB > 0 && (
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="h-2 w-2 rounded-full bg-amber-500 shrink-0"></span>
+                                      <span className="text-muted-foreground">مصرف قطعی:</span>
+                                      <span className="font-semibold text-amber-600 dark:text-amber-400" dir="ltr">{faNum(Math.round(r.consumedGB * 100) / 100)} GB</span>
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0"></span>
+                                    <span className="text-muted-foreground">باقیمانده:</span>
+                                    <span className={`font-bold ${r.trafficPoolGB - r.allocatedGB - r.consumedGB <= 0 ? "text-red-500" : "text-emerald-600 dark:text-emerald-400"}`} dir="ltr">
+                                      {faNum(Math.max(0, r.trafficPoolGB - r.allocatedGB - r.consumedGB))} GB
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  {faNum(r.usersCount)} کاربر
+                                </div>
+                              </>
+                            ) : (
+                              <div className="space-y-1">
+                                <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400">نامحدود</div>
+                                <div className="text-[10px] text-muted-foreground" dir="ltr">
+                                  {"تخصیص: "}{faNum(r.allocatedGB)} GB{r.consumedGB > 0 ? ` · مصرف: ${faNum(Math.round(r.consumedGB * 100) / 100)} GB` : ""}
+                                </div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  {faNum(r.usersCount)} کاربر
+                                </div>
                               </div>
                             )}
-                            <div className="text-[10px] text-muted-foreground">
-                              {faNum(r.usersCount)} کاربر{r.consumedGB > 0 ? ` — مصرف قطعی: ${faNum(Math.round(r.consumedGB * 100) / 100)} گیگ` : ""}
-                            </div>
                           </div>
                         </TableCell>
                         <TableCell className="hidden xl:table-cell">
