@@ -29,7 +29,7 @@ export async function GET() {
   // ساخت ردیف‌ها از دادهٔ DB — locations از refs خود هر کاربر (نه همهٔ اینباندهای نماینده)
   const rows: {
     email: string; name: string | null; inboundTags: string[]; protocol: string;
-    totalGB: number; usedGB: number; expiryTime: number; enable: boolean;
+    totalGB: number; usedGB: number | null; expiryTime: number | null; enable: boolean | null;
     subId: string | null; subLink: string | null; trafficGB: number; createdAt: Date;
   }[] = [];
   for (const tracked of trackedUsers) {
@@ -56,9 +56,9 @@ export async function GET() {
       inboundTags,
       protocol: allowedById.get(inboundTags.length ? "" : "")?.protocol || "-", // live-users آپدیت می‌کند
       totalGB: tracked.trafficGB || 0,
-      usedGB: 0, // live-users آپدیت می‌کند
-      expiryTime: 0, // live-users آپدیت می‌کند
-      enable: true, // live-users آپدیت می‌کند
+      usedGB: null,
+      expiryTime: null,
+      enable: null,
       subId: tracked.subId || null,
       subLink,
       trafficGB: tracked.trafficGB,

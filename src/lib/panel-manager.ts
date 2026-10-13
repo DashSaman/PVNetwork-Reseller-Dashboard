@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { decryptSecret } from "./crypto";
 import { panelLogin, getInbounds, getOnlineEmails, getClientIps, getClientIpsLegacy, type PanelAuth, type PanelInbound, type PanelClientStat } from "./panel";
 import type { PanelConfig } from "@prisma/client";
+import { readDisplayEntry, sharedDisplayCache, clearDisplayCache } from "./display-cache";
 
 /**
  * مدیریت چند پنل ثنایی (3x-ui)
@@ -89,7 +90,10 @@ export type AllPanelsResult = {
   ok: boolean;
   msg?: string;
   panels: PanelBundle[];
-  errors: { panelId: string; panelName: string; msg: string }[];
+  errors: { panelId: string; panelName: string; msg: string; failedAt?: number }[];
+  pending?: boolean;
+  stale?: boolean;
+  observedAt?: number | null;
 };
 
 /** دریافت اینباندهای همه پنل‌ها — پنل‌های مستقل به‌صورت هم‌زمان خوانده می‌شوند (پنل کند، بقیه را نگه نمی‌دارد) */
@@ -114,7 +118,7 @@ export async function getAllPanelInboundsFresh(): Promise<AllPanelsResult> {
   const settled = await Promise.allSettled(work);
 
   const bundles: PanelBundle[] = [];
-  const errors: { panelId: string; panelName: string; msg: string }[] = [];
+  const errors: { panelId: string; panelName: string; msg: string; failedAt?: number }[] = [];
   for (const item of settled) {
     if (item.status === "fulfilled") {
       const { p, r } = item.value;
@@ -135,61 +139,42 @@ async function getInboundsForPanel(p: PanelConfig): Promise<{ ok: boolean; data?
 }
 
 /**
- * خواندن پنل‌ها برای رابط کاربری (نمایش) — ددلاین کوتاه ۳ ثانیه، بدون retry.
- * هر پنل مستقل با AbortSignal.timeout خودش قطع می‌شود؛ پنل کند → unavailable، بقیه سالم برمی‌گردند.
+ * Display response has a 1s cold deadline; a shared bounded background fetch
+ * can finish a large response. Recent verified values stay visible meanwhile.
  * هرگز برای عملیات تخریبی/حسابداری استفاده نشود — آن‌ها getAllPanelInboundsFresh می‌گیرند.
- * نکته: پنل production با auth ~۴s طول می‌کشد — ۶s حاشیهٔ امن است.
  */
-export const UI_READ_TIMEOUT_MS = 8000;
+export const UI_READ_TIMEOUT_MS = 1000;
 
 export async function getAllPanelInboundsForUi(): Promise<AllPanelsResult> {
   const panels = (await getAllPanels()).filter((p) => p.active);
   if (panels.length === 0) {
     return { ok: false, msg: "هیچ پنل فعالی وجود ندارد", panels: [], errors: [] };
   }
-  const tasks = panels.map(async (p) => {
-    try {
+  const cache = sharedDisplayCache<PanelBundle>();
+  const keys = new Set(panels.map(p => `${p.id}:${p.updatedAt.getTime()}`));
+  for (const [key, entry] of cache.entries) if (!keys.has(key)) { entry.controller?.abort(); cache.entries.delete(key); }
+  const entries = await Promise.all(panels.map(async p => ({ p, result: await readDisplayEntry(cache, `${p.id}:${p.updatedAt.getTime()}`, async signal => {
       const conn = await getPanelConnection(p.id);
-      if (!conn.ok) return { p, ok: false, msg: conn.msg };
-      // fetch با ددلاین کوتاه UI — نه ۲۰ ثانیهٔ mutation
-      const r = await getInboundsWithTimeout(conn.conn, UI_READ_TIMEOUT_MS);
-      return r.ok && r.data
-        ? { p, ok: true, data: r.data }
-        : { p, ok: false, msg: r.msg || "timeout/failed" };
-    } catch {
-      return { p, ok: false, msg: "UI deadline exceeded" };
-    }
-  });
-  const settled = await Promise.allSettled(tasks);
+      if (!conn.ok) throw new Error(conn.msg);
+      const r = await getInbounds(conn.conn, { timeoutMs: 60000, signal });
+      if (!r.ok || !r.data) throw new Error(r.msg || "دریافت آمار پنل ناموفق بود");
+      return { panelId: p.id, panelName: p.name, inbounds: r.data };
+    }, { deadlineMs: UI_READ_TIMEOUT_MS, freshMs: 30000, maxAgeMs: 120000, retryMs: 15000 }) })));
   const bundles: PanelBundle[] = [];
-  const errors: { panelId: string; panelName: string; msg: string }[] = [];
-  for (const item of settled) {
-    if (item.status === "fulfilled") {
-      const { p, ok, data, msg } = item.value;
-      if (ok && data) bundles.push({ panelId: p.id, panelName: p.name, inbounds: data });
-      else errors.push({ panelId: p.id, panelName: p.name, msg: msg || "unavailable" });
-    }
+  const errors: { panelId: string; panelName: string; msg: string; failedAt?: number }[] = [];
+  for (const { p, result } of entries) {
+    if (result.value) bundles.push(result.value);
+    if (result.error) errors.push({ panelId: p.id, panelName: p.name, msg: result.error, failedAt: result.failedAt || undefined });
   }
   return {
     ok: bundles.length > 0,
     panels: bundles,
     errors,
     msg: bundles.length === 0 ? errors[0]?.msg : undefined,
+    pending: entries.some(e => e.result.pending),
+    stale: entries.some(e => e.result.stale),
+    observedAt: entries.filter(e => e.result.value && e.result.observedAt).reduce<number | null>((t, e) => Math.min(t ?? Infinity, e.result.observedAt!), null),
   };
-}
-
-async function getInboundsWithTimeout(
-  conn: PanelAuth,
-  _timeoutMs: number
-): Promise<{ ok: boolean; data?: PanelInbound[]; msg?: string }> {
-  const { getInbounds } = await import('./panel');
-  try {
-    const r = await getInbounds(conn);
-    if (r.ok && r.data) return { ok: true, data: r.data };
-    return { ok: false, msg: r.msg || 'UI read failed' };
-  } catch (e) {
-    return { ok: false, msg: 'UI read error: ' + (e as Error).message };
-  }
 }
 
 // ---- single-flight خواندنی: هم‌زمانی + TTL بسیار کوتاه — هرگز برای عملیات تخریبی/حسابداری ----
@@ -229,6 +214,7 @@ export async function getPanelInbounds(): Promise<
 
 export function invalidatePanelCache(): void {
   sessionCache.clear();
+  clearDisplayCache(sharedDisplayCache());
 }
 
 /** ایمیل‌های آنلاین لحظه‌ای در همه پنل‌های فعال (اجتماع بین‌پنلی) */

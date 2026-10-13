@@ -5,6 +5,8 @@
  * مسیرهای کلاینت جدید: /panel/api/clients/* (رکورد یکپارچه کلاینت + چند اینباند)
  */
 
+import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
+
 export type PanelInbound = {
   id: number;
   port: number;
@@ -163,7 +165,7 @@ export async function panelLogin(
 async function panelRequest<T>(
   auth: PanelAuth,
   path: string,
-  init?: { method?: string; form?: Record<string, string>; json?: unknown }
+  init?: { method?: string; form?: Record<string, string>; json?: unknown; timeoutMs?: number; signal?: AbortSignal }
 ): Promise<PanelApiResult<T>> {
   const base = normalizeBase(auth.baseUrl);
   const method = init?.method || "GET";
@@ -178,11 +180,14 @@ async function panelRequest<T>(
       method,
       headers: baseHeaders(auth, body !== undefined),
       body,
-      signal: AbortSignal.timeout(20000),
+      signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(init.timeoutMs ?? 20000)]) : AbortSignal.timeout(init?.timeoutMs ?? 20000),
     });
-    const json = (await res.json().catch(() => null)) as { success?: boolean; msg?: string; obj?: T } | null;
+    const json = (await res.json()) as { success?: boolean; msg?: string; obj?: T } | null;
     if (!json) return { ok: false, msg: `پاسخ نامعتبر از پنل (HTTP ${res.status})` };
-    if (json.success === true) return { ok: true, data: json.obj as T };
+    if (json.success === true) {
+      if (method !== "GET" && /^\/panel\/api\/(clients\/(add|update|del|resetTraffic)|inbounds\/(add|update|del))/.test(path)) clearDisplayCache(sharedDisplayCache());
+      return { ok: true, data: json.obj as T };
+    }
     return { ok: false, msg: json.msg || "عملیات در پنل ناموفق بود" };
   } catch (e) {
     return { ok: false, msg: `خطای ارتباط با پنل: ${(e as Error).message}` };
@@ -238,8 +243,10 @@ function parseInbound(raw: RawInbound): PanelInbound {
 }
 
 /** دریافت لیست کامل اینباندها به همراه آمار کلاینت‌ها */
-export async function getInbounds(auth: PanelAuth): Promise<PanelApiResult<PanelInbound[]>> {
-  const r = await panelRequest<RawInbound[]>(auth, "/panel/api/inbounds/list");
+export async function getInbounds(auth: PanelAuth, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PanelApiResult<PanelInbound[]>> {
+  // Large panel snapshots can finish after 20s; write requests keep their own
+  // 20s deadline. Authoritative reads still bypass every display cache.
+  const r = await panelRequest<RawInbound[]>(auth, "/panel/api/inbounds/list", { timeoutMs: 60000, ...options });
   if (!r.ok || !r.data) return { ok: false, msg: r.msg };
   const list = Array.isArray(r.data) ? r.data.map(parseInbound) : [];
   return { ok: true, data: list };

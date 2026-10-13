@@ -22,13 +22,15 @@ export async function GET() {
   });
 
   const snapshot = await getAllPanelInboundsForUi();
+  const dataComplete = snapshot.errors.length === 0 && snapshot.ok;
+  const trackedSet = new Set(tracked.map(t => t.email));
   const usage = snapshot.ok ? canonicalUsageByEmail(snapshot.panels.map((b) => ({ panelId: b.panelId, inbounds: b.inbounds }))) : new Map();
 
   const liveByEmail = new Map<string, { usedBytes: number | null; totalBytes: number | null; expiryTime: number; enable: boolean }>();
   for (const bundle of snapshot.panels) {
     for (const inb of bundle.inbounds) {
       for (const st of inb.clientStats) {
-        if (!tracked.some((t) => t.email === st.email)) continue;
+        if (!trackedSet.has(st.email)) continue;
         const live = usage.get(st.email);
         const cur = {
           usedBytes: live ? live.usedBytes : null,
@@ -49,25 +51,26 @@ export async function GET() {
 
   const GIB = 1024 * 1024 * 1024;
   const users = tracked.map((t) => {
-    const live = liveByEmail.get(t.email);
+    const live = dataComplete ? liveByEmail.get(t.email) : undefined;
     const usedBytes = live?.usedBytes;
     return {
       email: t.email,
       // null = پنل در دسترس نیست → مقدار قبلی را نگه دار (0 جعل نکن)
       usedGB: usedBytes != null ? Math.round((usedBytes / GIB) * 100) / 100 : null,
-      totalGB: live?.totalBytes != null ? Math.round((live.totalBytes / GIB) * 100) / 100 : 0,
-      expiryTime: live?.expiryTime ?? 0,
-      enable: live?.enable ?? true,
+      totalGB: live ? Math.round((live.totalBytes ?? 0) / GIB * 100) / 100 : null,
+      expiryTime: live?.expiryTime ?? null,
+      enable: live?.enable ?? null,
     };
   });
 
-  const dataComplete = snapshot.errors.length === 0 && snapshot.ok;
   const res = NextResponse.json({
     users,
     panelConnected: snapshot.ok,
     dataComplete,
     panelErrors: snapshot.errors.length ? snapshot.errors : undefined,
-    observedAt: Date.now(),
+    observedAt: snapshot.observedAt,
+    pending: snapshot.pending || false,
+    stale: snapshot.stale || false,
   });
   res.headers.set("Cache-Control", "private, no-store, max-age=0");
   return res;

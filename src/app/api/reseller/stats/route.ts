@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, getAllocatedGB, getConsumedGB, bytesToGB } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
-import { getAllPanelInbounds } from "@/lib/panel-manager";
+import { getAllPanelInboundsForUi } from "@/lib/panel-manager";
 
 /** آمار کلی نماینده + داده‌های نمودارها (چندپنلی + پول ترافیک) */
 export async function GET() {
@@ -18,7 +18,7 @@ export async function GET() {
   const primaryPanel = await db.panelConfig.findFirst({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   const primaryPanelId = primaryPanel?.id || "";
 
-  const panelResult = await getAllPanelInbounds().catch(() => ({ ok: false as const, msg: "", panels: [], errors: [] }));
+  const panelResult = await getAllPanelInboundsForUi();
 
   let activeUsers = 0;
   let expiredUsers = 0;
@@ -123,6 +123,7 @@ export async function GET() {
   }
 
   return NextResponse.json({
+    pending: panelResult.pending || false,
     stats: {
       usersCount,
       activeUsers,
@@ -137,6 +138,9 @@ export async function GET() {
       remainingGB: (await getQuotaState(reseller.id, reseller)).remaining,
       inboundsCount: reseller.inbounds.length,
       panelConnected: panelResult.ok,
+      liveAvailable: panelResult.ok && panelResult.errors.length === 0,
+      livePending: panelResult.pending || false,
+      liveStale: panelResult.stale || panelResult.errors.length > 0,
     },
     charts: {
       trafficByInbound,

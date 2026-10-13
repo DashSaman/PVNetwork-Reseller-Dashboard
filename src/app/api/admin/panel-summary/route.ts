@@ -9,6 +9,7 @@ type PanelHealth = {
   lastSuccessAt: number;
   consecutiveFailures: number;
   lastLatencyMs: number;
+  lastFailureAt: number;
 };
 const healthStore: Map<string, PanelHealth> = ((globalThis as { __pvnetHealth?: Map<string, PanelHealth> }).__pvnetHealth ??= new Map());
 
@@ -16,7 +17,7 @@ const OFFLINE_FAILURES = 3; // بعد از ۳ شکست متوالی
 const OFFLINE_STALE_MS = 30000; // + ۳۰s از آخرین موفقیت
 
 function updateHealth(panelId: string, success: boolean, latencyMs: number): PanelHealth {
-  const h = healthStore.get(panelId) || { state: "ONLINE" as const, lastSuccessAt: 0, consecutiveFailures: 0, lastLatencyMs: 0 };
+  const h = healthStore.get(panelId) || { state: "ONLINE" as const, lastSuccessAt: 0, consecutiveFailures: 0, lastLatencyMs: 0, lastFailureAt: 0 };
   if (success) {
     h.state = "ONLINE"; // موفقیت فوری → ONLINE
     h.lastSuccessAt = Date.now();
@@ -70,8 +71,12 @@ export async function GET() {
 
   // health state per panel
   const t0 = Date.now();
-  for (const b of snapshot.panels) updateHealth(b.panelId, true, Date.now() - t0);
-  for (const e of snapshot.errors) updateHealth(e.panelId || "?", false, 0);
+  for (const b of snapshot.panels) if ((snapshot.observedAt || 0) > (healthStore.get(b.panelId)?.lastSuccessAt || 0)) {
+    const h = updateHealth(b.panelId, true, Date.now() - t0); h.lastSuccessAt = snapshot.observedAt || Date.now();
+  }
+  for (const e of snapshot.errors) if ((e.failedAt || 0) > (healthStore.get(e.panelId)?.lastFailureAt || 0)) {
+    const h = updateHealth(e.panelId, false, 0); h.lastFailureAt = e.failedAt || Date.now();
+  }
   const allHealths = [...healthStore.values()];
   const overallState = allHealths.some((h) => h.state === "OFFLINE")
     ? "OFFLINE"
@@ -94,9 +99,12 @@ export async function GET() {
     panelErrors: snapshot.errors.length ? snapshot.errors : undefined,
     // health hysteresis (display only)
     configured,
-    state: configured ? overallState : "NOT_CONFIGURED",
+    state: configured ? (snapshot.pending && !snapshot.ok ? "CHECKING" : overallState) : "NOT_CONFIGURED",
     lastSuccessAt: allHealths.reduce((m, h) => Math.max(m, h.lastSuccessAt), 0) || null,
     latencyMs: allHealths.find((h) => h.lastLatencyMs > 0)?.lastLatencyMs ?? null,
+    pending: snapshot.pending || false,
+    stale: snapshot.stale || false,
+    observedAt: snapshot.observedAt,
   });
   res.headers.set("Cache-Control", "private, no-store, max-age=0");
   return res;

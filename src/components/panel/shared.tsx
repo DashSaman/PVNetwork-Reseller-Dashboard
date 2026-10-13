@@ -99,7 +99,8 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
 );
 
 /** تاریخ انقضا با برچسب وضعیت */
-export function expiryLabel(expiryTime: number): { text: string; tone: "ok" | "warn" | "danger" | "muted" } {
+export function expiryLabel(expiryTime: number | null): { text: string; tone: "ok" | "warn" | "danger" | "muted" } {
+  if (expiryTime === null) return { text: "در حال دریافت", tone: "muted" };
   if (!expiryTime || expiryTime <= 0) return { text: "نامحدود", tone: "muted" };
   const days = Math.ceil((expiryTime - Date.now()) / 86400000);
   if (days < 0) return { text: `منقضی (${Math.abs(days)} روز پیش)`, tone: "danger" };
@@ -116,7 +117,8 @@ export function gbLabel(gb: number): string {
   return gb > 0 ? `${faNum(Math.round(gb * 100) / 100)} گیگ` : "نامحدود";
 }
 
-export function TrafficBar({ used, total }: { used: number; total: number }) {
+export function TrafficBar({ used, total }: { used: number | null; total: number }) {
+  if (used === null) return <div className="min-w-32 text-xs text-muted-foreground">در حال دریافت مصرف…</div>;
   const unlimited = total <= 0;
   const pct = unlimited ? Math.min(100, used * 2) : Math.min(100, (used / total) * 100);
   const tone =
@@ -180,7 +182,8 @@ export function StatCard({
   );
 }
 
-export function StatusBadge({ active }: { active: boolean }) {
+export function StatusBadge({ active }: { active: boolean | null }) {
+  if (active === null) return <Badge variant="outline" className="tone-muted">در حال دریافت</Badge>;
   return active ? (
     <Badge className="tone-ok hover:tone-ok" variant="outline">
       فعال
@@ -192,7 +195,7 @@ export function StatusBadge({ active }: { active: boolean }) {
   );
 }
 
-export function ExpiryBadge({ expiryTime }: { expiryTime: number }) {
+export function ExpiryBadge({ expiryTime }: { expiryTime: number | null }) {
   const { text, tone } = expiryLabel(expiryTime);
   const cls =
     tone === "danger"

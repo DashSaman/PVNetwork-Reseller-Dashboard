@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
@@ -72,6 +72,8 @@ type PanelSummaryData = {
   state: "NOT_CONFIGURED" | "CHECKING" | "ONLINE" | "DEGRADED" | "OFFLINE";
   lastSuccessAt: number | null;
   latencyMs: number | null;
+  pending: boolean;
+  stale: boolean;
 };
 
 const CHART_COLORS = ["#0f9e99", "#f37021", "#6366f1", "#f59e0b", "#8b5cf6", "#14b8a6", "#fb7185", "#84cc16"];
@@ -106,14 +108,20 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
   }, []);
 
   const loadInbounds = useCallback(async () => {
-    const r = await api<{ inbounds: InboundInfo[] }>("/api/admin/inbounds");
+    const r = await api<{ inbounds: InboundInfo[]; pending: boolean }>("/api/admin/inbounds", { signal: AbortSignal.timeout(8000) });
     if (r.ok && r.data) {
       setInbounds(r.data.inbounds);
-      setPanelConnected(true);
+      setPanelConnected(r.data.pending && !r.data.inbounds.length ? null : true);
     } else {
       setPanelConnected(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!['resellers', 'settings'].includes(tab) || panelConnected !== null) return;
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') void loadInbounds(); }, 3000);
+    return () => clearInterval(timer);
+  }, [tab, panelConnected, loadInbounds]);
 
   // درخواست‌های اینباند فقط با باز شدن تب‌های مربوطه — نه در صفحهٔ اول
   // (tab-change handler در line ~151 loadInbounds را صدا می‌زند)
@@ -208,6 +216,10 @@ function OverviewTab({
   const [loading, setLoading] = useState(true);
   const [panelSummary, setPanelSummary] = useState<PanelSummaryData | null>(null);
   const [panelLoading, setPanelLoading] = useState(true);
+  const [panelRefreshing, setPanelRefreshing] = useState(true);
+  const [panelError, setPanelError] = useState("");
+  const panelRequestPending = useRef(false);
+  const hasPanelData = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -218,16 +230,32 @@ function OverviewTab({
   }, []);
 
   const loadPanel = useCallback(async () => {
-    setPanelLoading(true);
-    const r = await api<PanelSummaryData>("/api/admin/panel-summary");
-    setPanelLoading(false);
-    if (r.ok && r.data) setPanelSummary(r.data);
+    if (panelRequestPending.current) return;
+    panelRequestPending.current = true;
+    try {
+      setPanelLoading(!hasPanelData.current);
+      const r = await api<PanelSummaryData>("/api/admin/panel-summary", { signal: AbortSignal.timeout(8000) });
+      if (r.ok && r.data) {
+        hasPanelData.current ||= r.data.panel.connected;
+        setPanelSummary(r.data); setPanelError("");
+        setPanelLoading(r.data.pending && !hasPanelData.current);
+        setPanelRefreshing(r.data.pending);
+      } else {
+        setPanelLoading(false); setPanelRefreshing(false);
+        setPanelError(r.error || "دریافت آمار زنده ناموفق بود؛ دوباره تلاش می‌شود.");
+      }
+    } finally { panelRequestPending.current = false; }
   }, []);
 
   useEffect(() => {
     void load();
     void loadPanel();
   }, [load, loadPanel]);
+
+  useEffect(() => {
+    const timer = setInterval(() => { if (document.visibilityState === "visible") void loadPanel(); }, panelRefreshing ? 3000 : 15000);
+    return () => clearInterval(timer);
+  }, [panelRefreshing, loadPanel]);
 
   if (!data) {
     return (
@@ -240,7 +268,7 @@ function OverviewTab({
 
   const { stats, charts } = data;
   const panel = panelSummary?.panel;
-  const panelState = panelSummary?.state ?? "CHECKING";
+  const panelState = panelError ? "OFFLINE" : panelSummary?.state ?? "CHECKING";
   const donutData = (panelSummary?.trafficByInbound || []).map((t) => ({ tag: t.tag, usedGB: t.upGB + t.downGB })).slice(0, 8);
   const usersPerInbound = (panelSummary?.trafficByInbound || []).map((t) => ({ tag: t.tag, users: t.clients }));
 
@@ -273,7 +301,8 @@ function OverviewTab({
               <div className="font-bold">{panelStateText}</div>
               <div className="text-xs text-muted-foreground">
                 {panelLoading ? "در حال دریافت وضعیت زنده..."
-                : panelState === "ONLINE" && panel ? `${faNum(panel.inbounds)} اینباند · ${faNum(panel.clients)} کلاینت`
+                : panelError ? panelError
+                : panelState === "ONLINE" && panel ? `${faNum(panel.inbounds)} اینباند · ${faNum(panel.clients)} کلاینت${panelRefreshing ? " · در حال تازه‌سازی" : ""}`
                 : panelState === "DEGRADED" ? "آخرین وضعیت موفق حفظ شده — در حال تلاش مجدد"
                 : panelState === "NOT_CONFIGURED" ? "از تب تنظیمات یک پنل اضافه کنید"
                 : "مهلت دریافت اطلاعات زنده تمام شد"}
@@ -292,12 +321,12 @@ function OverviewTab({
         <StatCard title="کل کاربران نماینده‌ها" value={faNum(stats.users)} icon={<UserCheck className="h-4 w-4" />} tone="orange" />
         <StatCard
           title="ترافیک کل (آپلود)"
-          value={panelLoading ? "—" : panel ? formatUsageGB(Math.round((panel.totalUp / 1073741824) * 100) / 100) : "—"}
+          value={panel?.connected ? formatUsageGB(Math.round((panel.totalUp / 1073741824) * 100) / 100) : "—"}
           icon={<ArrowUpDown className="h-4 w-4" />}
         />
         <StatCard
           title="ترافیک کل (دانلود)"
-          value={panelLoading ? "—" : panel ? formatUsageGB(Math.round((panel.totalDown / 1073741824) * 100) / 100) : "—"}
+          value={panel?.connected ? formatUsageGB(Math.round((panel.totalDown / 1073741824) * 100) / 100) : "—"}
           icon={<ArrowUpDown className="h-4 w-4" />}
           tone="success"
         />

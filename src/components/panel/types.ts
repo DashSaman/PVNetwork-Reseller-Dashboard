@@ -39,13 +39,14 @@ export type ResellerUserRow = {
   inboundTags: string[];
   protocol: string;
   totalGB: number;
-  usedGB: number;
-  expiryTime: number;
-  enable: boolean;
+  usedGB: number | null;
+  expiryTime: number | null;
+  enable: boolean | null;
   subId: string | null;
   subLink: string | null;
   trafficGB: number;
   createdAt?: string;
+  liveFresh?: boolean;
 };
 
 export type ResellerPermissions = {

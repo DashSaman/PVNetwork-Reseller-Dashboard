@@ -136,7 +136,10 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     }>("/api/reseller/bootstrap");
     setLoading(false);
     if (b.ok && b.data) {
-      setUsers(b.data.users);
+      setUsers(prev => b.data!.users.map(row => {
+        const previous = prev.find(u => u.email === row.email);
+        return { ...row, usedGB: previous?.usedGB ?? null, expiryTime: previous?.expiryTime ?? null, enable: previous?.enable ?? null, liveFresh: false };
+      }));
       setInbounds(b.data.inbounds);
       setPermissions(b.data.permissions);
       setPanelError(b.data.panelError || "");
@@ -152,11 +155,13 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     liveInFlight.current = true;
     try {
       const r = await api<{
-        users: { email: string; usedGB: number | null; totalGB: number; expiryTime: number; enable: boolean }[];
+        users: { email: string; usedGB: number | null; totalGB: number | null; expiryTime: number | null; enable: boolean | null }[];
         panelConnected: boolean;
         dataComplete: boolean;
+        pending: boolean;
+        stale: boolean;
         panelErrors?: { panelName: string; msg: string }[];
-      }>('/api/reseller/live-users');
+      }>('/api/reseller/live-users', { signal: AbortSignal.timeout(8000) });
       if (r.ok && r.data) {
         setUsers((prev) => prev.map((u) => {
           const live = r.data!.users.find((l) => l.email === u.email);
@@ -164,16 +169,20 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
           return {
             ...u,
             usedGB: live.usedGB !== null ? live.usedGB : u.usedGB,
-            totalGB: live.totalGB || u.totalGB,
-            expiryTime: live.expiryTime || u.expiryTime,
-            enable: live.enable,
+            totalGB: live.totalGB ?? u.totalGB,
+            expiryTime: live.expiryTime ?? u.expiryTime,
+            enable: live.enable ?? u.enable,
+            liveFresh: r.data!.dataComplete && !r.data!.pending && !r.data!.stale,
           };
         }));
         setLiveLoaded(true);
-        setLivePending(false);
+        setLivePending(r.data.pending);
         setLastLiveAt(Date.now());
-        if (r.data.panelConnected) setPanelError('');
-        else setPanelError('اطلاعات زندهٔ پنل موقتاً در دسترس نیست — اطلاعات ذخیره‌شده نمایش داده می‌شود');
+        if (r.data.pending) setPanelError('در حال دریافت آمار زنده؛ مقدارهای قبلی تا تکمیل دریافت حفظ می‌شوند.');
+        else if (r.data.panelConnected && !r.data.stale) setPanelError('');
+        else setPanelError('آمار زنده موقتاً در دسترس نیست؛ دوباره تلاش می‌شود. مقدار دریافت‌نشده، صفر یا نامحدود نیست.');
+      } else {
+        setLiveLoaded(true); setLivePending(false); setPanelError(r.error || 'دریافت آمار زنده ناموفق بود؛ دوباره تلاش می‌شود.');
       }
     } catch { /* silently */ } finally {
       liveInFlight.current = false;
@@ -189,6 +198,12 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     if (!users.length || liveLoaded) return;
     void refreshLiveUsers();
   }, [users.length, liveLoaded, refreshLiveUsers]);
+
+  useEffect(() => {
+    if (!liveLoaded) return;
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') void refreshLiveUsers(); }, livePending ? 3000 : 15000);
+    return () => clearInterval(timer);
+  }, [liveLoaded, livePending, refreshLiveUsers]);
 
   // foreground + stale → refresh
   useEffect(() => {
@@ -218,6 +233,19 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
       alive = false;
     };
   }, [tab]);
+
+  const statsReady = stats !== null;
+  const statsPending = !!stats?.livePending;
+  useEffect(() => {
+    if (tab !== 'stats' || !statsReady) return;
+    let alive = true;
+    const timer = setInterval(() => {
+      void api<{ stats: Record<string, number | boolean>; charts: StatsCharts }>("/api/reseller/stats", { signal: AbortSignal.timeout(8000) }).then(r => {
+        if (alive && r.ok && r.data) { setStats(r.data.stats); setCharts(r.data.charts); }
+      });
+    }, statsPending ? 3000 : 15000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [tab, statsReady, statsPending]);
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
@@ -283,7 +311,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
       </nav>
 
       <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
-        {tab === "users" && permissions && <UsersTab session={session} users={users} inbounds={inbounds} permissions={permissions} loading={loading} panelError={panelError} reload={load} alerts={alerts} />}
+        {tab === "users" && permissions && <UsersTab session={session} users={users} inbounds={inbounds} permissions={permissions} loading={loading} livePending={livePending} panelError={panelError} reload={load} alerts={alerts} />}
         {tab === "stats" && permissions && <StatsTab stats={stats} charts={charts} />}
         {tab === "brand" && <BrandTab whitelabel={whitelabel} reload={load} />}
         {tab === "account" && <AccountSettingsTab username={session.username} />}
@@ -307,14 +335,16 @@ type StatsCharts = {
 function StatsTab({ stats, charts }: { stats: Record<string, number | boolean> | null; charts: StatsCharts | null }) {
   if (!stats) return <div className="text-center py-16 text-muted-foreground">داده‌ای موجود نیست</div>;
   const statusData = charts?.statusBreakdown.filter((s) => s.value > 0) || [];
+  const liveAvailable = stats.liveAvailable !== false;
+  const unavailableText = stats.livePending ? 'در حال دریافت آمار زنده…' : 'آمار زنده موقتاً در دسترس نیست';
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="کاربران من" value={faNum(Number(stats.usersCount || 0))} sub="بدون محدودیت تعداد" icon={<Users className="h-4 w-4" />} tone="brand" />
-        <StatCard title="فعال" value={faNum(Number(stats.activeUsers || 0))} icon={<UserCheck className="h-4 w-4" />} tone="success" />
-        <StatCard title="منقضی/پر" value={faNum(Number(stats.expiredUsers || 0))} icon={<UserX className="h-4 w-4" />} tone="danger" />
-        <StatCard title="مصرف کل" value={`${faNum(Number(stats.totalUsedGB || 0))} گیگ`} sub={Number(stats.totalQuotaGB || 0) > 0 ? `از ${faNum(Math.round(Number(stats.totalQuotaGB)))} گیگ سهمیه` : undefined} icon={<ArrowUpDown className="h-4 w-4" />} tone="orange" />
+        <StatCard title="فعال" value={liveAvailable ? faNum(Number(stats.activeUsers || 0)) : '—'} icon={<UserCheck className="h-4 w-4" />} tone="success" />
+        <StatCard title="منقضی/پر" value={liveAvailable ? faNum(Number(stats.expiredUsers || 0)) : '—'} icon={<UserX className="h-4 w-4" />} tone="danger" />
+        <StatCard title="مصرف کل" value={liveAvailable ? `${faNum(Number(stats.totalUsedGB || 0))} گیگ` : '—'} sub={liveAvailable && Number(stats.totalQuotaGB || 0) > 0 ? `از ${faNum(Math.round(Number(stats.totalQuotaGB)))} گیگ سهمیه` : undefined} icon={<ArrowUpDown className="h-4 w-4" />} tone="orange" />
       </div>
 
       {/* سرعت لحظه‌ای شبکه و منابع */}
@@ -332,8 +362,8 @@ function StatsTab({ stats, charts }: { stats: Record<string, number | boolean> |
               <UserCheck className="h-4 w-4 text-[var(--brand)]" />
               وضعیت کاربران
             </h3>
-            {statusData.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-16 text-center">هنوز کاربری ندارید</p>
+            {!liveAvailable || statusData.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-16 text-center">{liveAvailable ? 'هنوز کاربری ندارید' : unavailableText}</p>
             ) : (
               <div dir="ltr" className="h-60">
                 <ResponsiveContainer width="100%" height="100%">
@@ -359,8 +389,8 @@ function StatsTab({ stats, charts }: { stats: Record<string, number | boolean> |
               <Globe className="h-4 w-4 text-[var(--brand-orange)]" />
               مصرف ترافیک به تفکیک لوکیشن (گیگابایت)
             </h3>
-            {(charts?.trafficByInbound.length || 0) === 0 ? (
-              <p className="text-sm text-muted-foreground py-16 text-center">داده مصرفی موجود نیست</p>
+            {!liveAvailable || (charts?.trafficByInbound.length || 0) === 0 ? (
+              <p className="text-sm text-muted-foreground py-16 text-center">{liveAvailable ? 'داده مصرفی موجود نیست' : unavailableText}</p>
             ) : (
               <div dir="ltr" className="h-60">
                 <ResponsiveContainer width="100%" height="100%">
@@ -390,8 +420,8 @@ function StatsTab({ stats, charts }: { stats: Record<string, number | boolean> |
               <Crown className="h-4 w-4 text-[var(--brand-orange)]" />
               برترین مصرف‌کننده‌ها
             </h3>
-            {(charts?.topUsers.length || 0) === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">هنوز مصرفی ثبت نشده است</p>
+            {!liveAvailable || (charts?.topUsers.length || 0) === 0 ? (
+              <p className="text-sm text-muted-foreground py-8 text-center">{liveAvailable ? 'هنوز مصرفی ثبت نشده است' : unavailableText}</p>
             ) : (
               <div className="space-y-3">
                 {charts!.topUsers.map((u, i) => {
@@ -709,6 +739,7 @@ function refKey(r: InboundRefForm): string {
 
 function UsersTab({
   session,
+  livePending,
   users,
   inbounds,
   permissions,
@@ -718,6 +749,7 @@ function UsersTab({
   alerts,
 }: {
   session: Session;
+  livePending: boolean;
   users: ResellerUserRow[];
   inbounds: InboundInfo[];
   permissions: ResellerPermissions;
@@ -760,13 +792,13 @@ function UsersTab({
     const header = ["کاربر", "شناسه", "لوکیشن‌ها", "مصرف (GB)", "سهمیه (GB)", "درصد مصرف", "انقضا", "وضعیت", "آنلاین", "لینک ساب"];
     const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
     const lines = sorted.map((u) => {
-      const pct = u.totalGB > 0 ? Math.round((u.usedGB / u.totalGB) * 100) : 0;
-      const exp = u.expiryTime > 0 ? new Date(u.expiryTime).toISOString().slice(0, 10) : "نامحدود";
+      const pct = u.totalGB > 0 && u.usedGB !== null ? Math.round((u.usedGB / u.totalGB) * 100) : null;
+      const exp = u.expiryTime === null ? "در حال دریافت" : u.expiryTime > 0 ? new Date(u.expiryTime).toISOString().slice(0, 10) : "نامحدود";
       return [
         esc(u.name || ""), esc(u.email), esc(u.inboundTags.join(" + ")),
-        esc(Math.round(u.usedGB * 100) / 100), esc(u.totalGB > 0 ? u.totalGB : "نامحدود"),
-        esc(u.totalGB > 0 ? `${pct}%` : "-"), esc(exp),
-        esc(u.enable ? "فعال" : "غیرفعال"), esc(onlineSet.has(u.email) ? "آنلاین" : "آفلاین"),
+        esc(u.usedGB === null ? "" : Math.round(u.usedGB * 100) / 100), esc(u.totalGB > 0 ? u.totalGB : "نامحدود"),
+        esc(pct === null ? "" : `${pct}%`), esc(exp),
+        esc(u.enable === null ? "در حال دریافت" : u.enable ? "فعال" : "غیرفعال"), esc(onlineSet.has(u.email) ? "آنلاین" : "آفلاین"),
         esc(u.subLink || ""),
       ].join(",");
     });
@@ -823,6 +855,7 @@ function UsersTab({
   }, []);
 
   function openEdit(u: ResellerUserRow) {
+    if (u.liveFresh === false || u.expiryTime === null || u.enable === null) return;
     // یافتن refs فعلی کاربر بر اساس تگ‌های اینباند و پنل‌ها
     const currentRefs: InboundRefForm[] = [];
     for (const tag of u.inboundTags) {
@@ -958,6 +991,7 @@ function UsersTab({
   }
 
   async function toggleEnable(u: ResellerUserRow) {
+    if (u.liveFresh === false || u.enable === null) return;
     const r = await api(`/api/reseller/users/${encodeURIComponent(u.email)}`, {
       method: "PUT",
       body: JSON.stringify({ enable: !u.enable }),
@@ -1055,7 +1089,7 @@ function UsersTab({
     if (!sortKey) return 0;
     let cmp = 0;
     if (sortKey === "email") cmp = (a.name || a.email).localeCompare(b.name || b.email);
-    else if (sortKey === "traffic") cmp = a.usedGB / (a.totalGB || Infinity) - b.usedGB / (b.totalGB || Infinity);
+    else if (sortKey === "traffic") cmp = (a.usedGB ?? -1) / (a.totalGB || Infinity) - (b.usedGB ?? -1) / (b.totalGB || Infinity);
     else if (sortKey === "expiry") cmp = (a.expiryTime || Infinity) - (b.expiryTime || Infinity);
     else if (sortKey === "enable") cmp = Number(a.enable) - Number(b.enable);
     return sortDir === "asc" ? cmp : -cmp;
@@ -1118,7 +1152,7 @@ function UsersTab({
       </div>
 
       {panelError && (
-        <p className="text-sm tone-danger border rounded-md px-3 py-2">{panelError}</p>
+        <p role="status" className={`text-sm border rounded-md px-3 py-2 ${livePending ? 'text-muted-foreground' : 'tone-danger'}`}>{panelError}</p>
       )}
       {extensionOpen && <BulkExtensionDialog scope="reseller" reseller={{ id: session.uid, username: session.username }} onClose={() => setExtensionOpen(false)} onUpdated={reload} />}
 
@@ -1236,10 +1270,10 @@ function UsersTab({
                           <Button size="icon" variant="ghost" title="ریست ترافیک" onClick={() => resetTraffic(u)}>
                             <RotateCcw className="h-4 w-4" />
                           </Button>
-                          <Button size="icon" variant="ghost" title={u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
+                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.enable === null} title={u.enable === null ? "در انتظار وضعیت زنده" : u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
                             <UserX className={`h-4 w-4 ${u.enable ? "" : "text-[var(--brand)]"}`} />
                           </Button>
-                          <Button size="icon" variant="ghost" title="ویرایش" onClick={() => openEdit(u)}>
+                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.expiryTime === null || u.enable === null} title="ویرایش" onClick={() => openEdit(u)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button size="icon" variant="ghost" title="حذف" onClick={() => setDeleting(u)}>
