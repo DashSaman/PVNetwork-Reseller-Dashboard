@@ -9,7 +9,7 @@ import { Loader2 } from "lucide-react";
 
 type Preview = { hash: string; total: number; affected: number; unchanged: number; requiredGB: number; remainingGB: number; unlimitedPool: boolean };
 type Job = { jobId: string; status: string; total: number; done: number; pending: number; unchanged: number; requiredGB: number; input: { trafficGB: number; days: number }; errors: { email: string; error: string }[] };
-export function BulkExtensionDialog({ reseller, onClose, onUpdated }: { reseller: { id: string; username: string }; onClose: () => void; onUpdated: () => void }) {
+export function BulkExtensionDialog({ reseller, onClose, onUpdated, scope = "admin" }: { reseller: { id: string; username: string }; onClose: () => void; onUpdated: () => void; scope?: "admin" | "reseller" }) {
   const [traffic, setTraffic] = useState("0");
   const [days, setDays] = useState("0");
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -18,7 +18,7 @@ export function BulkExtensionDialog({ reseller, onClose, onUpdated }: { reseller
   const [error, setError] = useState("");
   const requestId = useRef("");
   const alive = useRef(true);
-  const url = `/api/admin/resellers/${reseller.id}/bulk-extension`;
+  const url = scope === "reseller" ? "/api/reseller/users/bulk-extension" : `/api/admin/resellers/${reseller.id}/bulk-extension`;
   useEffect(() => {
     alive.current = true;
     void api<{ job: Job | null }>(url).then(r => {

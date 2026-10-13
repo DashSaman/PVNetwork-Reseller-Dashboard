@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "@/hooks/use-toast";
 import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput, parseNumberInput } from "./shared";
 import { ThemeToggle } from "./theme";
+import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
 import {
   Users,
@@ -216,7 +217,6 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   async function logout() {
@@ -283,7 +283,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
       </nav>
 
       <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
-        {tab === "users" && permissions && <UsersTab users={users} inbounds={inbounds} permissions={permissions} loading={loading} panelError={panelError} reload={load} alerts={alerts} />}
+        {tab === "users" && permissions && <UsersTab session={session} users={users} inbounds={inbounds} permissions={permissions} loading={loading} panelError={panelError} reload={load} alerts={alerts} />}
         {tab === "stats" && permissions && <StatsTab stats={stats} charts={charts} />}
         {tab === "brand" && <BrandTab whitelabel={whitelabel} reload={load} />}
         {tab === "account" && <AccountSettingsTab username={session.username} />}
@@ -708,6 +708,7 @@ function refKey(r: InboundRefForm): string {
 }
 
 function UsersTab({
+  session,
   users,
   inbounds,
   permissions,
@@ -716,6 +717,7 @@ function UsersTab({
   reload,
   alerts,
 }: {
+  session: Session;
   users: ResellerUserRow[];
   inbounds: InboundInfo[];
   permissions: ResellerPermissions;
@@ -725,6 +727,7 @@ function UsersTab({
   alerts: UserAlert[];
 }) {
   const [createOpen, setCreateOpen] = useState(false);
+  const [extensionOpen, setExtensionOpen] = useState(false);
   const [editing, setEditing] = useState<ResellerUserRow | null>(null);
   const [deleting, setDeleting] = useState<ResellerUserRow | null>(null);
   const [linksUser, setLinksUser] = useState<{ email: string; name: string | null } | null>(null);
@@ -1071,7 +1074,7 @@ function UsersTab({
     alertMap.set(a.email, arr);
   }
 
-  const SortIcon = ({ k }: { k: SortKey }) => (
+  const renderSortIcon = (k: SortKey) => (
     <ArrowUpDown className={`h-3 w-3 inline-block ms-0.5 ${sortKey === k ? "text-[var(--brand)]" : "text-muted-foreground/40"}`} />
   );
 
@@ -1093,7 +1096,7 @@ function UsersTab({
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input
             ref={searchRef}
             value={search}
@@ -1107,6 +1110,7 @@ function UsersTab({
           <Button variant="outline" onClick={exportCsv} disabled={sorted.length === 0} title="دانلود خروجی CSV">
             <Download className="h-4 w-4" /> <span className="hidden sm:inline">CSV</span>
           </Button>
+          <Button variant="outline" onClick={() => setExtensionOpen(true)}>افزایش گروهی حجم و زمان</Button>
           <Button onClick={() => setCreateOpen(true)} className="brand-gradient text-white hover:opacity-90 font-bold">
             <Plus className="h-4 w-4" /> کاربر جدید
           </Button>
@@ -1116,6 +1120,7 @@ function UsersTab({
       {panelError && (
         <p className="text-sm tone-danger border rounded-md px-3 py-2">{panelError}</p>
       )}
+      {extensionOpen && <BulkExtensionDialog scope="reseller" reseller={{ id: session.uid, username: session.username }} onClose={() => setExtensionOpen(false)} onUpdated={reload} />}
 
       <Card className="bg-card card-soft">
         <CardContent className="p-0">
@@ -1134,23 +1139,23 @@ function UsersTab({
                   <TableRow>
                     <TableHead>
                       <button type="button" className="font-semibold inline-flex items-center" onClick={() => toggleSort("email")}>
-                        کاربر <SortIcon k="email" />
+                        کاربر {renderSortIcon("email")}
                       </button>
                     </TableHead>
                     <TableHead>لوکیشن‌ها</TableHead>
                     <TableHead>
                       <button type="button" className="font-semibold inline-flex items-center" onClick={() => toggleSort("traffic")}>
-                        ترافیک <SortIcon k="traffic" />
+                        ترافیک {renderSortIcon("traffic")}
                       </button>
                     </TableHead>
                     <TableHead>
                       <button type="button" className="font-semibold inline-flex items-center" onClick={() => toggleSort("expiry")}>
-                        انقضا <SortIcon k="expiry" />
+                        انقضا {renderSortIcon("expiry")}
                       </button>
                     </TableHead>
                     <TableHead>
                       <button type="button" className="font-semibold inline-flex items-center" onClick={() => toggleSort("enable")}>
-                        وضعیت <SortIcon k="enable" />
+                        وضعیت {renderSortIcon("enable")}
                       </button>
                     </TableHead>
                     <TableHead className="text-left">عملیات</TableHead>

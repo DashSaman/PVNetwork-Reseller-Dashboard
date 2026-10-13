@@ -86,4 +86,5 @@ scripts/.env.local
 # local dev/test harness
 .local-dev/
 package-lock.json
+__pycache__/
 

@@ -8,6 +8,7 @@ import { api, StatCard, faDate, gbLabel, formatUsageGB, faNum, PvLogo } from "./
 import { ResellersTab } from "./resellers-tab";
 import { PanelSettingsTab, LogsTab } from "./settings-logs";
 import { ThemeToggle } from "./theme";
+import { BackupsTab } from "./backups-tab";
 import type { InboundInfo, ActivityLogRow, Session } from "./types";
 import {
   LayoutDashboard,
@@ -22,6 +23,7 @@ import {
   Globe,
   TrendingUp,
   Loader2,
+  Download,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -39,7 +41,7 @@ import {
   Legend,
 } from "recharts";
 
-type Tab = "overview" | "resellers" | "settings" | "logs";
+type Tab = "overview" | "resellers" | "settings" | "logs" | "backups";
 
 type OverviewData = {
   stats: {
@@ -126,6 +128,7 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
     { id: "resellers", label: "نماینده‌ها", icon: <Users className="h-4 w-4" /> },
     { id: "settings", label: "تنظیمات و پنل‌ها", icon: <Plug className="h-4 w-4" /> },
     { id: "logs", label: "گزارش‌ها", icon: <History className="h-4 w-4" /> },
+    { id: "backups", label: "بکاپ", icon: <Download className="h-4 w-4" /> },
   ];
 
   return (
@@ -182,6 +185,7 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
         {tab === "resellers" && <ResellersTab inbounds={inbounds} panelConnected={panelConnected} />}
         {tab === "settings" && <PanelSettingsTab />}
         {tab === "logs" && <LogsTab />}
+        {tab === "backups" && <BackupsTab />}
       </main>
 
       <footer className="border-t border-border/60 py-4 text-center text-xs text-muted-foreground mt-auto bg-background/50">

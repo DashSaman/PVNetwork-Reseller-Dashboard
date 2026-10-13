@@ -590,6 +590,7 @@ main() {
   write_installer_metadata
   deploy_dashboard
   configure_apache_tls
+  INSTALL_DIR="$INSTALL_DIR" CONTAINER_NAME="$CONTAINER_NAME" bash "$REPO_DIR/scripts/install-backup-timer.sh"
 
   echo
   log "Installation/update completed successfully"

@@ -51,7 +51,7 @@ RUN set -e; ROOT=$(dirname "$(find .next/standalone -maxdepth 3 -name server.js 
 FROM node:22-bookworm-slim AS runtime
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates openssl tini \
+ && apt-get install -y --no-install-recommends ca-certificates openssl tini python3 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -62,6 +62,7 @@ ENV NODE_ENV=production \
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/prisma-template ./prisma-template
 COPY docker/entrypoint.sh /app/entrypoint.sh
+COPY scripts/panel-backup.py scripts/run-backup.cjs /app/scripts/
 
 RUN chmod +x /app/entrypoint.sh && mkdir -p /app/data
 

@@ -9,7 +9,7 @@ import { logActivity } from "@/lib/logger";
 import { planExtension, executeExtensionUser, validateExtensionInput, type ExtensionInput, type ExtensionSource, type ExtensionPlan } from "./bulk-extension-core";
 
 const ACTIVE = ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"];
-type JobMeta = { input: ExtensionInput; hash: string; planCipher: string; actorName: string };
+type JobMeta = { input: ExtensionInput; hash: string; planCipher: string; actorName: string; actorType?: "ADMIN" | "RESELLER" };
 export class ExtensionError extends Error {
   status: number;
   constructor(message: string, status = 409) { super(message); this.status = status; }
@@ -55,7 +55,7 @@ export async function previewExtension(resellerId: string, input: ExtensionInput
   });
 }
 
-export async function startExtension(resellerId: string, input: ExtensionInput, hash: string, requestId: string, actorName: string) {
+export async function startExtension(resellerId: string, input: ExtensionInput, hash: string, requestId: string, actorName: string, actorType: "ADMIN" | "RESELLER" = "ADMIN") {
   if (!/^[a-zA-Z0-9-]{16,80}$/.test(requestId)) throw new ExtensionError("شناسهٔ درخواست نامعتبر است", 400);
   validateExtensionInput(input);
   return withResellerLock(resellerId, async () => {
@@ -71,7 +71,7 @@ export async function startExtension(resellerId: string, input: ExtensionInput, 
     const job = await db.$transaction(async tx => {
       const parent = await tx.operationJournal.create({ data: {
         idempotencyKey: key, resellerId, email: "__bulk_extension__", type: "BULK_EXTEND", status: "RUNNING",
-        metadata: JSON.stringify({ input, hash, actorName, planCipher: encryptSecret(JSON.stringify(p.plan)) } satisfies JobMeta),
+        metadata: JSON.stringify({ input, hash, actorName, actorType, planCipher: encryptSecret(JSON.stringify(p.plan)) } satisfies JobMeta),
       } });
       for (const u of p.plan.users) {
         await tx.operationJournal.create({ data: {
@@ -83,7 +83,7 @@ export async function startExtension(resellerId: string, input: ExtensionInput, 
       }
       return parent;
     }, { timeout: 20000 });
-    await logActivity({ actorType: "ADMIN", actorName, action: "شروع افزایش گروهی حجم و زمان", detail: `${p.plan.users.length} کاربر | هر کاربر +${input.trafficGB} گیگ / +${input.days} روز | رزرو ${p.plan.requiredGB} گیگ`, resellerId });
+    await logActivity({ actorType, actorName, action: "شروع افزایش گروهی حجم و زمان", detail: `${p.plan.users.length} کاربر | هر کاربر +${input.trafficGB} گیگ / +${input.days} روز | رزرو ${p.plan.requiredGB} گیگ`, resellerId });
     return jobSummary(job.id, resellerId);
   });
 }
@@ -178,7 +178,7 @@ export async function runExtensionStep(jobId: string, resellerId: string) {
     const summary = await jobSummary(job.id, resellerId);
     if (summary.pending === 0) {
       await db.operationJournal.update({ where: { id: job.id }, data: { status: "SUCCESS", lastError: null } });
-      await logActivity({ actorType: "ADMIN", actorName: meta.actorName, action: "تکمیل افزایش گروهی حجم و زمان", detail: `${summary.done} کاربر | ${plan.requiredGB} گیگ از پول نماینده | +${plan.input.days} روز`, resellerId });
+      await logActivity({ actorType: meta.actorType || "ADMIN", actorName: meta.actorName, action: "تکمیل افزایش گروهی حجم و زمان", detail: `${summary.done} کاربر | ${plan.requiredGB} گیگ از پول نماینده | +${plan.input.days} روز`, resellerId });
     } else {
       await db.operationJournal.update({ where: { id: job.id }, data: { status: "RUNNING", lastError: null } });
     }

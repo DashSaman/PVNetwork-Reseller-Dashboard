@@ -12,3 +12,6 @@ scripts/.env.local
 tsconfig.tsbuildinfo
 dev.log
 server.log
+.local-dev
+__pycache__
+AGENTS.md

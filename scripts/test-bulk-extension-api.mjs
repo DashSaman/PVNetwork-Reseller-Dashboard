@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
+import { mkdirSync, writeFileSync, createWriteStream, readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,8 +22,16 @@ const check = (name, fn) => { fn(); checks++; console.log(`PASS ${name}`); };
 const original = email => ({ email, id: `uuid-${email}`, limitIp: 3, totalGB: 10 * GB, expiryTime: EXPIRY, enable: false, subId: `sub-${email}`, flow: 'xtls-rprx-vision', tgId: '42', reset: 7 });
 async function mockPanel(name) {
   const clients = new Map(['u1', 'u2', 'outsider'].map(e => [e, original(e)]));
-  const mock = { clients, failUpdate: false, writes: 0, server: null, base: '', beforeUpdate: null };
+  const mock = { clients, failUpdate: false, writes: 0, server: null, base: '', beforeUpdate: null, exportReads: 0 };
+  const nativePath = path.join(dir, `${name}.db`);
+  const nativeDb = new DatabaseSync(nativePath);
+  nativeDb.exec("CREATE TABLE clients(email TEXT, uuid TEXT); INSERT INTO clients VALUES('u1','uuid-u1');");
+  nativeDb.close();
   const server = http.createServer(async (req, res) => {
+    if (req.url === '/panel/api/server/getDb') {
+      mock.exportReads++;
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); res.end(readFileSync(nativePath)); return;
+    }
     let raw = ''; for await (const chunk of req) raw += chunk;
     let body = {}; try { body = JSON.parse(raw || '{}'); } catch {}
     let obj = null, success = true, msg = '';
@@ -66,9 +75,12 @@ try {
   app.stdout.pipe(log, { end: false }); app.stderr.pipe(log, { end: false });
   for (let n = 0; n < 120; n++) { try { if ((await fetch(base)).ok) break; } catch {} await new Promise(r => setTimeout(r, 500)); if (n === 119) throw new Error(`app failed to start; see ${dir}/next.log`); }
   const url = `/api/admin/resellers/${reseller.id}/bulk-extension`;
-  async function api(route, body, cookie = ac, method = body ? 'POST' : 'GET') { const r = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json() }; }
+  async function api(route, body, cookie = ac, method = body ? 'POST' : 'GET') { const r = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json().catch(() => null) }; }
   r = await api(url, null, ''); check('anonymous denied', () => assert.equal(r.status, 401));
   r = await api(url, { mode: 'preview', trafficGB: 5, days: 2 }, rc); check('reseller denied', () => assert.equal(r.status, 401));
+  const ownUrl = '/api/reseller/users/bulk-extension';
+  r = await api(ownUrl, { mode: 'preview', trafficGB: 0, days: 1, resellerId: outsider.id }, rc);
+  check('reseller can preview own group and cannot choose a different owner', () => { assert.equal(r.status, 200); assert.equal(r.data.preview.affected, 2); });
   r = await api(url, { mode: 'preview', trafficGB: 5, days: 2 });
   check('whole group rejected for insufficient pool with no panel writes', () => { assert.equal(r.status, 400); assert.equal(a.writes + b.writes, 0); });
   await db.reseller.update({ where: { id: reseller.id }, data: { trafficPoolGB: 40 } });
@@ -85,6 +97,8 @@ try {
   assert.equal((await api(url, startBody)).data.job.jobId, jobId);
   const otherUrl = `/api/admin/resellers/${outsider.id}/bulk-extension`;
   r = await api(otherUrl, { mode: 'run', jobId }); check('job cannot run under another owner', () => assert.equal(r.status, 404));
+  r = await api(ownUrl + '?jobId=' + jobId, null, token('RESELLER', outsider.id, outsider.username));
+  check('reseller cannot inspect another owner group job', () => assert.equal(r.status, 404));
   r = await api('/api/reseller/users', { name: 'overquota', trafficGB: 15, inbounds: refs }, rc);
   check('new users cannot spend volume reserved by bulk', () => { assert.equal(r.status, 403); assert.equal(a.writes + b.writes, 0); });
   r = await api('/api/reseller/users/u1', null, rc, 'DELETE');
@@ -144,7 +158,44 @@ try {
   r = await api(url, { mode: 'run', jobId: job3 });
   check('first-use activation before step extends the activated expiration', () => { assert.equal(r.data.job.done, 1); assert.equal(a.clients.get('u1').expiryTime, 2100172800000); });
   await api(url, { mode: 'run', jobId: job3 });
-  writeFileSync(path.join(root, '.local-dev', 'bulk-ui.json'), JSON.stringify({ base, cookie: ac, fixtureDir: dir }));
+  r = await api(ownUrl, { mode: 'preview', trafficGB: 0, days: 1 }, rc);
+  const ownPreview = r.data.preview;
+  r = await api(ownUrl, { mode: 'start', trafficGB: 0, days: 1, hash: ownPreview.hash, requestId: 'test-reseller-own-12345678', resellerId: outsider.id }, rc);
+  const ownJobId = r.data.job.jobId;
+  do { r = await api(ownUrl, { mode: 'run', jobId: ownJobId }, rc); } while (r.data.job.pending && r.data.job.status !== 'PARTIAL');
+  check('reseller executes own group with reseller audit attribution', () => { assert.equal(r.data.job.done, 2); assert.equal(r.data.job.status, 'SUCCESS'); });
+  const ownLog = await db.activityLog.findFirst({ where: { resellerId: reseller.id, action: 'تکمیل افزایش گروهی حجم و زمان' }, orderBy: { createdAt: 'desc' } });
+  assert.equal(ownLog.actorType, 'RESELLER'); assert.equal(ownLog.actorName, reseller.username);
+  assert.deepEqual(a.clients.get('outsider'), original('outsider'));
+  r = await api('/api/admin/backups', null, ''); check('backup list denies anonymous', () => assert.equal(r.status, 401));
+  r = await api('/api/admin/backups', {}, rc); check('backup creation denies representatives', () => assert.equal(r.status, 401));
+  r = await api('/api/admin/backups', {});
+  const created = r.data?.backup;
+  check('admin creates complete dashboard backup without contacting connected panels', () => { assert.equal(r.status, 200); assert.equal(created.complete, true); assert.equal(created.panelCount, 0); assert.equal(a.exportReads+b.exportReads, 0); });
+  r = await api('/api/admin/backups');
+  check('backup list excludes recovery secrets', () => { assert.equal(r.data.files.length, 1); assert.ok(!JSON.stringify(r.data).includes(process.env.APP_SECRET)); });
+  const downloaded = await fetch(base + '/api/admin/backups?download=' + created.name, { headers: { Cookie: ac } });
+  assert.equal(downloaded.status, 200); assert.equal(downloaded.headers.get('content-type'), 'application/zip');
+  assert.equal(downloaded.headers.get('cache-control'), 'private, no-store');
+  const zipPath = path.join(dir, 'download.zip'); writeFileSync(zipPath, Buffer.from(await downloaded.arrayBuffer()));
+  const restorePath = path.join(dir, 'restore');
+  await child(process.platform === 'win32' ? 'python' : 'python3', ['scripts/panel-backup.py', 'restore', zipPath, restorePath]);
+  const restored = new DatabaseSync(path.join(restorePath, 'data/custom.db'));
+  const journalCount = await db.operationJournal.count();
+  check('downloaded archive restores real dashboard users and encrypted credentials', () => {
+    assert.equal(restored.prepare('SELECT count(*) AS n FROM ResellerUser').get().n, 3);
+    assert.equal(restored.prepare('SELECT password FROM Reseller WHERE id=?').get(reseller.id).password, fresh.password);
+    assert.equal(restored.prepare('SELECT count(*) AS n FROM OperationJournal').get().n, journalCount);
+  });
+  restored.close();
+  check('download includes recovery key and all stored panel connection settings', () => {
+    assert.equal(readFileSync(path.join(restorePath, 'recovery.env'), 'utf8').trim(), 'APP_SECRET=' + process.env.APP_SECRET);
+    const restored = new DatabaseSync(path.join(restorePath, 'data/custom.db'));
+    assert.equal(restored.prepare('SELECT apiToken FROM PanelConfig WHERE id=?').get(pa.id).apiToken, pa.apiToken); restored.close();
+  });
+  r = await api('/api/admin/backups?download=../../custom.db'); check('download rejects traversal', () => assert.equal(r.status, 404));
+  r = await api('/api/admin/backups?download=' + created.name, null, rc); check('representative cannot download admin backup', () => assert.equal(r.status, 401));
+  writeFileSync(path.join(root, '.local-dev', 'bulk-ui.json'), JSON.stringify({ base, cookie: ac, representativeCookie: rc, fixtureDir: dir }));
   console.log(`INTEGRATION PASS: ${checks} checks; fixture ${base}; log ${dir}/next.log`);
   if (process.argv.includes('--keep')) { console.log('UI_READY: press Enter to stop fixture'); await new Promise(r => process.stdin.once('data', r)); }
 } catch (e) { console.error(e); console.error(`Fixture logs: ${dir}`); process.exitCode = 1; }

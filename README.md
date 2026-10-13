@@ -14,6 +14,33 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller
 
 That's it. The installer asks for your panel domain, handles Docker, Apache TLS, Let's Encrypt, and database setup — all in one command. Your existing 3x-ui servers, Xray, and other services are **never touched**.
 
+This dashboard-only installer does not install 3x-ui, Xray, or Caddy. Connect your existing external 3x-ui panels in the admin panel settings. Point the dashboard DNS to its host and use Cloudflare **Full (strict)** TLS with the origin certificate installed by the installer.
+
+## Bulk extension and backups
+
+Resellers can open **My Users → Increase volume and time for all users** (Persian: «افزایش گروهی حجم و زمان»). The admin can also open the bulk dialog for one reseller. The preview counts only that reseller's users. Additional quota is allocated from the existing traffic pool; usage, connection fields and disabled status are preserved. Durable journals let partial operations resume without charging successful users twice.
+
+The main admin's **Backup** tab creates and downloads a ZIP containing the entire dashboard database and its recovery `APP_SECRET`: reseller/user records, allocations, usage accounting, permissions, branding, stored panel connections, encrypted credentials and journals. Backup creation makes no requests to external panels and does not export their native databases. Archives are private files under `/opt/pv-reseller/data/backups`.
+
+The dedicated `pv-reseller-backup.timer` runs daily at **03:00 Asia/Tehran**. After a new archive is verified, managed archives older than **five days** are removed. Deployment backups and other services' files are excluded. Download an off-server copy for migration and keep it private because it contains recovery credentials.
+
+Verify and restore on a fresh destination:
+
+```bash
+python3 scripts/panel-backup.py verify /secure/pvnet-backup.zip
+python3 scripts/panel-backup.py restore /secure/pvnet-backup.zip /secure/pvnet-restored
+```
+
+Restore refuses a nonempty destination and verifies paths, hashes and SQLite integrity before publishing files. It produces `data/custom.db`, `recovery.env` and a manifest. Stop the freshly installed destination dashboard before installing the restored DB and set its `APP_SECRET` from `recovery.env`; preserve the original key to decrypt stored connection credentials. Configure the new host's DNS/TLS separately. Existing external VPN panels continue to provide the live connection/expiration/traffic data.
+
+Existing deployments can enable the timer after updating their dashboard image:
+
+```bash
+bash /opt/pv-reseller/app/scripts/install-backup-timer.sh
+systemctl list-timers pv-reseller-backup.timer
+journalctl -u pv-reseller-backup.service -n 20 --no-pager
+```
+
 ## 📸 Complete Visual Guide
 
 ### 1. Login | ورود
