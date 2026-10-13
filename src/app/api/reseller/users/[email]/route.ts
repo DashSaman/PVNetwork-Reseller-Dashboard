@@ -30,6 +30,7 @@ type Ctx = { params: Promise<{ email: string }> };
 
 /** ویرایش کاربر: نام، سهمیه (از پول)، انقضا، دستگاه، لوکیشن‌ها (حتی بین پنل‌ها) */
 export async function PUT(req: NextRequest, ctx: Ctx) {
+  const snapshotStartedAt = Date.now();
   const session = await requireReseller();
   if (!session) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
   const { email: rawEmail } = await ctx.params;
@@ -136,6 +137,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const removed = currentRefs.filter((r) => !newKeys.has(refKey(r)));
     const added = newRefs.filter((r) => !curKeys.has(refKey(r)));
 
+    const applyRemote = async (): Promise<string[]> => {
     const errors: string[] = [];
 
     // گروه‌بندی به تفکیک پنل
@@ -206,11 +208,13 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       if (!upd.ok) errors.push(`ویرایش: ${upd.msg}`);
     }
 
+    return errors;
+    };
     const updateRes = await updateUserByJournal(
       reseller.id,
       email,
-      { trafficGB },
-      async () => errors,
+      { trafficGB, snapshotStartedAt },
+      applyRemote,
       async (tx) => {
         await tx.resellerUser.update({
           where: { id: tracked.id },

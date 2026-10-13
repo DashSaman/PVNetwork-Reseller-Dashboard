@@ -334,7 +334,7 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
 export async function updateUserByJournal(
   resellerId: string,
   email: string,
-  desired: { trafficGB: number; note?: string },
+  desired: { trafficGB: number; note?: string; snapshotStartedAt?: number },
   applyRemote: () => Promise<string[]>,
   commitLocal: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<void>
 ): Promise<{ ok: true } | { ok: false; status: number; msg: string; partial?: boolean }> {
@@ -343,6 +343,12 @@ export async function updateUserByJournal(
     if ("err" in loaded) return loaded.err;
 
     // C1: نمایندهٔ محدود هرگز کاربر نامحدود نمی‌سازد
+    if (desired.snapshotStartedAt !== undefined) {
+      const newer = await db.operationJournal.findFirst({ where: {
+        resellerId, email, type: "UPDATE", status: "SUCCESS", updatedAt: { gte: new Date(desired.snapshotStartedAt) },
+      } });
+      if (newer) return { ok: false, status: 409, msg: "کاربر هنگام آماده‌سازی درخواست تغییر کرده؛ صفحه را بازخوانی و دوباره ویرایش کنید" };
+    }
     const quotaBefore = await getQuotaState(resellerId);
     const vq = validateRequestedUserQuota(quotaBefore, desired.trafficGB);
     if (!vq.ok) return { ok: false, status: 403, msg: vq.msg };
@@ -352,7 +358,8 @@ export async function updateUserByJournal(
     const ownReserved = existingJournal?.status ? (await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { reservedGB: true } }))?.reservedGB ?? 0 : 0;
     // payload resume باید با هدف اصلی یکی باشد
     if (existingJournal) {
-      const meta = JSON.parse((await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { metadata: true } }))?.metadata || "{}") as { newTrafficGB?: number };
+      const meta = JSON.parse((await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { metadata: true } }))?.metadata || "{}") as { newTrafficGB?: number; bulkJobId?: string };
+      if (meta.bulkJobId) return { ok: false, status: 409, msg: "افزایش گروهی این کاربر در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB) {
         return { ok: false, status: 409, msg: "عملیات ویرایش در جریان با مقدار متفاوتی تعریف شده — ابتدا همان را تمام کنید" };
       }

@@ -314,7 +314,7 @@ export function buildClientPayload(
     totalGB: client.totalGB ?? 0,
     expiryTime: client.expiryTime ?? 0,
     enable: client.enable ?? true,
-    tgId: 0,
+    tgId: client.tgId ?? 0,
     subId: client.subId ?? "",
     reset: client.reset ?? 0,
   };

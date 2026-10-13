@@ -489,6 +489,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     }
   }
 
+  const snapshotStartedAt = Date.now();
   const tracked = await db.resellerUser.findUnique({
     where: { resellerId_email: { resellerId: reseller.id, email } },
   });
@@ -516,6 +517,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
 
   const errors: string[] = [];
+  const applyRemote = async (): Promise<string[]> => {
   const donePanels = new Set<string>();
   for (const ref of refs) {
     if (donePanels.has(ref.panelId)) continue;
@@ -538,11 +540,13 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     });
     if (!upd.ok) errors.push(upd.msg || "ویرایش ناموفق");
   }
+  return errors;
+  };
   const updateRes = await updateUserByJournal(
     reseller.id,
     email,
-    { trafficGB },
-    async () => errors,
+    { trafficGB, snapshotStartedAt },
+    applyRemote,
     async (tx) => {
       await tx.resellerUser.update({
         where: { id: tracked.id },

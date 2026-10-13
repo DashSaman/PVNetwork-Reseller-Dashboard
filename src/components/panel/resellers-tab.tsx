@@ -22,6 +22,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { toast } from "@/hooks/use-toast";
 import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput, NumberInput, parseNumberInput } from "./shared";
 import type { InboundInfo, ResellerInfo, InboundRefForm } from "./types";
+import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { UserCog, Plus, Pencil, Trash2, KeyRound, Loader2, Globe, BadgeCheck, Server, ShieldOff } from "lucide-react";
 
 type FormState = {
@@ -72,6 +73,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
   const [saving, setSaving] = useState(false);
   const [disabling2fa, setDisabling2fa] = useState(false);
   const [deleting, setDeleting] = useState<ResellerInfo | null>(null);
+  const [extending, setExtending] = useState<ResellerInfo | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -342,6 +344,9 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                             <Button size="icon" variant="ghost" title="ویرایش" onClick={() => openEdit(r)}>
                               <Pencil className="h-4 w-4" />
                             </Button>
+                            <Button size="sm" variant="outline" onClick={() => setExtending(r)}>
+                              افزایش گروهی
+                            </Button>
                             <Button size="icon" variant="ghost" title={r.active ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleActive(r)}>
                               <KeyRound className={`h-4 w-4 ${r.active ? "text-[var(--brand)]" : "text-red-400"}`} />
                             </Button>
@@ -361,6 +366,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
       </Card>
 
       {/* دیالوگ ساخت/ویرایش */}
+      {extending && <BulkExtensionDialog key={extending.id} reseller={extending} onClose={() => setExtending(null)} onUpdated={() => { void load(); }} />}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
