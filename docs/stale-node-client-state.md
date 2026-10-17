@@ -63,6 +63,10 @@ renewal with a new self-signed CA, update the configured CA. If a peer is unavai
 or identity verification fails, writes stop with a partial-operation error; reserved
 quota remains held. Do not drop peer configuration while operations are pending.
 
+The [dashboard migration runbook (Persian)](dashboard-migration-restore.fa.md)
+covers archive restore, destination port/network isolation, key installation,
+peer routing checks, single-writer cutover, acceptance and rollback.
+
 Rollback: keep the previous image/container and pre-deployment SQLite snapshot.
 Reverting the image preserves the database, but removes peer protection, so pause
 mutations until corrected. Revoke the dedicated native token and remove the

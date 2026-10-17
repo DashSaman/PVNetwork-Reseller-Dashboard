@@ -28,6 +28,8 @@ The dedicated `pv-reseller-backup.timer` runs daily at **03:00 Asia/Tehran**. Af
 
 Verify and restore on a fresh destination:
 
+Follow the [complete migration and restore runbook (Persian)](docs/dashboard-migration-restore.fa.md) for destination port/network preflight, recovery-key installation, encrypted node peer routing, acceptance checks, cutover and rollback. The ZIP does not contain host configuration or native VPN databases.
+
 ```bash
 python3 scripts/panel-backup.py verify /secure/pvnet-backup.zip
 python3 scripts/panel-backup.py restore /secure/pvnet-backup.zip /secure/pvnet-restored
