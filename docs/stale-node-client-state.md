@@ -1,5 +1,8 @@
 # A client becomes disabled again after being enabled
 
+For the confirmed cause, deployed fix, live observation and all three reseller
+lifecycle results, start with the [2026-10-17 incident record](incidents/2026-10-17-stale-node-client-state.md).
+
 An enabled client can be disabled by a node's traffic loop even when the central dashboard shows remaining quota and a future expiration. A stale copy on a node can retain an older, smaller quota. If that copy is already depleted, enabling the central record alone does not repair it.
 
 ## Diagnose before changing anything

@@ -18,6 +18,8 @@ This dashboard-only installer does not install 3x-ui, Xray, or Caddy. Connect yo
 
 ## Bulk extension and backups
 
+The [2026-10-17 node synchronization incident record](docs/incidents/2026-10-17-stale-node-client-state.md) documents the confirmed stale-copy cause, deployed fix and successful isolated create/extend checks for all three resellers. Read it before reopening the same investigation.
+
 Resellers can open **My Users → Increase volume and time for all users** (Persian: «افزایش گروهی حجم و زمان»). The admin can also open the bulk dialog for one reseller. The preview counts only that reseller's users. Additional quota is allocated from the existing traffic pool; usage, connection fields and disabled status are preserved. Durable journals let partial operations resume without charging successful users twice.
 
 The main admin's **Backup** tab creates and downloads a ZIP containing the entire dashboard database and its recovery `APP_SECRET`: reseller/user records, allocations, usage accounting, permissions, branding, stored panel connections, encrypted credentials and journals. Backup creation makes no requests to external panels and does not export their native databases. Archives are private files under `/opt/pv-reseller/data/backups`.
