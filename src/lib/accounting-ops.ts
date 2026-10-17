@@ -3,6 +3,7 @@ import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWi
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
 import { deleteClient, resetClientTraffic, type PanelAuth } from "./panel";
 import { logActivity } from "./logger";
+import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync";
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -156,12 +157,32 @@ async function commitJournalAccounting(journalId: string, resellerId: string, us
   });
 }
 
-async function runPanelOp(panelId: string, op: "delete" | "reset", email: string): Promise<{ panelId: string; result: PanelOpResult }> {
+function nodeProgress(journalId: string, panelId: string): NodeMutationProgress {
+  async function metadata(): Promise<Record<string, unknown>> {
+    const row = await db.operationJournal.findUnique({ where: { id: journalId }, select: { metadata: true } });
+    if (!row) throw new Error("Operation journal missing");
+    return row.metadata ? JSON.parse(row.metadata) : {};
+  }
+  return {
+    async load() {
+      const m = await metadata();
+      return (m.nodeSync as Record<string, NodeMutationState> | undefined)?.[panelId];
+    },
+    async save(state) {
+      const m = await metadata();
+      const states = (m.nodeSync || {}) as Record<string, NodeMutationState>;
+      states[panelId] = state;
+      await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...m, nodeSync: states }) } });
+    },
+  };
+}
+
+async function runPanelOp(journalId: string, panelId: string, op: "delete" | "reset", email: string): Promise<{ panelId: string; result: PanelOpResult }> {
   const conn = await getPanelConnection(panelId);
   if (!conn.ok) return { panelId, result: "UNREACHABLE" };
   const r = op === "delete"
-    ? await deleteClient(conn.conn as PanelAuth, email)
-    : await resetClientTraffic(conn.conn as PanelAuth, email);
+    ? await deleteClient(conn.conn as PanelAuth, email, nodeProgress(journalId, panelId))
+    : await resetClientTraffic(conn.conn as PanelAuth, email, nodeProgress(journalId, panelId));
   if (r.ok) return { panelId, result: "SUCCESS" };
   return { panelId, result: classifyOpError(r.msg) };
 }
@@ -178,7 +199,7 @@ async function executeAcrossPanels(
   const failed: { panelId: string; result: PanelOpResult }[] = [];
   for (const panelId of targetPanels) {
     if (completed.has(panelId)) continue;
-    const r = await runPanelOp(panelId, op, email);
+    const r = await runPanelOp(journalId, panelId, op, email);
     if (r.result === "SUCCESS" || r.result === "ALREADY_MISSING") completed.add(panelId);
     else failed.push(r);
   }

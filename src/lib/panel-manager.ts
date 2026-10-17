@@ -3,6 +3,7 @@ import { decryptSecret } from "./crypto";
 import { panelLogin, getInbounds, getOnlineEmails, getClientIps, getClientIpsLegacy, type PanelAuth, type PanelInbound, type PanelClientStat } from "./panel";
 import type { PanelConfig } from "@prisma/client";
 import { readDisplayEntry, sharedDisplayCache, clearDisplayCache } from "./display-cache";
+import { getNodePeers } from "./node-peer-config";
 
 /**
  * مدیریت چند پنل ثنایی (3x-ui)
@@ -43,12 +44,15 @@ export async function getPanelConnection(
     return { ok: false, msg: "اتصال پنل تنظیم نشده است. ابتدا از بخش تنظیمات، پنل ثنایی را متصل کنید." };
   }
   const base = normalize(config.baseUrl);
+  let nodePeers: Awaited<ReturnType<typeof getNodePeers>>;
+  try { nodePeers = await getNodePeers(config.id); }
+  catch { return { ok: false, msg: "تنظیمات همگام‌سازی نود قابل خواندن نیست؛ بررسی مدیر لازم است" }; }
 
   // ---- حالت ۱: API Token ----
   if (config.apiToken) {
     const token = decryptSecret(config.apiToken);
     if (token) {
-      return { ok: true, conn: { baseUrl: base, token }, panel: config };
+      return { ok: true, conn: { baseUrl: base, token, nodePeers }, panel: config };
     }
   }
 
@@ -60,7 +64,7 @@ export async function getPanelConnection(
 
   const cached = sessionCache.get(config.id);
   if (cached && cached.baseUrl === base && cached.exp > Date.now()) {
-    return { ok: true, conn: { baseUrl: base, cookie: cached.cookie, csrf: cached.csrf }, panel: config };
+    return { ok: true, conn: { baseUrl: base, cookie: cached.cookie, csrf: cached.csrf, nodePeers }, panel: config };
   }
 
   const login = await panelLogin(config.baseUrl, config.username, pass);
@@ -75,7 +79,7 @@ export async function getPanelConnection(
   });
   return {
     ok: true,
-    conn: { baseUrl: base, cookie: login.data.cookie, csrf: login.data.csrf },
+    conn: { baseUrl: base, cookie: login.data.cookie, csrf: login.data.csrf, nodePeers },
     panel: config,
   };
 }

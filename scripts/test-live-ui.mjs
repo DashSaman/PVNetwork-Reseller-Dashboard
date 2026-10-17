@@ -50,7 +50,7 @@ try{
  r=await api('/api/admin/panel-summary');check('admin receives real traffic totals and chart after background completion',()=>{assert.equal(r.data.panel.totalUp,GB);assert.equal(r.data.panel.totalDown,2*GB);assert.equal(r.data.trafficByInbound.length,1);assert.equal(r.data.pending,false);});
  const readCount=reads;await Promise.all([api('/api/admin/panel-summary'),api('/api/reseller/live-users',rc)]);check('warm UI reads reuse completed snapshot',()=>assert.equal(reads,readCount));
  const {registerHooks}=await import('node:module');
- const hooks=registerHooks({resolve(s,c,next){return next(s==='./display-cache'&&c.parentURL?.endsWith('/panel.ts')?'./display-cache.ts':s,c);}});
+ const hooks=registerHooks({resolve(s,c,next){return next(s.startsWith('./')&&c.parentURL?.includes('/src/lib/')&&!s.endsWith('.ts')?s+'.ts':s,c);}});
  const {getInbounds}=await import('../src/lib/panel.ts');hooks.deregister();
  const nativeStart=performance.now();const native=await getInbounds({baseUrl:panel.baseUrl,token:'mock'},{timeoutMs:150});check('explicit read timeout covers delayed response body',()=>{assert.equal(native.ok,false);assert.ok(performance.now()-nativeStart<1200);});
  delay=20400;const large=await getInbounds({baseUrl:panel.baseUrl,token:'mock'});check('authoritative large read can finish after the old 20s cutoff',()=>assert.equal(large.ok,true));

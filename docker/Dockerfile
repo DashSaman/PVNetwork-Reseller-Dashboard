@@ -62,7 +62,7 @@ ENV NODE_ENV=production \
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/prisma-template ./prisma-template
 COPY docker/entrypoint.sh /app/entrypoint.sh
-COPY scripts/panel-backup.py scripts/run-backup.cjs /app/scripts/
+COPY scripts/panel-backup.py scripts/run-backup.cjs scripts/configure-node-sync.cjs /app/scripts/
 
 RUN chmod +x /app/entrypoint.sh && mkdir -p /app/data
 

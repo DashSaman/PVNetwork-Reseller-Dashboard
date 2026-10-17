@@ -6,6 +6,8 @@
  */
 
 import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
+import https from "node:https";
+import { syncNodeClientUpdate, verifyMasterClientUpdate, mutateWithNodePeers, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
 export type PanelInbound = {
   id: number;
@@ -59,6 +61,8 @@ export type PanelAuth = {
   token?: string; // API Token (3.7+)
   cookie?: string; // کوکی نشست (ورود با نام کاربری)
   csrf?: string; // توکن CSRF برای درخواست‌های POST در حالت کوکی (3.7+)
+  nodePeers?: NodePeer[];
+  tls?: { connectHost: string; ca: string };
 };
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PvNetWork/1.0";
@@ -176,12 +180,15 @@ async function panelRequest<T>(
     body = new URLSearchParams(init.form).toString();
   }
   try {
-    const res = await fetch(`${base}${path}`, {
+    const options = {
       method,
       headers: baseHeaders(auth, body !== undefined),
       body,
       signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(init.timeoutMs ?? 20000)]) : AbortSignal.timeout(init?.timeoutMs ?? 20000),
-    });
+    };
+    // A private node can have a private CA and a loopback/gateway route. Keep
+    // normal hostname + CA validation; never disable verification globally.
+    const res = auth.tls ? await privateNodeRequest(`${base}${path}`, auth.tls, options) : await fetch(`${base}${path}`, options);
     const json = (await res.json()) as { success?: boolean; msg?: string; obj?: T } | null;
     if (!json) return { ok: false, msg: `پاسخ نامعتبر از پنل (HTTP ${res.status})` };
     if (json.success === true) {
@@ -192,6 +199,24 @@ async function panelRequest<T>(
   } catch (e) {
     return { ok: false, msg: `خطای ارتباط با پنل: ${(e as Error).message}` };
   }
+}
+
+function privateNodeRequest(url: string, tls: NonNullable<PanelAuth["tls"]>, init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal }): Promise<Response> {
+  const target = new URL(url);
+  if (target.protocol !== "https:") throw new Error("Private node requires HTTPS");
+  return new Promise((resolve, reject) => {
+    const req = https.request(target, {
+      method: init.method, headers: init.headers, signal: init.signal,
+      hostname: tls.connectHost, servername: target.hostname, ca: tls.ca,
+      rejectUnauthorized: true,
+    }, res => {
+      const chunks: Buffer[] = []; let bytes = 0;
+      res.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) req.destroy(new Error("Node response too large")); else chunks.push(chunk); });
+      res.on("error", reject);
+      res.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode || 502 })));
+    });
+    req.on("error", reject); req.end(init.body);
+  });
 }
 
 export type RawInbound = {
@@ -357,11 +382,17 @@ export async function updateClient(
   protocol: string,
   client: Partial<PanelClient>
 ): Promise<PanelApiResult> {
-  return panelRequest(
+  if (auth.nodePeers?.length) {
+    const synced = await syncNodeClientUpdate(auth, email, client, panelRequest);
+    if (!synced.ok) return synced;
+  }
+  const result = await panelRequest(
     auth,
     `/panel/api/clients/update/${encodeURIComponent(email)}`,
     { method: "POST", json: buildClientPayload(protocol, client) }
   );
+  if (!result.ok || !auth.nodePeers?.length) return result;
+  return verifyMasterClientUpdate(auth, email, client, panelRequest);
 }
 
 /** اتصال کلاینت موجود به اینباندهای جدید */
@@ -389,14 +420,16 @@ export async function detachClient(
 }
 
 /** حذف کلاینت از همه اینباندها (رکورد یکتا) */
-export async function deleteClient(auth: PanelAuth, email: string): Promise<PanelApiResult> {
+export async function deleteClient(auth: PanelAuth, email: string, progress?: NodeMutationProgress): Promise<PanelApiResult> {
+  if (auth.nodePeers?.length || progress && await progress.load()) return mutateWithNodePeers(auth, email, "delete", panelRequest, progress);
   return panelRequest(auth, `/panel/api/clients/del/${encodeURIComponent(email)}`, {
     method: "POST",
   });
 }
 
 /** ریست ترافیک کلاینت بر اساس ایمیل */
-export async function resetClientTraffic(auth: PanelAuth, email: string): Promise<PanelApiResult> {
+export async function resetClientTraffic(auth: PanelAuth, email: string, progress?: NodeMutationProgress): Promise<PanelApiResult> {
+  if (auth.nodePeers?.length || progress && await progress.load()) return mutateWithNodePeers(auth, email, "reset", panelRequest, progress);
   return panelRequest(auth, `/panel/api/clients/resetTraffic/${encodeURIComponent(email)}`, {
     method: "POST",
   });

@@ -19,3 +19,59 @@ An enabled client can be disabled by a node's traffic loop even when the central
 - Verify consumption did not decrease, identities/memberships stayed intact, unrelated client configuration and authentication settings are unchanged, and service PIDs/container identities/port bindings stayed intact. No restart or network change is required for this data repair.
 
 This procedure reconciles the affected account. It does not migrate nodes, alter inbound ownership, or replace a complete node configuration. If future central edits do not reach a node copy, inspect the node ownership/synchronization relationship separately before expanding the repair scope.
+
+## Dashboard prevention for unlinked node copies
+
+The dashboard adapter now supports explicit node repair peers. Before a client
+update reports success, it reads the master and each existing unlinked peer copy,
+requires the same UUID, writes the peer's complete client record with the intended
+quota/expiry/enable changes, verifies it, then writes and verifies the master.
+Per-node settings and traffic counters are preserved. Missing accounts are never
+created by reconciliation. Copies linked to the configured master inbound IDs
+remain under the native master's normal fan-out. This applies to single edits,
+bulk extension, subscription rotation and bridge updates through `updateClient`.
+
+Peer connections are **not** PanelConfig billing panels. Their traffic is not added
+to canonical usage, and they do not change pool calculations. Reset/delete use
+the existing operation journal with durable per-peer and master progress. A reset
+whose response was lost is marked STARTED and requires administrator repair;
+retry must never silently reset newly accrued traffic. A completed peer is skipped
+on resume. Deliberately disabled accounts are not automatically re-enabled.
+
+Provision through the root-only CLI:
+
+```sh
+docker exec -i pv-reseller-dashboard node scripts/configure-node-sync.cjs PANEL_ID < /root/private-peers.json
+```
+
+The input is a JSON array of `{key, baseUrl, token, masterInboundIds, tls?}`.
+Use stable unique keys, the owning node's HTTPS API URL and a dedicated native
+client-write credential. The native v3.10.2 API requires admin scope for these
+client routes; monitor/node-sync scopes do not grant these operations. Optional
+`tls: {connectHost, ca}` routes through a private address while retaining CA and
+hostname verification. No listener or new port is created. Never use a token hash
+as a bearer token, disable TLS verification, print credentials, or add the peer as
+another billing panel. The entire peer document is AES-GCM encrypted in Setting
+`nodeSyncPeers:PANEL_ID` with APP_SECRET and included in dashboard backups.
+
+On server migration restore APP_SECRET and the encrypted settings together, then
+verify the peer address, private gateway and CA on the destination. On certificate
+renewal with a new self-signed CA, update the configured CA. If a peer is unavailable
+or identity verification fails, writes stop with a partial-operation error; reserved
+quota remains held. Do not drop peer configuration while operations are pending.
+
+Rollback: keep the previous image/container and pre-deployment SQLite snapshot.
+Reverting the image preserves the database, but removes peer protection, so pause
+mutations until corrected. Revoke the dedicated native token and remove the
+encrypted peer setting only when intentionally retiring this integration.
+
+Regression checks:
+
+```sh
+node --test scripts/test-node-client-sync.mjs
+node scripts/test-node-client-sync-api.mjs
+```
+
+The second fixture uses Python cryptography to create a temporary test CA. It
+checks real Next routes, SQLite journals, HTTPS hostname validation, bulk edits,
+intentional disable, partial retries, reset and delete without real VPN accounts.
