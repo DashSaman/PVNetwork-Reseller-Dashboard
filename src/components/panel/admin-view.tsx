@@ -55,6 +55,36 @@ type OverviewData = {
     usersSeries: { date: string; label: string; count: number }[];
     resellersBreakdown: { name: string; users: number }[];
   };
+  trafficLedger: TrafficLedger;
+};
+
+type TrafficLedger = {
+  available: boolean;
+  totals: {
+    allocatedToResellersGB: number | null;
+    soldToUsersGB: number;
+    soldUnlimitedUsers: number;
+    unsoldGB: number | null;
+    soldButUnusedGB: number | null;
+    actualUsedGB: number | null;
+    consumedHistoricalGB: number;
+    reservedGB: number;
+  };
+  resellers: {
+    id: string;
+    name: string;
+    unlimitedPool: boolean;
+    poolGB: number | null;
+    soldGB: number;
+    unlimitedUsers: number;
+    unsoldGB: number | null;
+    soldButUnusedGB: number | null;
+    actualUsedGB: number | null;
+    consumedHistoricalGB: number;
+    reservedGB: number;
+    usageKnownUsers: number;
+    users: number;
+  }[];
 };
 
 type PanelSummaryData = {
@@ -66,6 +96,7 @@ type PanelSummaryData = {
     totalUp: number;
     totalDown: number;
   };
+  trafficLedger: TrafficLedger;
   trafficByInbound: { panelName: string; tag: string; clients: number; upGB: number; downGB: number }[];
   panelErrors?: { panelName: string; msg: string }[];
   configured: boolean;
@@ -240,7 +271,7 @@ function OverviewTab({
         setPanelSummary(r.data); setPanelError("");
         setPanelLoading(r.data.pending && !hasPanelData.current);
         setPanelRefreshing(r.data.pending);
-      } else {
+      } else if (r.status !== 401) {
         setPanelLoading(false); setPanelRefreshing(false);
         setPanelError(r.error || "دریافت آمار زنده ناموفق بود؛ دوباره تلاش می‌شود.");
       }
@@ -268,6 +299,7 @@ function OverviewTab({
 
   const { stats, charts } = data;
   const panel = panelSummary?.panel;
+  const businessLedger = panelSummary?.trafficLedger ?? data.trafficLedger;
   const panelState = panelError ? "OFFLINE" : panelSummary?.state ?? "CHECKING";
   const donutData = (panelSummary?.trafficByInbound || []).map((t) => ({ tag: t.tag, usedGB: t.upGB + t.downGB })).slice(0, 8);
   const usersPerInbound = (panelSummary?.trafficByInbound || []).map((t) => ({ tag: t.tag, users: t.clients }));
@@ -278,7 +310,7 @@ function OverviewTab({
     : panelState === "OFFLINE" ? "tone-danger"
     : "";
   const panelStateText =
-    panelState === "ONLINE" ? (panel && panel.panelsCount > 1 ? `${faNum(panel.panelsCount)} پنل ثنایی متصل است` : "پنل ثنایی متصل است")
+    panelState === "ONLINE" ? (panel && panel.panelsCount > 1 ? `${faNum(panel.panelsCount)} پنل متصل است` : "پنل متصل است")
     : panelState === "DEGRADED" ? "دریافت وضعیت زنده پنل با اختلال موقت مواجه است"
     : panelState === "OFFLINE" ? "پنل تنظیم شده است اما در حال حاضر پاسخ نمی‌دهد"
     : panelState === "NOT_CONFIGURED" ? "هیچ پنل فعالی تنظیم نشده است"
@@ -320,12 +352,12 @@ function OverviewTab({
         <StatCard title="نماینده‌ها" value={faNum(stats.resellers)} sub={`فعال: ${faNum(stats.activeResellers)}`} icon={<Users className="h-4 w-4" />} tone="brand" />
         <StatCard title="کل کاربران نماینده‌ها" value={faNum(stats.users)} icon={<UserCheck className="h-4 w-4" />} tone="orange" />
         <StatCard
-          title="ترافیک کل (آپلود)"
+          title="ترافیک کل زیرساخت (آپلود)"
           value={panel?.connected ? formatUsageGB(Math.round((panel.totalUp / 1073741824) * 100) / 100) : "—"}
           icon={<ArrowUpDown className="h-4 w-4" />}
         />
         <StatCard
-          title="ترافیک کل (دانلود)"
+          title="ترافیک کل زیرساخت (دانلود)"
           value={panel?.connected ? formatUsageGB(Math.round((panel.totalDown / 1073741824) * 100) / 100) : "—"}
           icon={<ArrowUpDown className="h-4 w-4" />}
           tone="success"
@@ -333,6 +365,42 @@ function OverviewTab({
       </div>
 
       {/* نمودارها */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-bold text-sm">گردش سهمیه کاربران نماینده‌ها</h3>
+          <span className="text-[11px] text-muted-foreground">فقط کاربران ثبت‌شده در پنل نماینده‌ها</span>
+        </div>
+        <p className="text-xs text-muted-foreground">مصرف واقعی و فروش مصرف‌نشده از شمارنده کاربران متعلق به نماینده‌ها محاسبه می‌شود. ترافیک کل زیرساخت آمار جداگانه‌ای است. مصرف تاریخی حذف/ریست: {faNum(businessLedger.totals.consumedHistoricalGB)} GB؛ رزرو عملیات فعال: {faNum(businessLedger.totals.reservedGB)} GB.</p>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <StatCard title="سهمیه اختصاص‌یافته به نماینده‌ها" value={businessLedger.totals.allocatedToResellersGB === null ? "نامحدود" : `${faNum(businessLedger.totals.allocatedToResellersGB)} GB`} icon={<ArrowUpDown className="h-4 w-4" />} />
+          <StatCard title="سهمیه کاربران فعلی" value={`${faNum(businessLedger.totals.soldToUsersGB)} GB${businessLedger.totals.soldUnlimitedUsers ? " + نامحدود" : ""}`} sub={businessLedger.totals.soldUnlimitedUsers ? `${faNum(businessLedger.totals.soldUnlimitedUsers)} کاربر نامحدود` : undefined} icon={<Users className="h-4 w-4" />} tone="orange" />
+          <StatCard title="باقی‌مانده تخصیص‌نیافته" value={businessLedger.totals.unsoldGB === null ? "نامحدود" : `${faNum(businessLedger.totals.unsoldGB)} GB`} icon={<ArrowUpDown className="h-4 w-4" />} tone="brand" />
+          <StatCard title="فروش مصرف‌نشده کاربران" value={businessLedger.totals.soldButUnusedGB === null ? "نامشخص" : `${faNum(businessLedger.totals.soldButUnusedGB)} GB`} icon={<TrendingUp className="h-4 w-4" />} />
+          <StatCard title="مصرف واقعی کاربران" value={businessLedger.totals.actualUsedGB === null ? "نامشخص" : `${faNum(businessLedger.totals.actualUsedGB)} GB`} sub={!businessLedger.available ? "در انتظار داده زنده کامل" : undefined} icon={<ArrowUpDown className="h-4 w-4" />} tone="success" />
+        </div>
+        <Card className="bg-card card-soft">
+          <CardContent className="p-4 sm:p-5">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm text-right">
+                <thead><tr className="border-b border-border text-muted-foreground">
+                  <th className="py-2 font-medium">نماینده</th><th className="py-2 font-medium">سهمیه نماینده</th><th className="py-2 font-medium">سهمیه کاربران</th><th className="py-2 font-medium">باقی‌مانده</th><th className="py-2 font-medium">مصرف تاریخی</th><th className="py-2 font-medium">رزرو</th><th className="py-2 font-medium">مصرف واقعی</th><th className="py-2 font-medium">مصرف‌نشده</th>
+                </tr></thead>
+                <tbody>{businessLedger.resellers.map((row) => <tr key={row.id} className="border-b border-border/60 last:border-0">
+                  <td className="py-2.5 font-semibold">{row.name}</td>
+                  <td className="py-2.5">{row.poolGB === null ? "نامحدود" : `${faNum(row.poolGB)} GB`}</td>
+                  <td className="py-2.5">{faNum(row.soldGB)} GB{row.unlimitedUsers ? ` + ${faNum(row.unlimitedUsers)} نامحدود` : ""}</td>
+                  <td className="py-2.5">{row.unsoldGB === null ? "نامحدود" : `${faNum(row.unsoldGB)} GB`}</td>
+                  <td className="py-2.5">{faNum(row.consumedHistoricalGB)} GB</td><td className="py-2.5">{faNum(row.reservedGB)} GB</td>
+                  <td className="py-2.5">{row.actualUsedGB === null ? "نامشخص" : `${faNum(row.actualUsedGB)} GB`}{row.actualUsedGB === null ? "" : ` (${faNum(row.usageKnownUsers)}/${faNum(row.users)} کاربر)`}</td>
+                  <td className="py-2.5">{row.soldButUnusedGB === null ? "نامشخص" : `${faNum(row.soldButUnusedGB)} GB`}</td>
+                </tr>)}</tbody>
+              </table>
+              {businessLedger.totals.reservedGB > 0 && <p className="mt-3 text-xs text-muted-foreground">رزرو در حال انجام: {faNum(businessLedger.totals.reservedGB)} GB</p>}
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* روند ساخت کاربران — local */}
         <Card className="bg-card card-soft lg:col-span-3">

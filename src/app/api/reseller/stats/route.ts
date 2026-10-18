@@ -4,6 +4,7 @@ import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, getAllocatedGB, getConsumedGB, bytesToGB } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
 import { getAllPanelInboundsForUi } from "@/lib/panel-manager";
+import { publicLocationLabel } from "@/lib/reseller-presentation";
 
 /** آمار کلی نماینده + داده‌های نمودارها (چندپنلی + پول ترافیک) */
 export async function GET() {
@@ -37,7 +38,6 @@ export async function GET() {
 
     // مصرف واقعی هر کاربر = جمع مصرف به تفکیک پنل (داخل پنل: بیشینه بین اینباندها)
     const usagePerEmail = new Map<string, { used: number; total: number }>();
-    const multiPanel = panelResult.panels.length > 1;
 
     for (const bundle of panelResult.panels) {
       const panelStatByEmail = new Map<string, { used: number; total: number }>();
@@ -60,12 +60,12 @@ export async function GET() {
         }
         if (inboundUsers > 0) {
           trafficByInbound.push({
-            tag: multiPanel ? `${bundle.panelName} · ${inb.remark || inb.tag}` : inb.remark || inb.tag,
+            tag: publicLocationLabel(inb.remark || inb.tag, bundle.panelName),
             usedGB: Math.round((inboundUsed / 1073741824) * 100) / 100,
             totalGB: 0,
           });
           usersPerInbound.push({
-            tag: multiPanel ? `${bundle.panelName} · ${inb.remark || inb.tag}` : inb.remark || inb.tag,
+            tag: publicLocationLabel(inb.remark || inb.tag, bundle.panelName),
             users: inboundUsers,
           });
         }

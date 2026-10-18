@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { SESSION_RECHECK_EVENT } from "@/lib/browser-api";
 import dynamic from "next/dynamic";
 import { LoginView } from "@/components/panel/login-view";
 import { api, PvLogo, Spinner } from "@/components/panel/shared";
@@ -28,16 +29,36 @@ function ViewSpinner() {
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
+  const inFlight = useRef(false);
+  const sessionVersion = useRef(0);
 
   const check = useCallback(async () => {
-    const r = await api<{ user: Session | null }>("/api/auth/me");
-    setSession(r.ok && r.data ? r.data.user : null);
+    if (inFlight.current) return;
+    inFlight.current = true;
+    const version = sessionVersion.current;
+    const r = await api<{ user: Session | null }>("/api/auth/me", { cache: "no-store" });
+    if (version === sessionVersion.current && r.ok && r.data) setSession(r.data.user);
+    inFlight.current = false;
     setChecking(false);
   }, []);
 
   useEffect(() => {
     void check();
+    const visible = () => { if (document.visibilityState === "visible") void check(); };
+    window.addEventListener(SESSION_RECHECK_EVENT, check);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener(SESSION_RECHECK_EVENT, check);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", visible);
+    };
   }, [check]);
+
+  const changeSession = (next: Session | null) => {
+    sessionVersion.current++;
+    setSession(next);
+  };
 
   if (checking) {
     return (
@@ -50,11 +71,11 @@ export default function Home() {
   }
 
   if (!session) {
-    return <LoginView onLogin={(s) => setSession(s)} />;
+    return <LoginView onLogin={changeSession} />;
   }
 
   if (session.role === "ADMIN") {
-    return <AdminView session={session} onLogout={() => setSession(null)} />;
+    return <AdminView key={session.uid} session={session} onLogout={() => changeSession(null)} />;
   }
-  return <ResellerView session={session} onLogout={() => setSession(null)} />;
+  return <ResellerView key={session.uid} session={session} onLogout={() => changeSession(null)} />;
 }

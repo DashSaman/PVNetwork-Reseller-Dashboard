@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess } from "@/lib/reseller-helpers";
 import { getOnlineAcrossPanels } from "@/lib/panel-manager";
+import { publicPanelErrors } from "@/lib/reseller-presentation";
 
 /** کاربران آنلاین لحظه‌ای این نماینده (اجتماع همه پنل‌ها) */
 export async function GET() {
@@ -26,6 +27,6 @@ export async function GET() {
     online,
     onlineCount: online.length,
     totalUsers: tracked.length,
-    panelErrors: r.ok ? [] : r.errors,
+    panelErrors: r.ok ? [] : publicPanelErrors(r.errors),
   });
 }

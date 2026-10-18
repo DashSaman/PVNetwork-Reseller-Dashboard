@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, canonicalUsageByEmail } from "@/lib/reseller-helpers";
 import { getAllPanelInboundsForUi } from "@/lib/panel-manager";
+import { publicPanelErrors } from "@/lib/reseller-presentation";
 
 /**
  * Live user traffic data — with UI deadline (6s).
@@ -67,7 +68,7 @@ export async function GET() {
     users,
     panelConnected: snapshot.ok,
     dataComplete,
-    panelErrors: snapshot.errors.length ? snapshot.errors : undefined,
+    panelErrors: snapshot.errors.length ? publicPanelErrors(snapshot.errors) : undefined,
     observedAt: snapshot.observedAt,
     pending: snapshot.pending || false,
     stale: snapshot.stale || false,

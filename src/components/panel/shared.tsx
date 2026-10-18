@@ -220,19 +220,7 @@ export function Spinner({ className = "" }: { className?: string }) {
   );
 }
 
-export async function api<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; data?: T; error?: string }> {
-  try {
-    const res = await fetch(url, {
-      ...init,
-      headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: (json as { error?: string }).error || "خطای نامشخص" };
-    return { ok: true, data: json as T };
-  } catch (e) {
-    return { ok: false, error: `خطای شبکه: ${(e as Error).message}` };
-  }
-}
+export { api } from "@/lib/browser-api";
 
 /** ورودی رمز عبور با دکمه نمایش/مخفی‌سازی (علامت چشم) */
 export const PasswordInput = forwardRef<HTMLInputElement, React.ComponentProps<"input">>(

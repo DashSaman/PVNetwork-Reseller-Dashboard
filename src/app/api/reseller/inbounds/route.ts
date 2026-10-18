@@ -4,6 +4,7 @@ import { requireReseller } from "@/lib/session";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 import { getResellerWithAccess, getAllocatedGB, getConsumedGB } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
+import { PUBLIC_SERVICE_NAME, PUBLIC_SERVICE_ERROR, publicLocationLabel, publicPanelErrors } from "@/lib/reseller-presentation";
 
 /**
  * اینباندهای مجاز نماینده (از همه پنل‌ها) + پول ترافیک او
@@ -28,9 +29,9 @@ export async function GET() {
   const dbFallback = reseller.inbounds.map((i) => ({
     inboundId: i.inboundId,
     panelId: i.panelId || primaryPanelId,
-    panelName: panelNameById.get(i.panelId || primaryPanelId) || "پنل اصلی",
-    tag: i.inboundTag,
-    remark: i.remark || i.inboundTag,
+    panelName: PUBLIC_SERVICE_NAME,
+    tag: publicLocationLabel(i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
+    remark: publicLocationLabel(i.remark || i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
     protocol: i.protocol,
     port: i.port,
     clientsCount: 0,
@@ -61,9 +62,9 @@ export async function GET() {
         live.push({
           inboundId: i.id,
           panelId: bundle.panelId,
-          panelName: bundle.panelName,
-          tag: i.tag,
-          remark: i.remark,
+          panelName: PUBLIC_SERVICE_NAME,
+          tag: publicLocationLabel(i.tag, bundle.panelName),
+          remark: publicLocationLabel(i.remark, bundle.panelName),
           protocol: i.protocol,
           port: i.port,
           clientsCount: i.clients.length,
@@ -79,9 +80,9 @@ export async function GET() {
       .map((i) => ({
         inboundId: i.inboundId,
         panelId: i.panelId || primaryPanelId,
-        panelName: panelNameById.get(i.panelId || primaryPanelId) || "پنل اصلی",
-        tag: i.inboundTag,
-        remark: i.remark || i.inboundTag,
+        panelName: PUBLIC_SERVICE_NAME,
+        tag: publicLocationLabel(i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
+        remark: publicLocationLabel(i.remark || i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
         protocol: i.protocol,
         port: i.port,
         clientsCount: 0,
@@ -89,7 +90,7 @@ export async function GET() {
       }));
     inbounds = [...live, ...missing];
   } else {
-    panelError = panelResult.msg || "هیچ پنلی در دسترس نیست";
+    panelError = PUBLIC_SERVICE_ERROR;
   }
 
   const allocatedGB = await getAllocatedGB(reseller.id);
@@ -98,7 +99,7 @@ export async function GET() {
   return NextResponse.json({
     inbounds,
     panelError,
-    panelErrors: panelResult.ok && panelResult.errors.length ? panelResult.errors : undefined,
+    panelErrors: panelResult.ok && panelResult.errors.length ? publicPanelErrors(panelResult.errors) : undefined,
     permissions: {
       multiLocation: reseller.multiLocation,
       allowIpLimit: reseller.allowIpLimit,

@@ -2265,7 +2265,7 @@ function AccountSettingsTab({ username }: { username: string }) {
             <Switch checked={mirzaEnabled} onCheckedChange={setMirzaEnabled} />
           </div>
           <p className="text-xs text-muted-foreground leading-5">
-            ربات تلگرامی خودتان (مثل ربات فروش سرویس در میرزا پنل) را به این سامانه وصل کنید: هم <b>اعلان‌ها</b> و هم <b>فروش مستقیم روی همین پنل</b>. با فعال‌کردن سوییچ، ربات می‌تواند مثل اتصال به یک پنل 3x-ui به حساب شما وصل شود — با همان اینباندهای مجاز، همان سقف پول ترافیک و همان قوانین داشبورد. برای اعلان‌ها هم توکن بات و شناسه چت را وارد کنید (اختیاری).
+            ربات تلگرامی خودتان (مثل ربات فروش سرویس در میرزا پنل) را به این سامانه وصل کنید: هم <b>اعلان‌ها</b> و هم <b>فروش مستقیم روی همین سامانه</b>. با فعال‌کردن سوییچ، ربات از طریق رابط سازگار سامانه به حساب شما وصل می‌شود — با همان لوکیشن‌های مجاز، همان سقف پول ترافیک و همان قوانین داشبورد. برای اعلان‌ها هم توکن بات و شناسه چت را وارد کنید (اختیاری).
           </p>
           <a
             href="/guide/mirza-bot"
@@ -2280,7 +2280,7 @@ function AccountSettingsTab({ username }: { username: string }) {
             <div className="rounded-xl border border-[var(--brand)]/40 bg-[var(--brand-soft)] p-3.5 space-y-2.5">
               <div className="text-xs font-bold text-[var(--brand-deep)]">تنظیمات اتصال ربات به این پنل (فروش)</div>
               <p className="text-[11px] text-muted-foreground leading-5">
-                در بخش تنظیمات پنلِ ربات میرزا، این سه مقدار را وارد کنید — دقیقاً مثل وقتی که ربات را به 3x-ui وصل می‌کنید:
+                در بخش تنظیمات اتصال ربات میرزا، آدرس و مشخصات حساب همین سامانه را وارد کنید:
               </p>
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
@@ -2305,10 +2305,10 @@ function AccountSettingsTab({ username }: { username: string }) {
               </div>
               <ol className="text-[11px] text-muted-foreground leading-5 list-decimal ps-4 space-y-0.5">
                 <li>سوییچ بالا روشن باشد و تنظیمات ذخیره شده باشد</li>
-                <li>در ربات میرزا: بخش پنل‌ها ← افزودن پنل ← نوع <b>x-ui</b> انتخاب شود</li>
+                <li>در ربات میرزا، اتصال جدیدی با حالت سازگار با API سامانه اضافه کنید</li>
                 <li>آدرس، نام کاربری و رمز بالا را وارد کنید</li>
                 <li>«تست اتصال ربات» را بزنید — شناسه اینباند زیر همین‌جا نمایش داده می‌شود؛ همان عدد را در فیلد <b dir="ltr">inboundid</b> ربات وارد کنید</li>
-                <li>«لینک ساب» ربات (<b dir="ltr">linksubx</b>) را روی آدرس سابسکریپشن پنل 3x-ui شما تنظیم کنید (مثل <b dir="ltr">https://sub.example.com/sub</b>) — لینک خریدار به شکل <b dir="ltr">لینک-ساب/شناسه</b> ساخته می‌شود</li>
+                <li>«لینک ساب» ربات (<b dir="ltr">linksubx</b>) را روی آدرس سابسکریپشن همین سامانه تنظیم کنید (مثل <b dir="ltr">https://sub.example.com/sub</b>) — لینک خریدار به شکل <b dir="ltr">لینک-ساب/شناسه</b> ساخته می‌شود</li>
                 <li>ربات را ذخیره کنید — از این به بعد فروش‌ها از همین پنل انجام می‌شود</li>
               </ol>
               <div className="flex flex-wrap items-center gap-2">

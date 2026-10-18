@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
-import { getAllPanelInboundsForUi } from "@/lib/panel-manager";
+import { getAllPanelInboundsForUi, getPrimaryPanel } from "@/lib/panel-manager";
+import { getAdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 
 // ---- Health hysteresis (DISPLAY ONLY) — یک timeout ≠ OFFLINE ----
 type PanelHealth = {
@@ -47,6 +48,8 @@ export async function GET() {
 
   const configured = (await db.panelConfig.count({ where: { active: true } })) > 0;
   const snapshot = await getAllPanelInboundsForUi();
+  const primary = await getPrimaryPanel();
+  const trafficLedger = await getAdminTrafficLedger(snapshot, primary?.id || "");
 
   const GIB = 1024 * 1024 * 1024;
   let totalClients = 0;
@@ -96,6 +99,7 @@ export async function GET() {
       totalDown,
     },
     trafficByInbound: inboundSummaries,
+    trafficLedger,
     panelErrors: snapshot.errors.length ? snapshot.errors : undefined,
     // health hysteresis (display only)
     configured,

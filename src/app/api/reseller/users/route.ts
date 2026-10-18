@@ -6,6 +6,7 @@ import { getResellerWithAccess, bytesToGB, getConsumedGB, canonicalUsageByEmail,
 import { getQuotaState } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { sendThresholdAlerts, type ThresholdAlert } from "@/lib/telegram";
+import { PUBLIC_SERVICE_ERROR, publicLocationLabel } from "@/lib/reseller-presentation";
 
 /** لیست کاربران نماینده از روی همه پنل‌ها */
 export async function GET() {
@@ -22,7 +23,7 @@ export async function GET() {
   const { getAllPanelInbounds } = await import("@/lib/panel-manager");
   const panelResult = await getAllPanelInbounds();
   if (!panelResult.ok) {
-    return NextResponse.json({ error: panelResult.msg || "هیچ پنلی در دسترس نیست" }, { status: 502 });
+    return NextResponse.json({ error: PUBLIC_SERVICE_ERROR }, { status: 502 });
   }
 
   const trackedMap = new Map(trackedUsers.map((u) => [u.email, u]));
@@ -66,7 +67,7 @@ export async function GET() {
           });
         }
         const tags = tagsByEmail.get(stat.email) || [];
-        tags.push(panelResult.panels.length > 1 ? `${bundle.panelName} · ${inb.tag}` : inb.tag);
+        tags.push(publicLocationLabel(inb.tag, bundle.panelName));
         tagsByEmail.set(stat.email, tags);
         if (!protoByEmail.has(stat.email)) protoByEmail.set(stat.email, inb.protocol);
       }

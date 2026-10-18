@@ -4,6 +4,7 @@ import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, refKey, parseInboundRefs } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
 import { buildSubLink } from "@/lib/panel-manager";
+import { PUBLIC_SERVICE_NAME, publicLocationLabel } from "@/lib/reseller-presentation";
 
 /**
  * بوت‌استرپ اولین صفحهٔ نماینده («کاربران من») — فقط دادهٔ لوکال DB، بدون هیچ تماس با 3x-ui.
@@ -45,7 +46,7 @@ export async function GET() {
           const meta = allowedById.get(`${r.panelId}::${r.inboundId}`);
           const panelName = panelNameById.get(r.panelId) || "";
           const tag = meta?.inboundTag || meta?.remark || `#${r.inboundId}`;
-          return panelName ? `${panelName} · ${tag}` : tag;
+          return publicLocationLabel(tag, panelName);
         })
         .filter(Boolean);
     } catch { /* refs نامعتبر → خالی */ }
@@ -71,9 +72,9 @@ export async function GET() {
   const inbounds = reseller.inbounds.map((i) => ({
     inboundId: i.inboundId,
     panelId: i.panelId || primaryPanelId,
-    panelName: panelNameById.get(i.panelId || primaryPanelId) || "پنل",
-    tag: i.inboundTag,
-    remark: i.remark || i.inboundTag,
+    panelName: PUBLIC_SERVICE_NAME,
+    tag: publicLocationLabel(i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
+    remark: publicLocationLabel(i.remark || i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
     protocol: i.protocol,
     port: i.port,
     clientsCount: 0, // live آپدیت می‌کند

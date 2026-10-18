@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
+import { getAdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 
 /**
  * Admin overview — 100% LOCAL DB only، بدون هیچ تماس با 3x-ui.
@@ -10,11 +11,12 @@ export async function GET() {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
 
-  const [resellers, users, logs, activeResellers] = await Promise.all([
+  const [resellers, users, logs, activeResellers, trafficLedger] = await Promise.all([
     db.reseller.count(),
     db.resellerUser.count(),
     db.activityLog.count(),
     db.reseller.count({ where: { active: true } }),
+    getAdminTrafficLedger(),
   ]);
 
   // روند ساخت کاربران در ۱۴ روز گذشته
@@ -51,6 +53,7 @@ export async function GET() {
 
   const res = NextResponse.json({
     stats: { resellers, activeResellers, users, logs },
+    trafficLedger,
     recentLogs,
     charts: { usersSeries, resellersBreakdown },
   });

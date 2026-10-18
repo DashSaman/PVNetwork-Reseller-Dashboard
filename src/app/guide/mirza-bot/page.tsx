@@ -34,7 +34,7 @@ const steps = [
     title: "در ربات میرزا پنل اضافه کنید",
     body: (
       <>
-        در ربات میرزا وارد بخش مدیریت پنل‌ها شوید، یک پنل جدید اضافه کنید و نوع آن را <b>x-ui (ثنایی)</b> انتخاب کنید.
+        در ربات میرزا وارد بخش مدیریت اتصال‌ها شوید و یک اتصال جدید با حالت سازگار با API سامانه اضافه کنید.
         سپس به ترتیب: آدرس پنل، نام کاربری و رمز عبور کپی‌شده را وارد کنید.
       </>
     ),
@@ -55,7 +55,7 @@ const steps = [
     body: (
       <>
         ربات لینک اشتراک خریدار را به شکل <b dir="ltr">linksubx/شناسه</b> می‌سازد. پس در تنظیمات پنل داخل ربات،
-        فیلد <b dir="ltr">linksubx</b> را روی آدرس سابسکریپشن پنل 3x-ui شما تنظیم کنید؛ مثلاً{" "}
+        فیلد <b dir="ltr">linksubx</b> را روی آدرس سابسکریپشن همین سامانه تنظیم کنید؛ مثلاً{" "}
         <b dir="ltr">https://sub.example.com/sub</b>. اگر مطمئن نیستید، این مقدار را از ادمین سامانه بپرسید.
       </>
     ),
@@ -170,11 +170,11 @@ export default function MirzaGuidePage() {
                 </tr>
                 <tr>
                   <td className="border border-border px-3 py-2" dir="ltr">linksubx</td>
-                  <td className="border border-border px-3 py-2">آدرس سابسکریپشن پنل 3x-ui شما (پایه لینک خریدار)</td>
+                  <td className="border border-border px-3 py-2">آدرس سابسکریپشن همین سامانه (پایه لینک خریدار)</td>
                 </tr>
                 <tr>
                   <td className="border border-border px-3 py-2" dir="ltr">type</td>
-                  <td className="border border-border px-3 py-2">x-ui (ثنایی)</td>
+                  <td className="border border-border px-3 py-2">حالت سازگار با API سامانه</td>
                 </tr>
               </tbody>
             </table>

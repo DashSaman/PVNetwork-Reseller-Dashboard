@@ -4,6 +4,7 @@ import { requireReseller } from "@/lib/session";
 import { getPanelById, getAllPanelInbounds, buildSubLink } from "@/lib/panel-manager";
 import { getResellerWithAccess } from "@/lib/reseller-helpers";
 import { buildV2rayLink, type BuiltLink } from "@/lib/links";
+import { PUBLIC_SERVICE_NAME, PUBLIC_SERVICE_ERROR, publicLocationLabel } from "@/lib/reseller-presentation";
 
 type Ctx = { params: Promise<{ email: string }> };
 
@@ -64,14 +65,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
             protocol: inb.protocol,
             host,
             port: inb.port,
-            remark: `${inb.remark || inb.tag}`,
+            remark: publicLocationLabel(inb.remark || inb.tag, bundle.panelName),
             uuid: client.id,
             password: client.password,
             email,
             flow: client.flow || "",
             stream: (inb.stream || null) as Record<string, unknown> | null,
           });
-          links.push({ ...built, tag: inb.tag, panelName: bundle.panelName, remark: inb.remark || inb.tag });
+          links.push({ ...built, tag: publicLocationLabel(inb.tag, bundle.panelName), panelName: PUBLIC_SERVICE_NAME, remark: publicLocationLabel(inb.remark || inb.tag, bundle.panelName) });
         }
       }
     }
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       subId: tracked.subId || null,
       subLink,
       links,
-      panelError: panelResult.ok ? null : panelResult.msg || null,
+      panelError: panelResult.ok ? null : PUBLIC_SERVICE_ERROR,
     });
   } catch (e) {
     console.error("user links error:", e);
