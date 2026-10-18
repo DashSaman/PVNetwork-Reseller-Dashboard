@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { runtimeSecret } from "../../scripts/runtime-secret.cjs";
 
 // ---------- رمزنگاری رمزهای عبور (scrypt) ----------
 export function hashPassword(password: string): string {
@@ -20,7 +21,7 @@ export function verifyPassword(password: string, stored: string): boolean {
 }
 
 // ---------- رمزنگاری AES برای پسورد پنل ----------
-const SECRET = process.env.APP_SECRET || "reseller-panel-local-secret-key-2024";
+const SECRET = runtimeSecret();
 
 function aesKey(): Buffer {
   return crypto.createHash("sha256").update(SECRET).digest();

@@ -190,7 +190,10 @@ def main():
     args = parser.parse_args()
     if args.command == 'create':
         inputs = json.loads(Path(args.input).read_text(encoding='utf-8'))
-        result = create_archive(args.database, args.directory, os.environ.get('APP_SECRET', ''), inputs['panels'], panel_errors=inputs.get('errors'), kind=args.kind)
+        key_file = Path(args.database).resolve().parent / '.app-secret'
+        if key_file.is_symlink(): raise ValueError('Invalid recovery key file')
+        secret = key_file.read_text(encoding='utf-8') if key_file.exists() else os.environ.get('APP_SECRET', '')
+        result = create_archive(args.database, args.directory, secret, inputs['panels'], panel_errors=inputs.get('errors'), kind=args.kind)
     elif args.command == 'list': result = {'files': list_archives(args.directory)}
     elif args.command == 'verify':
         meta = verify_archive(args.archive); result = {'valid': True, 'complete': meta['complete'], 'panelCount': len(meta['panels'])}

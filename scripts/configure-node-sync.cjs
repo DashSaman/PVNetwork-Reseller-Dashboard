@@ -2,9 +2,10 @@
 // docker exec -i <container> node scripts/configure-node-sync.cjs <panel-id> < private-peers.json
 const crypto = require('node:crypto');
 const { PrismaClient } = require('@prisma/client');
+const secret = require('./runtime-secret.cjs').runtimeSecret();
 (async () => {
   const panelId = process.argv[2];
-  if (!panelId || !process.env.APP_SECRET) throw Error('panel-id and APP_SECRET required');
+  if (!panelId || !secret) throw Error('panel-id and APP_SECRET required');
   let raw = ''; for await (const chunk of process.stdin) { raw += chunk; if (raw.length > 200000) throw Error('Configuration too large'); }
   const peers = JSON.parse(raw), keys = new Set();
   if (!Array.isArray(peers) || peers.length > 10) throw Error('Invalid peers');
@@ -17,7 +18,7 @@ const { PrismaClient } = require('@prisma/client');
   const db = new PrismaClient();
   try {
     if (!await db.panelConfig.findUnique({ where: { id: panelId } })) throw Error('Panel not found');
-    const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', crypto.createHash('sha256').update(process.env.APP_SECRET).digest(), iv);
+    const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', crypto.createHash('sha256').update(secret).digest(), iv);
     const encrypted = Buffer.concat([cipher.update(JSON.stringify(peers), 'utf8'), cipher.final()]);
     const value = [iv, cipher.getAuthTag(), encrypted].map(b => b.toString('base64')).join('.');
     const key = 'nodeSyncPeers:' + panelId;

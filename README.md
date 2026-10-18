@@ -28,6 +28,13 @@ The dedicated `pv-reseller-backup.timer` runs daily at **03:00 Asia/Tehran**. Af
 
 Verify and restore on a fresh destination:
 
+Docker deployments also provide **Backup → Restore backup** for fresh installations
+only (no resellers/users/panel connections/settings/accounting operations). Upload
+a trusted ZIP up to 64 MiB, review validated counts, then confirm with the current
+destination admin password and 2FA if enabled. Only the dashboard restarts; DB and
+original key are installed before Node starts. Sign in with the archived accounts.
+Review old private node routes on the destination before enabling operational use.
+
 Follow the [complete migration and restore runbook (Persian)](docs/dashboard-migration-restore.fa.md) for destination port/network preflight, recovery-key installation, encrypted node peer routing, acceptance checks, cutover and rollback. The ZIP does not contain host configuration or native VPN databases.
 
 ```bash

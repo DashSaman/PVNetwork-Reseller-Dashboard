@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { logActivity } from "@/lib/logger";
+import { runtimeSecret } from "../../scripts/runtime-secret.cjs";
 
 const exec = promisify(execFile);
 export type BackupEntry = { name: string; createdAt: string; kind: "daily" | "manual"; size: number; complete: boolean; panelCount: number; errors: { id: string; name: string; error: string }[] };
@@ -21,7 +22,7 @@ async function python(args: string[]) {
   const parameters = process.platform === "win32" ? [locations().script, ...args] : ["-n", "10", executable, locations().script, ...args];
   const r = await exec(command, parameters, {
     timeout: 240000, maxBuffer: 1024 * 1024,
-    env: { ...process.env, PYTHONIOENCODING: "utf-8", APP_SECRET: process.env.APP_SECRET || "reseller-panel-local-secret-key-2024" }, windowsHide: true,
+    env: { ...process.env, PYTHONIOENCODING: "utf-8", APP_SECRET: runtimeSecret() }, windowsHide: true,
   });
   return JSON.parse(r.stdout);
 }
