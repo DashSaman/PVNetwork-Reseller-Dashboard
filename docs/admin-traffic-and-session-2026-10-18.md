@@ -141,3 +141,39 @@ API آمار نماینده فقط ledger همان حساب احرازشده ر�
 تنظیمات برابر ماند؛ تنظیمات بومی، PID سرویس‌ها، سایر کانتینرها و پورت‌ها تغییر نکرد.
 پذیرش HTTPS عمومی ONLINE و شمارندهٔ هر ۴۹ کاربر، و ledger محدود به مالک برای
 هر چهار نماینده را تأیید کرد. بازیابی روی تولید انجام نشد و تایمر بکاپ فعال ماند.
+
+## Follow-up: purple sold-unused donut and final archive
+
+The original donut displayed all sold quota as one blue slice; only the sales
+bar below it split used and unused. The shared chart now replaces that sold
+slice with amber used-from-sale and purple sold-unused slices. It does not add
+either slice on top of sold. Green unsold, historical consumption and reservations
+remain separate; unknown live data keeps unsplit sold rather than inventing zero.
+Both admin and reseller full charts use this display-only model. No schema,
+accounting, user mutation or native panel setting changed.
+
+Runtime commit: `3911a03`. Fresh checks: 14 chart/ledger units, 25 API/browser
+checks (including the actual purple/amber CSS gradient and mobile layout),
+TypeScript and targeted ESLint passed. The production image built successfully;
+11 isolated image checks passed with network=none, no production mounts, no
+published ports and zero upstream writes. Image:
+`sha256:cbdd074c005df774b4d4b0220fd5b775ed2e373f3931db7a63346d248cf62ae2`.
+Public HTTPS acceptance confirmed ONLINE, all 49 known user counters and scoped
+ledger access for all four resellers. A separate temporary browser tab using the
+existing Mobin session directly verified purple/amber donut slices and exact
+live labels; the user's original settings tab was left untouched.
+Only the dashboard was replaced, preserving its existing loopback binding.
+All protected tables, 49 users, four resellers, settings and balances matched
+before/after; native settings, other containers, service PIDs and ports matched.
+
+Final dashboard archive: `pvnet-20261018T155044Z-1fdd07b8ac5c.zip` (55,641 bytes),
+SHA-256 `fa08af90285b3644ccde722a08ff708806329dd7edb9c8e6818c283cbe5a5fac`.
+Authenticated public HTTPS download matched the archive hash. Integrity and a
+restore into a private temporary directory passed; every dashboard table matched,
+including 49 users, four resellers, 48 inbound permissions, admin, panel config,
+107 operation journals and settings. Recovery key, three encrypted fields and
+node-sync peer configuration were verified. Production restore was never run;
+only expected backup activity was added. Daily 03:00 Asia/Tehran backup and five-day
+retention remain active. This data archive requires compatible current repo/image
+for deployment; it does not contain application binaries or native panel exports.
+
