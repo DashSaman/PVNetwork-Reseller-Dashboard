@@ -51,9 +51,17 @@ def inspect_database(database, template):
         actual = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'") if not r[0].startswith('sqlite_')}
         expected = {r[0] for r in t.execute("SELECT name FROM sqlite_master WHERE type='table'") if not r[0].startswith('sqlite_')}
         if actual != expected or not set(TABLES).issubset(actual): raise ValueError('Incompatible tables')
+        def columns(connection, table):
+            result=[]
+            for _, name, typ, required, default, pk in connection.execute(f'PRAGMA table_info("{table}")'):
+                # Older additive migrations used SQLite 0/1 for Prisma false/true.
+                if typ.upper() == 'BOOLEAN' and default is not None:
+                    default={'false':'0','true':'1'}.get(default.lower(),default)
+                result.append((name,typ.upper(),required,default,pk))
+            return sorted(result)
         for table in expected:
             # Compare full column contracts (name, type, nullability, default and PK).
-            if sorted(r[1:] for r in c.execute(f'PRAGMA table_info("{table}")')) != sorted(r[1:] for r in t.execute(f'PRAGMA table_info("{table}")')):
+            if columns(c,table) != columns(t,table):
                 raise ValueError('Incompatible columns')
             if sorted(c.execute(f'PRAGMA foreign_key_list("{table}")').fetchall()) != sorted(t.execute(f'PRAGMA foreign_key_list("{table}")').fetchall()):
                 raise ValueError('Incompatible relationships')

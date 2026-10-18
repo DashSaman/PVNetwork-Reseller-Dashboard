@@ -16,7 +16,9 @@ export type RestorePreview = { createdAt: string; sha256: string; counts: Record
 export async function restoreAvailability() {
   const counts = await Promise.all([db.reseller.count(), db.resellerUser.count(), db.resellerInbound.count(), db.panelConfig.count(), db.operationJournal.count(), db.setting.count()]);
   const fresh = counts.every(n => n === 0);
-  const enabled = process.env.DASHBOARD_RESTORE_ENABLED === "1";
+  const enabled = process.env.DASHBOARD_RESTORE_ENABLED === "1"
+    && path.resolve(/* turbopackIgnore: true */ process.env.DASHBOARD_RESTORE_DATA_DIR || "/app/data") === path.resolve(/* turbopackIgnore: true */ dataDirectory())
+    && path.basename((process.env.DATABASE_URL || "").slice(5)) === "custom.db";
   const pending = await fs.access(path.join(root(), "pending.json")).then(() => true, () => false);
   return { allowed: fresh && enabled && !pending, fresh, pending, reason: !fresh ? "بازیابی فقط روی نصب تازه و بدون نماینده، کاربر، اتصال یا تنظیمات قبلی مجاز است." : !enabled ? "بازیابی به نسخهٔ Docker دارای راه‌انداز بازیابی نیاز دارد." : pending ? "بازیابی در انتظار راه‌اندازی مجدد است." : "", maxBytes: LIMIT };
 }
@@ -57,7 +59,7 @@ export async function previewRestore(request: Request, adminId: string) {
     if (declared && (!/^\d+$/.test(declared) || Number(declared) > LIMIT)) throw Error("حداکثر حجم فایل ۶۴ مگابایت است.");
     if (!request.body) throw Error("فایل بکاپ انتخاب نشده است.");
     const disk = await fs.statfs(directory);
-    if (disk.bavail * disk.bsize < 1200 * 1024 * 1024) throw Error("حداقل ۱٫۲ گیگابایت فضای آزاد برای بازیابی لازم است.");
+    if (disk.bavail * disk.bsize < Math.ceil(1.2 * 1024 * 1024 * 1024)) throw Error("حداقل ۱٫۲ گیگابایت فضای آزاد برای بازیابی لازم است.");
     const file = await fs.open(path.join(stage, "archive.zip"), "wx", 0o600);
     const reader = request.body.getReader(); let size = 0;
     try {

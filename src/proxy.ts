@@ -9,4 +9,6 @@ export function proxy() {
   }
   return NextResponse.next();
 }
-export const config = { matcher: "/api/:path*" };
+// The restore route checks the same pending marker itself. Excluding its streaming
+// upload avoids Next proxy's 10 MiB request-body clone/buffer limit.
+export const config = { matcher: "/api/((?!admin/backups/restore).*)" };

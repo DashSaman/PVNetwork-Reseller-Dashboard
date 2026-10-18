@@ -129,5 +129,13 @@ class RestoreTests(unittest.TestCase):
         stage=self.data/'.restore'/('d'*64);stage.mkdir(parents=True)
         (stage/'archive.zip').write_bytes((self.root/'incomplete'/out['name']).read_bytes())
         with self.assertRaises(ValueError):restore.inspect_upload(stage,self.template)
+    def test_legacy_boolean_zero_default_matches_prisma_false(self):
+        self.need()
+        with closing(sqlite3.connect(self.template)) as c, c: c.execute('ALTER TABLE Reseller ADD COLUMN flag BOOLEAN NOT NULL DEFAULT false')
+        with closing(sqlite3.connect(self.source)) as c, c: c.execute('ALTER TABLE Reseller ADD COLUMN flag BOOLEAN NOT NULL DEFAULT 0')
+        out=backup.create_archive(self.source,self.root/'legacy','source-secret',[])
+        stage=self.data/'.restore'/('e'*64);stage.mkdir(parents=True)
+        (stage/'archive.zip').write_bytes((self.root/'legacy'/out['name']).read_bytes())
+        self.assertEqual(restore.inspect_upload(stage,self.template)['counts']['Reseller'],1)
 
 if __name__ == '__main__': unittest.main()
