@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import { api, StatCard, faDate, gbLabel, formatUsageGB, faNum, PvLogo } from "./shared";
 import { ResellersTab } from "./resellers-tab";
@@ -388,10 +389,10 @@ function OverviewTab({
                 <tbody>{businessLedger.resellers.map((row) => <tr key={row.id} className="border-b border-border/60 last:border-0">
                   <td className="py-2.5 font-semibold">{row.name}</td>
                   <td className="py-2.5">{row.poolGB === null ? "نامحدود" : `${faNum(row.poolGB)} GB`}</td>
-                  <td className="py-2.5">{faNum(row.soldGB)} GB{row.unlimitedUsers ? ` + ${faNum(row.unlimitedUsers)} نامحدود` : ""}</td>
-                  <td className="py-2.5">{row.unsoldGB === null ? "نامحدود" : `${faNum(row.unsoldGB)} GB`}</td>
+                  <td className="py-2.5"><Badge variant="outline" className="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300">فروخته‌شده: {faNum(row.soldGB)} GB{row.unlimitedUsers ? ` + ${faNum(row.unlimitedUsers)} نامحدود` : ""}</Badge></td>
+                  <td className="py-2.5"><Badge variant="outline" className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">باقی‌مانده: {row.unsoldGB === null ? "نامحدود" : `${faNum(row.unsoldGB)} GB`}</Badge></td>
                   <td className="py-2.5">{faNum(row.consumedHistoricalGB)} GB</td><td className="py-2.5">{faNum(row.reservedGB)} GB</td>
-                  <td className="py-2.5">{row.actualUsedGB === null ? "نامشخص" : `${faNum(row.actualUsedGB)} GB`}{row.actualUsedGB === null ? "" : ` (${faNum(row.usageKnownUsers)}/${faNum(row.users)} کاربر)`}</td>
+                  <td className="py-2.5"><Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">استفاده‌شده: {row.actualUsedGB === null ? "نامشخص" : `${faNum(row.actualUsedGB)} GB`}</Badge>{row.actualUsedGB === null ? "" : ` (${faNum(row.usageKnownUsers)}/${faNum(row.users)} کاربر)`}</td>
                   <td className="py-2.5">{row.soldButUnusedGB === null ? "نامشخص" : `${faNum(row.soldButUnusedGB)} GB`}</td>
                 </tr>)}</tbody>
               </table>

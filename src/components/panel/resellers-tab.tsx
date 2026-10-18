@@ -24,6 +24,7 @@ import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput, NumberInput, 
 import type { InboundInfo, ResellerInfo, InboundRefForm } from "./types";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { UserCog, Plus, Pencil, Trash2, KeyRound, Loader2, Globe, BadgeCheck, Server, ShieldOff } from "lucide-react";
+import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 
 type FormState = {
   username: string;
@@ -74,18 +75,36 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
   const [disabling2fa, setDisabling2fa] = useState(false);
   const [deleting, setDeleting] = useState<ResellerInfo | null>(null);
   const [extending, setExtending] = useState<ResellerInfo | null>(null);
+  const [trafficLedger, setTrafficLedger] = useState<AdminTrafficLedger | null>(null);
+  const [trafficPending, setTrafficPending] = useState(true);
+
+  const loadTraffic = useCallback(async () => {
+    const result = await api<{ trafficLedger: AdminTrafficLedger; pending: boolean }>("/api/admin/panel-summary");
+    if (result.ok && result.data) {
+      setTrafficLedger(result.data.trafficLedger);
+      setTrafficPending(result.data.pending);
+    } else {
+      setTrafficLedger(null);
+      setTrafficPending(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     const r = await api<{ resellers: ResellerInfo[] }>("/api/admin/resellers");
     setLoading(false);
-    if (r.ok && r.data) setResellers(r.data.resellers);
+    if (r.ok && r.data) { setResellers(r.data.resellers); void loadTraffic(); }
     else toast({ title: "خطا", description: r.error, variant: "destructive" });
-  }, []);
+  }, [loadTraffic]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const timer = setInterval(() => { void loadTraffic(); }, trafficPending ? 3000 : 15000);
+    return () => clearInterval(timer);
+  }, [loadTraffic, trafficPending]);
 
   function openCreate() {
     setEditing(null);
@@ -228,12 +247,26 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                 </TableHeader>
                 <TableBody>
                   {resellers.map((r) => {
-                    const pct = r.trafficPoolGB > 0 ? Math.min(100, (r.allocatedGB / r.trafficPoolGB) * 100) : 0;
+                    const traffic = trafficLedger?.resellers.find((row) => row.id === r.id);
+                    const remaining = r.trafficPoolGB <= 0 ? "نامحدود" : traffic?.unsoldGB == null ? "نامشخص" : `${faNum(traffic.unsoldGB)} GB`;
+                    const sold = `${faNum(traffic?.soldGB ?? r.allocatedGB)} GB${traffic?.unlimitedUsers ? " + نامحدود" : ""}`;
+                    const used = traffic?.actualUsedGB == null ? (trafficPending ? "در حال دریافت" : "نامشخص") : `${faNum(traffic.actualUsedGB)} GB`;
                     return (
                       <TableRow key={r.id}>
                         <TableCell>
                           <div className="font-semibold" dir="ltr">{r.username}</div>
                           {r.name && <div className="text-xs text-muted-foreground">{r.name}</div>}
+                          <div className="mt-2 flex flex-wrap gap-1.5 max-w-80" aria-label={`آمار حجم ${r.username}`}>
+                            <Badge variant="outline" className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-[11px]" title="ماندهٔ قابل تخصیص پس از کسر سهمیه کاربران، مصرف تاریخی و رزرو عملیات">
+                              باقی‌مانده: <span dir="ltr" className="ms-1">{remaining}</span>
+                            </Badge>
+                            <Badge variant="outline" className="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300 text-[11px]" title="سهمیهٔ واگذارشده به کاربران فعلی؛ مصرف بخشی از همین حجم است">
+                              فروخته‌شده: <span dir="ltr" className="ms-1">{sold}</span>
+                            </Badge>
+                            <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[11px]" title="مصرف واقعی زندهٔ کاربران فعلی همین نماینده">
+                              استفاده‌شده: <span dir="ltr" className="ms-1">{used}</span>
+                            </Badge>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
@@ -289,8 +322,8 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                                   <div className="flex items-center gap-1.5">
                                     <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0"></span>
                                     <span className="text-muted-foreground">باقیمانده:</span>
-                                    <span className={`font-bold ${r.trafficPoolGB - r.allocatedGB - r.consumedGB <= 0 ? "text-red-500" : "text-emerald-600 dark:text-emerald-400"}`} dir="ltr">
-                                      {faNum(Math.max(0, r.trafficPoolGB - r.allocatedGB - r.consumedGB))} GB
+                                    <span className="font-bold text-emerald-600 dark:text-emerald-400" dir="ltr">
+                                      {remaining}
                                     </span>
                                   </div>
                                 </div>

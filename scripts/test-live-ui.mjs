@@ -71,6 +71,16 @@ try{
    await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(dir,'admin-traffic-mobile.png'),fullPage:true});
    const width=await page.evaluate(()=>({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth}));
    check('admin dashboard fits mobile viewport',()=>assert.ok(width.scroll<=width.client+1,JSON.stringify(width)));
+   fail=false;await db.panelConfig.update({where:{id:panel.id},data:{name:'Recovered panel'}});
+   await page.getByRole('button',{name:'نماینده‌ها',exact:true}).click();
+   const badges=page.getByLabel('آمار حجم live_owner',{exact:true});
+   await badges.getByText('۳ GB',{exact:true}).waitFor({timeout:20000});
+   const badgeText=await badges.innerText();
+   check('representative name has remaining, sold and actual live usage badges',()=>{assert.ok(badgeText.includes('باقی‌مانده:'));assert.ok(badgeText.includes('فروخته‌شده:'));assert.ok(badgeText.includes('استفاده‌شده:'));assert.ok(badgeText.includes('۸۰ GB'));assert.ok(badgeText.includes('۲۰ GB'));assert.ok(badgeText.includes('۳ GB'));});
+   const colors=await badges.locator('[data-slot="badge"]').evaluateAll(nodes=>nodes.map(n=>n.className));
+   check('three representative metrics use distinct green blue and amber colors',()=>{assert.equal(colors.length,3);assert.ok(colors[0].includes('emerald'));assert.ok(colors[1].includes('sky'));assert.ok(colors[2].includes('amber'));});
+   await page.screenshot({path:path.join(dir,'representative-volume-badges-mobile.png'),fullPage:true});
+   await page.getByRole('button',{name:'داشبورد',exact:true}).click();
    await context.clearCookies();await page.getByRole('button',{name:'به‌روزرسانی',exact:true}).click();
    await page.getByRole('button',{name:'ورود به پنل',exact:true}).waitFor({timeout:15000});
    check('expired session leaves stale dashboard and returns to login',()=>assert.ok(true));
