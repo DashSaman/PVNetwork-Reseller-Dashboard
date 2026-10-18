@@ -25,6 +25,7 @@ import type { InboundInfo, ResellerInfo, InboundRefForm } from "./types";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { UserCog, Plus, Pencil, Trash2, KeyRound, Loader2, Globe, BadgeCheck, Server, ShieldOff } from "lucide-react";
 import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
+import { TrafficQuotaChart } from "./traffic-quota-chart";
 
 type FormState = {
   username: string;
@@ -251,6 +252,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                     const remaining = r.trafficPoolGB <= 0 ? "نامحدود" : traffic?.unsoldGB == null ? "نامشخص" : `${faNum(traffic.unsoldGB)} GB`;
                     const sold = `${faNum(traffic?.soldGB ?? r.allocatedGB)} GB${traffic?.unlimitedUsers ? " + نامحدود" : ""}`;
                     const used = traffic?.actualUsedGB == null ? (trafficPending ? "در حال دریافت" : "نامشخص") : `${faNum(traffic.actualUsedGB)} GB`;
+                    const unused = traffic?.unlimitedUsers ? "شامل نامحدود" : traffic?.soldButUnusedGB == null ? (trafficPending ? "در حال دریافت" : "نامشخص") : `${faNum(traffic.soldButUnusedGB)} GB`;
                     return (
                       <TableRow key={r.id}>
                         <TableCell>
@@ -266,7 +268,11 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                             <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[11px]" title="مصرف واقعی زندهٔ کاربران فعلی همین نماینده">
                               استفاده‌شده: <span dir="ltr" className="ms-1">{used}</span>
                             </Badge>
+                            <Badge variant="outline" className="border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300 text-[11px]" title="بخش مصرف‌نشدهٔ سهمیهٔ فروخته‌شده به کاربران فعلی">
+                              فروخته، مصرف‌نشده: <span dir="ltr" className="ms-1">{unused}</span>
+                            </Badge>
                           </div>
+                          <TrafficQuotaChart compact data={traffic} label={`نمودار حجم ${r.username}`} />
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">

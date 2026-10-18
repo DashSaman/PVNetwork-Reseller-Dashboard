@@ -10,6 +10,7 @@ import { ResellersTab } from "./resellers-tab";
 import { PanelSettingsTab, LogsTab } from "./settings-logs";
 import { ThemeToggle } from "./theme";
 import { BackupsTab } from "./backups-tab";
+import { TrafficQuotaChart } from "./traffic-quota-chart";
 import type { InboundInfo, ActivityLogRow, Session } from "./types";
 import {
   LayoutDashboard,
@@ -379,6 +380,7 @@ function OverviewTab({
           <StatCard title="فروش مصرف‌نشده کاربران" value={businessLedger.totals.soldButUnusedGB === null ? "نامشخص" : `${faNum(businessLedger.totals.soldButUnusedGB)} GB`} icon={<TrendingUp className="h-4 w-4" />} />
           <StatCard title="مصرف واقعی کاربران" value={businessLedger.totals.actualUsedGB === null ? "نامشخص" : `${faNum(businessLedger.totals.actualUsedGB)} GB`} sub={!businessLedger.available ? "در انتظار داده زنده کامل" : undefined} icon={<ArrowUpDown className="h-4 w-4" />} tone="success" />
         </div>
+        <TrafficQuotaChart label="نمودار تخصیص و مصرف نماینده‌ها" data={{ poolGB: businessLedger.totals.allocatedToResellersGB, soldGB: businessLedger.totals.soldToUsersGB, unsoldGB: businessLedger.totals.unsoldGB, actualUsedGB: businessLedger.totals.actualUsedGB, soldButUnusedGB: businessLedger.totals.soldButUnusedGB, consumedHistoricalGB: businessLedger.totals.consumedHistoricalGB, reservedGB: businessLedger.totals.reservedGB, unlimitedUsers: businessLedger.totals.soldUnlimitedUsers }} />
         <Card className="bg-card card-soft">
           <CardContent className="p-4 sm:p-5">
             <div className="overflow-x-auto">
@@ -393,7 +395,7 @@ function OverviewTab({
                   <td className="py-2.5"><Badge variant="outline" className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">باقی‌مانده: {row.unsoldGB === null ? "نامحدود" : `${faNum(row.unsoldGB)} GB`}</Badge></td>
                   <td className="py-2.5">{faNum(row.consumedHistoricalGB)} GB</td><td className="py-2.5">{faNum(row.reservedGB)} GB</td>
                   <td className="py-2.5"><Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">استفاده‌شده: {row.actualUsedGB === null ? "نامشخص" : `${faNum(row.actualUsedGB)} GB`}</Badge>{row.actualUsedGB === null ? "" : ` (${faNum(row.usageKnownUsers)}/${faNum(row.users)} کاربر)`}</td>
-                  <td className="py-2.5">{row.soldButUnusedGB === null ? "نامشخص" : `${faNum(row.soldButUnusedGB)} GB`}</td>
+                  <td className="py-2.5"><Badge variant="outline" className="border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300">{row.unlimitedUsers ? "شامل نامحدود" : row.soldButUnusedGB === null ? "نامشخص" : `${faNum(row.soldButUnusedGB)} GB`}</Badge></td>
                 </tr>)}</tbody>
               </table>
               {businessLedger.totals.reservedGB > 0 && <p className="mt-3 text-xs text-muted-foreground">رزرو در حال انجام: {faNum(businessLedger.totals.reservedGB)} GB</p>}

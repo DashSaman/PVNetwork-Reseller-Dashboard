@@ -194,13 +194,14 @@ export function calculateAdminTrafficLedger(input: {
 }
 
 /** Local-only mode is safe for the fast /overview endpoint; live metrics stay null. */
-export async function getAdminTrafficLedger(snapshot?: LedgerSnapshot, primaryPanelId = ""): Promise<AdminTrafficLedger> {
+export async function getAdminTrafficLedger(snapshot?: LedgerSnapshot, primaryPanelId = "", resellerId?: string): Promise<AdminTrafficLedger> {
   const [{ db }, { canonicalUserUsage }] = await Promise.all([import("./db"), import("./reseller-helpers")]);
+  const resellerScope = resellerId === undefined ? undefined : { resellerId };
   const [resellers, users, reservations] = await Promise.all([
-    db.reseller.findMany({ select: { id: true, username: true, name: true, trafficPoolGB: true, consumedGB: true } }),
-    db.resellerUser.findMany({ select: { resellerId: true, email: true, trafficGB: true, inboundIds: true, panelId: true } }),
+    db.reseller.findMany({ where: resellerId === undefined ? undefined : { id: resellerId }, select: { id: true, username: true, name: true, trafficPoolGB: true, consumedGB: true } }),
+    db.resellerUser.findMany({ where: resellerScope, select: { resellerId: true, email: true, trafficGB: true, inboundIds: true, panelId: true } }),
     db.operationJournal.findMany({
-      where: { type: { in: ["CREATE", "UPDATE"] }, status: { in: ACTIVE_RESERVATION_STATUSES } },
+      where: { ...(resellerScope ?? {}), type: { in: ["CREATE", "UPDATE"] }, status: { in: ACTIVE_RESERVATION_STATUSES } },
       select: { resellerId: true, reservedGB: true, type: true, status: true },
     }),
   ]);

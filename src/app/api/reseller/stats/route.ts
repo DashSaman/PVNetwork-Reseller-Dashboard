@@ -5,6 +5,7 @@ import { getResellerWithAccess, getAllocatedGB, getConsumedGB, bytesToGB } from 
 import { getQuotaState } from "@/lib/accounting-ops";
 import { getAllPanelInboundsForUi } from "@/lib/panel-manager";
 import { publicLocationLabel } from "@/lib/reseller-presentation";
+import { getAdminTrafficLedger, type AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 
 /** آمار کلی نماینده + داده‌های نمودارها (چندپنلی + پول ترافیک) */
 export async function GET() {
@@ -20,6 +21,13 @@ export async function GET() {
   const primaryPanelId = primaryPanel?.id || "";
 
   const panelResult = await getAllPanelInboundsForUi();
+  const ledger = await getAdminTrafficLedger(
+    { ...panelResult, ok: panelResult.ok && panelResult.errors.length === 0 },
+    primaryPanelId,
+    reseller.id,
+  );
+  const trafficLedger: AdminTrafficLedger["resellers"][number] | null =
+    ledger.resellers.find((row) => row.id === reseller.id) ?? null;
 
   let activeUsers = 0;
   let expiredUsers = 0;
@@ -124,6 +132,7 @@ export async function GET() {
 
   return NextResponse.json({
     pending: panelResult.pending || false,
+    trafficLedger,
     stats: {
       usersCount,
       activeUsers,

@@ -52,6 +52,9 @@ try{
  check('admin owned-user ledger reports allocation, actual usage and sold-unused once',()=>{const t=r.data.trafficLedger.totals;assert.equal(t.allocatedToResellersGB,100);assert.equal(t.soldToUsersGB,20);assert.equal(t.unsoldGB,80);assert.equal(t.actualUsedGB,3);assert.equal(t.soldButUnusedGB,17);});
  const overview=await api('/api/admin/overview');check('local overview provides inventory without inventing live usage',()=>{assert.equal(overview.data.trafficLedger.totals.soldToUsersGB,20);assert.equal(overview.data.trafficLedger.totals.actualUsedGB,null);});
  const readCount=reads;await Promise.all([api('/api/admin/panel-summary'),api('/api/reseller/live-users',rc)]);check('warm UI reads reuse completed snapshot',()=>assert.equal(reads,readCount));
+ const foreign=await db.reseller.create({data:{username:'private_other_owner',password:hashPassword('LocalDemo123!'),trafficPoolGB:5000}});
+ await db.resellerUser.create({data:{resellerId:foreign.id,email:'foreign-only-client',trafficGB:100,panelId:panel.id,inboundIds:JSON.stringify([{panelId:panel.id,inboundId:1}])}});
+ const scoped=await api('/api/reseller/stats',rc);check('reseller ledger is scoped to its owner and cannot leak another reseller',()=>{assert.equal(scoped.status,200);assert.equal(scoped.data.trafficLedger.id,owner.id);assert.equal(scoped.data.trafficLedger.soldGB,20);assert.equal(scoped.data.trafficLedger.soldButUnusedGB,17);assert.equal(scoped.data.trafficLedger.actualUsedGB,3);const body=JSON.stringify(scoped.data);for(const privateValue of [foreign.id,foreign.username,'foreign-only-client'])assert.ok(!body.includes(privateValue));});
  const {registerHooks}=await import('node:module');
  const hooks=registerHooks({resolve(s,c,next){return next(s.startsWith('./')&&c.parentURL?.includes('/src/lib/')&&!s.endsWith('.ts')?s+'.ts':s,c);}});
  const {getInbounds}=await import('../src/lib/panel.ts');hooks.deregister();
@@ -76,9 +79,12 @@ try{
    const badges=page.getByLabel('آمار حجم live_owner',{exact:true});
    await badges.getByText('۳ GB',{exact:true}).waitFor({timeout:20000});
    const badgeText=await badges.innerText();
-   check('representative name has remaining, sold and actual live usage badges',()=>{assert.ok(badgeText.includes('باقی‌مانده:'));assert.ok(badgeText.includes('فروخته‌شده:'));assert.ok(badgeText.includes('استفاده‌شده:'));assert.ok(badgeText.includes('۸۰ GB'));assert.ok(badgeText.includes('۲۰ GB'));assert.ok(badgeText.includes('۳ GB'));});
+   check('representative name has remaining, sold, used and sold-unused badges',()=>{assert.ok(badgeText.includes('باقی‌مانده:'));assert.ok(badgeText.includes('فروخته‌شده:'));assert.ok(badgeText.includes('استفاده‌شده:'));assert.ok(badgeText.includes('فروخته، مصرف‌نشده:'));assert.ok(badgeText.includes('۸۰ GB'));assert.ok(badgeText.includes('۲۰ GB'));assert.ok(badgeText.includes('۳ GB'));assert.ok(badgeText.includes('۱۷ GB'));});
    const colors=await badges.locator('[data-slot="badge"]').evaluateAll(nodes=>nodes.map(n=>n.className));
-   check('three representative metrics use distinct green blue and amber colors',()=>{assert.equal(colors.length,3);assert.ok(colors[0].includes('emerald'));assert.ok(colors[1].includes('sky'));assert.ok(colors[2].includes('amber'));});
+   check('four representative metrics use distinct green blue amber and purple colors',()=>{assert.equal(colors.length,4);assert.ok(colors[0].includes('emerald'));assert.ok(colors[1].includes('sky'));assert.ok(colors[2].includes('amber'));assert.ok(colors[3].includes('violet'));});
+   const mini=page.getByLabel('نمودار حجم live_owner',{exact:true});await mini.waitFor();
+   const salesLabel=await mini.getByRole('img',{name:/جزئیات فروش:/}).getAttribute('aria-label');
+   check('representative row chart partitions sales into used and unused',()=>{assert.ok(salesLabel.includes('۳ GB'));assert.ok(salesLabel.includes('۱۷ GB'));});
    await page.screenshot({path:path.join(dir,'representative-volume-badges-mobile.png'),fullPage:true});
    await page.getByRole('button',{name:'داشبورد',exact:true}).click();
    await context.clearCookies();await page.getByRole('button',{name:'به‌روزرسانی',exact:true}).click();
@@ -91,6 +97,11 @@ try{
    check('changed cookie role mounts actual representative session',()=>assert.ok(true));
    assert.ok(!(await page.locator('body').innerText()).includes('Delayed panel'));
    check('representative page hides upstream identity',()=>assert.ok(true));
+   await page.getByRole('button',{name:'آمار و مصرف',exact:true}).click();
+   const ownChart=page.getByLabel('نمودار حجم و فروش من',{exact:true});await ownChart.getByText('۱۷ GB',{exact:true}).first().waitFor({timeout:20000});
+   check('representative sees its own sold-unused chart without other account data',()=>assert.ok(true));
+   await page.screenshot({path:path.join(dir,'reseller-quota-chart-mobile.png'),fullPage:true});
+   const ownWidth=await page.evaluate(()=>({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth}));check('reseller volume chart fits mobile viewport',()=>assert.ok(ownWidth.scroll<=ownWidth.client+1));
    await context.close();
   }finally{await browser.close();}
  }

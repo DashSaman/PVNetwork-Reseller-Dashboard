@@ -21,6 +21,8 @@ import { toast } from "@/hooks/use-toast";
 import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput, parseNumberInput } from "./shared";
 import { ThemeToggle } from "./theme";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
+import { TrafficQuotaChart } from "./traffic-quota-chart";
+import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
 import {
   Users,
@@ -104,6 +106,7 @@ type UserLinkData = {
 };
 
 type UserAlert = { email: string; type: "usage" | "expiry"; pct?: number; days?: number };
+type ResellerTrafficRow = AdminTrafficLedger["resellers"][number];
 
 export function ResellerView({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [tab, setTab] = useState<"users" | "stats" | "brand" | "account">("users");
@@ -121,6 +124,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   const [panelError, setPanelError] = useState("");
   const [stats, setStats] = useState<Record<string, number | boolean> | null>(null);
   const [charts, setCharts] = useState<StatsCharts | null>(null);
+  const [trafficLedger, setTrafficLedger] = useState<ResellerTrafficRow | null>(null);
 
   // اولین صفحه فقط بوت‌استرپ (یک snapshot پنل‌ها) — آمار/نمودارِ تب دیگر on-demand بار می‌شود
   const load = useCallback(async () => {
@@ -223,10 +227,11 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     if (tab !== "stats" || stats !== null) return;
     let alive = true;
     void (async () => {
-      const s = await api<{ stats: Record<string, number | boolean>; charts: StatsCharts }>("/api/reseller/stats");
+      const s = await api<{ stats: Record<string, number | boolean>; charts: StatsCharts; trafficLedger: ResellerTrafficRow | null }>("/api/reseller/stats");
       if (alive && s.ok && s.data) {
         setStats(s.data.stats);
         setCharts(s.data.charts);
+        setTrafficLedger(s.data.trafficLedger);
       }
     })();
     return () => {
@@ -240,8 +245,8 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     if (tab !== 'stats' || !statsReady) return;
     let alive = true;
     const timer = setInterval(() => {
-      void api<{ stats: Record<string, number | boolean>; charts: StatsCharts }>("/api/reseller/stats", { signal: AbortSignal.timeout(8000) }).then(r => {
-        if (alive && r.ok && r.data) { setStats(r.data.stats); setCharts(r.data.charts); }
+      void api<{ stats: Record<string, number | boolean>; charts: StatsCharts; trafficLedger: ResellerTrafficRow | null }>("/api/reseller/stats", { signal: AbortSignal.timeout(8000) }).then(r => {
+        if (alive && r.ok && r.data) { setStats(r.data.stats); setCharts(r.data.charts); setTrafficLedger(r.data.trafficLedger); }
       });
     }, statsPending ? 3000 : 15000);
     return () => { alive = false; clearInterval(timer); };
@@ -312,7 +317,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
 
       <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
         {tab === "users" && permissions && <UsersTab session={session} users={users} inbounds={inbounds} permissions={permissions} loading={loading} livePending={livePending} panelError={panelError} reload={load} alerts={alerts} />}
-        {tab === "stats" && permissions && <StatsTab stats={stats} charts={charts} />}
+        {tab === "stats" && permissions && <StatsTab stats={stats} charts={charts} trafficLedger={trafficLedger} />}
         {tab === "brand" && <BrandTab whitelabel={whitelabel} reload={load} />}
         {tab === "account" && <AccountSettingsTab username={session.username} />}
       </main>
@@ -332,7 +337,7 @@ type StatsCharts = {
   statusBreakdown: { name: string; value: number }[];
 };
 
-function StatsTab({ stats, charts }: { stats: Record<string, number | boolean> | null; charts: StatsCharts | null }) {
+function StatsTab({ stats, charts, trafficLedger }: { stats: Record<string, number | boolean> | null; charts: StatsCharts | null; trafficLedger: ResellerTrafficRow | null }) {
   if (!stats) return <div className="text-center py-16 text-muted-foreground">داده‌ای موجود نیست</div>;
   const statusData = charts?.statusBreakdown.filter((s) => s.value > 0) || [];
   const liveAvailable = stats.liveAvailable !== false;
@@ -344,14 +349,14 @@ function StatsTab({ stats, charts }: { stats: Record<string, number | boolean> |
         <StatCard title="کاربران من" value={faNum(Number(stats.usersCount || 0))} sub="بدون محدودیت تعداد" icon={<Users className="h-4 w-4" />} tone="brand" />
         <StatCard title="فعال" value={liveAvailable ? faNum(Number(stats.activeUsers || 0)) : '—'} icon={<UserCheck className="h-4 w-4" />} tone="success" />
         <StatCard title="منقضی/پر" value={liveAvailable ? faNum(Number(stats.expiredUsers || 0)) : '—'} icon={<UserX className="h-4 w-4" />} tone="danger" />
-        <StatCard title="مصرف کل" value={liveAvailable ? `${faNum(Number(stats.totalUsedGB || 0))} گیگ` : '—'} sub={liveAvailable && Number(stats.totalQuotaGB || 0) > 0 ? `از ${faNum(Math.round(Number(stats.totalQuotaGB)))} گیگ سهمیه` : undefined} icon={<ArrowUpDown className="h-4 w-4" />} tone="orange" />
+        <StatCard title="مصرف کل" value={trafficLedger?.actualUsedGB != null ? `${faNum(Math.round(trafficLedger.actualUsedGB * 100) / 100)} گیگ` : '—'} sub={trafficLedger && trafficLedger.soldGB > 0 ? `از ${faNum(trafficLedger.soldGB)} گیگ سهمیه کاربران فعلی` : undefined} icon={<ArrowUpDown className="h-4 w-4" />} tone="orange" />
       </div>
 
       {/* سرعت لحظه‌ای شبکه و منابع */}
       <LiveSpeedCard />
 
       {/* پول ترافیک */}
-      <PoolCard pool={stats} />
+      <TrafficQuotaChart data={trafficLedger} label="نمودار حجم و فروش من" />
 
       {/* نمودارها */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
@@ -465,47 +470,6 @@ function StatsTab({ stats, charts }: { stats: Record<string, number | boolean> |
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-/** نمایش پول ترافیک با نوار پیشرفت */
-function PoolCard({ pool }: { pool: Record<string, number | boolean> }) {
-  const total = Number(pool.trafficPoolGB || 0);
-  const allocated = Number(pool.allocatedGB || 0);
-  const used = Number(pool.totalUsedGB || 0);
-  const remaining = Number(pool.remainingGB || 0);
-  if (total <= 0) {
-    return (
-      <Card className="bg-card card-soft">
-        <CardContent className="p-4 flex items-center gap-3">
-          <Crown className="h-5 w-5 text-[var(--brand-orange)]" />
-          <div>
-            <div className="text-sm font-bold">پول ترافیک: نامحدود</div>
-            <div className="text-xs text-muted-foreground">سهمیه هر کاربر را آزادانه تعیین کنید — تخصیص‌یافته: {faNum(allocated)} گیگ</div>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-  const allocPct = Math.min(100, (allocated / total) * 100);
-  const usedPct = Math.min(100, (used / total) * 100);
-  return (
-    <Card className="bg-card card-soft">
-      <CardContent className="p-4 space-y-2">
-        <div className="flex items-center justify-between text-sm">
-          <span className="font-bold flex items-center gap-1.5"><Crown className="h-4 w-4 text-[var(--brand-orange)]" /> پول ترافیک شما</span>
-          <span className="text-muted-foreground" dir="ltr">{faNum(allocated)} / {faNum(total)} GB تخصیص‌یافته</span>
-        </div>
-        <div className="relative h-3 w-full rounded-full bg-muted overflow-hidden" dir="ltr">
-          <div className="h-full bg-[var(--brand)]/25" style={{ width: `${Math.max(2, allocPct)}%` }} />
-          <div className="absolute top-0 h-full bg-[linear-gradient(90deg,#0f9e99,#f37021)]" style={{ width: `${Math.max(2, usedPct)}%` }} />
-        </div>
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>باقیمانده قابل تخصیص: <b className="text-foreground">{faNum(remaining)} گیگ</b></span>
-          <span dir="ltr">{faNum(used)} GB مصرف واقعی</span>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
