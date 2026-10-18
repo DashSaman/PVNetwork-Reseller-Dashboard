@@ -35,6 +35,8 @@ destination admin password and 2FA if enabled. Only the dashboard restarts; DB a
 original key are installed before Node starts. Sign in with the archived accounts.
 Review old private node routes on the destination before enabling operational use.
 
+The [2026-10-18 restore verification report](docs/admin-backup-restore-verification-2026-10-18.md) records isolated browser/container tests and production data/service preservation checks.
+
 Follow the [complete migration and restore runbook (Persian)](docs/dashboard-migration-restore.fa.md) for destination port/network preflight, recovery-key installation, encrypted node peer routing, acceptance checks, cutover and rollback. The ZIP does not contain host configuration or native VPN databases.
 
 ```bash

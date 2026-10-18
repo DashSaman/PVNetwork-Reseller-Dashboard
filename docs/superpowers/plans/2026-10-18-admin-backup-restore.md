@@ -19,18 +19,23 @@ admin credentials, then queue an offline restart-time install of DB and key.
 
 ## Tasks
 
-- [ ] 1. Add failing Python tests: preview counts/integrity/schema, populated target refusal,
+- [x] 1. Add failing Python tests: preview counts/integrity/schema, populated target refusal,
   corrupted archive, interrupted install retry and stable DB/key. Implement private staging
   inspection and idempotent cold-start installation in scripts/dashboard-restore.py.
-- [ ] 2. Add crypto/runtime-key tests. Validate all encrypted fields and peers with the archived
+- [x] 2. Add crypto/runtime-key tests. Validate all encrypted fields and peers with the archived
   key; support the persistent data-volume key in app, backup timer and peer CLI.
-- [ ] 3. Add API fixture tests for anonymous/reseller rejection, occupied target, streaming size,
+- [x] 3. Add API fixture tests for anonymous/reseller rejection, occupied target, streaming size,
   same-origin, credential/2FA confirmation, expired/foreign/reused token and no external writes.
   Implement restore helper/routes and pending-state request gate.
-- [ ] 4. Add upload/preview/confirm/restart UI in existing backup tab; test desktop/mobile.
-- [ ] 5. Verify startup and cross-key restore in isolated production-image containers with
+- [x] 4. Add upload/preview/confirm/restart UI in existing backup tab; test desktop/mobile.
+- [x] 5. Verify startup and cross-key restore in isolated production-image containers with
   synthetic data and no production mounts or published ports; run backup/node/accounting regressions,
   TypeScript, lint and production build. Document actual results.
-- [ ] 6. Preserve production DB/env/image and unrelated service baseline; deploy just dashboard
+- [x] 6. Preserve production DB/env/image and unrelated service baseline; deploy just dashboard
   using same bind/network/volume/env. Verify fresh-only refusal on actual populated dashboard,
   unchanged real data and unrelated services/ports. Publish source, docs and local memory.
+
+Verification record: ../../admin-backup-restore-verification-2026-10-18.md
+Ruling: Equivalent legacy BOOLEAN defaults are normalized without altering data.
+Ruling: Restore upload bypasses proxy body cloning; its own stream cap and pending gate remain enforced.
+Ruling: Destination data directory must match the configured cold-start installer before enabling restore.

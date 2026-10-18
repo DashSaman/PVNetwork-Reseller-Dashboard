@@ -93,7 +93,24 @@ try{
  r=await api('POST',{token,password:'Destination123!',confirm:'RESTORE'});check('enabled 2FA required',()=>assert.equal(r.status,403));
  const counter=Buffer.alloc(8);counter.writeBigUInt64BE(BigInt(Math.floor(Date.now()/30000)));const h=crypto.createHmac('sha1',Buffer.from('48656c6c6f21deadbeef','hex')).update(counter).digest(),off=h[19]&15;const totpCode=String((h.readUInt32BE(off)&0x7fffffff)%1000000).padStart(6,'0');
  target.close();
- r=await api('POST',{token,password:'Destination123!',totpCode,confirm:'RESTORE'});check('valid confirmation queues cold restore',()=>assert.equal(r.status,202));
+ if(process.env.PLAYWRIGHT_MODULE){
+  const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
+  const browser=await chromium.launch({headless:true,channel:'chrome'});
+  try{
+   const context=await browser.newContext();await context.addCookies([{name:'rp_session',value:cookie().slice(11),url:base}]);
+   const page=await context.newPage();await page.goto(base);await page.waitForLoadState('networkidle');
+   await page.getByRole('button',{name:'بکاپ',exact:true}).click();await page.getByRole('button',{name:'بازیابی بکاپ',exact:true}).click();
+   await page.locator('input[type=file]').setInputFiles({name:'fixture.zip',mimeType:'application/zip',buffer:archive});
+   await page.getByRole('button',{name:'بارگذاری و بررسی بکاپ',exact:true}).click();await page.getByText('فایل سالم و سازگار است',{exact:false}).waitFor();
+   await page.getByLabel('رمز فعلی ادمین این نصب',{exact:true}).fill('Destination123!');
+   await page.getByLabel('کد دومرحله‌ای (اگر فعال است)',{exact:true}).fill(totpCode);
+   await page.locator('input[type=checkbox]').check();
+   const response=page.waitForResponse(x=>x.url().endsWith('/api/admin/backups/restore')&&x.request().method()==='POST');
+   await page.getByRole('button',{name:'بازیابی و راه‌اندازی مجدد داشبورد',exact:true}).click();
+   const submitted=await response;r={status:submitted.status()};await context.close();
+  }finally{await browser.close();}
+ }else r=await api('POST',{token,password:'Destination123!',totpCode,confirm:'RESTORE'});
+ check('valid confirmation queues cold restore',()=>assert.equal(r.status,202));
  r=await fetch(base+'/api/admin/resellers',{method:'POST',headers:{Cookie:cookie(),'Content-Type':'application/json'},body:'{}'});check('pending marker blocks writes during restart',()=>assert.equal(r.status,503));
  await new Promise(r=>setTimeout(r,2500));if(app.exitCode===null)await new Promise(r=>app.once('exit',r));
  if(!container)await run(python,['scripts/dashboard-restore.py','apply',data,template],env);
