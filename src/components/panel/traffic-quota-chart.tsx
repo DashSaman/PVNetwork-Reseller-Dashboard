@@ -8,9 +8,9 @@ const gb = (value: number | null | undefined) => value == null ? "نامشخص" 
 export function TrafficQuotaChart({ data, compact = false, label = "نمودار حجم" }: { data: QuotaChartData | null | undefined; compact?: boolean; label?: string }) {
   if (!data) return <div aria-label={label} className="rounded-xl bg-muted/40 p-3 text-xs text-muted-foreground">در حال دریافت اطلاعات نمودار…</div>;
   const model = quotaChartModel(data);
-  const total = model.pool.reduce((sum, s) => sum + s.value, 0);
-  const gradient = model.pool.map((s, index) => {
-    const start = total ? model.pool.slice(0, index).reduce((sum, item) => sum + item.value, 0) / total * 100 : 0;
+  const total = model.donut.reduce((sum, s) => sum + s.value, 0);
+  const gradient = model.donut.map((s, index) => {
+    const start = total ? model.donut.slice(0, index).reduce((sum, item) => sum + item.value, 0) / total * 100 : 0;
     const end = start + (total ? s.value / total * 100 : 0);
     return `${s.color} ${start}% ${end}%`;
   }).join(", ");
@@ -31,7 +31,7 @@ export function TrafficQuotaChart({ data, compact = false, label = "نمودار
       <h3 className="text-sm font-bold">{label}</h3><p className="mt-1 text-[11px] text-muted-foreground">فروش یک حجم کلی است؛ مصرف‌شده و مصرف‌نشده، دو بخش آن هستند.</p>
     </div>
     <div className="grid items-center gap-5 p-4 sm:p-5 md:grid-cols-[170px_1fr]">
-      <div role="img" aria-label={`توزیع سهمیه: ${model.pool.map(s => `${s.label} ${gb(s.value)}`).join("، ") || (data.poolGB === null ? "نامحدود" : "بدون حجم")}`} className="relative mx-auto flex h-40 w-40 items-center justify-center rounded-full shadow-inner" style={{ background: gradient ? `conic-gradient(${gradient})` : "var(--muted)" }}>
+      <div role="img" aria-label={`توزیع سهمیه: ${model.donut.map(s => `${s.label} ${gb(s.value)}`).join("، ") || (data.poolGB === null ? "نامحدود" : "بدون حجم")}`} className="relative mx-auto flex h-40 w-40 items-center justify-center rounded-full shadow-inner" style={{ background: gradient ? `conic-gradient(${gradient})` : "var(--muted)" }}>
         <div className="flex h-28 w-28 flex-col items-center justify-center rounded-full bg-card text-center shadow-sm"><span className="text-[11px] text-muted-foreground">سهمیه کل</span><strong className="mt-1 text-base" dir="ltr">{data.poolGB === null ? "نامحدود" : gb(data.poolGB)}</strong></div>
       </div>
       <div className="min-w-0 space-y-4">
@@ -48,6 +48,6 @@ export function TrafficQuotaChart({ data, compact = false, label = "نمودار
         </div>
       </div>
     </div>
-    <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-border px-4 py-3 text-[11px] text-muted-foreground sm:px-5">{model.pool.map(s => <span key={s.label} className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full" style={{ backgroundColor: s.color }} />{s.label}: {gb(s.value)}</span>)}{model.overQuotaGB !== null && model.overQuotaGB > 0.001 && <span>مصرف مازاد بر سهمیه: {gb(model.overQuotaGB)}</span>}</div>
+    <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-border px-4 py-3 text-[11px] text-muted-foreground sm:px-5">{model.donut.map(s => <span key={s.label} className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full" style={{ backgroundColor: s.color }} />{s.label}: {gb(s.value)}</span>)}{model.overQuotaGB !== null && model.overQuotaGB > 0.001 && <span>مصرف مازاد بر سهمیه: {gb(model.overQuotaGB)}</span>}</div>
   </section>;
 }

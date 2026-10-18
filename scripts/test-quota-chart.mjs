@@ -18,3 +18,11 @@ test('over-quota usage is reported separately and never inflates sale slices',()
 test('empty accounts have no artificial sliver or nonfinite percentage',()=>{
  const m=quotaChartModel({...row,poolGB:0,soldGB:0,unsoldGB:0,actualUsedGB:0,soldButUnusedGB:0,consumedHistoricalGB:0,reservedGB:0});assert.deepEqual(m.pool,[]);assert.deepEqual(m.sales,[]);assert.equal(m.overQuotaGB,0);
 });
+
+test('donut replaces sold with amber used and purple unused without double counting',()=>{
+ const m=quotaChartModel(row);assert.equal(m.donut.reduce((s,x)=>s+x.value,0),100);assert.deepEqual(m.donut.slice(0,2).map(s=>[s.value,s.color]),[[8,'#f59e0b'],[22,'#8b5cf6']]);assert.ok(!m.donut.some(s=>s.color==='#0ea5e9'));
+});
+test('unknown sales retain unsplit sold donut instead of fabricating purple',()=>{
+ const m=quotaChartModel({...row,actualUsedGB:null,soldButUnusedGB:null});assert.deepEqual(m.donut,m.pool);
+ assert.deepEqual(quotaChartModel({...row,poolGB:null,unsoldGB:null}).donut,[]);
+});

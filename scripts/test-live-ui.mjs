@@ -100,6 +100,8 @@ try{
    await page.getByRole('button',{name:'آمار و مصرف',exact:true}).click();
    const ownChart=page.getByLabel('نمودار حجم و فروش من',{exact:true});await ownChart.getByText('۱۷ GB',{exact:true}).first().waitFor({timeout:20000});
    check('representative sees its own sold-unused chart without other account data',()=>assert.ok(true));
+   const donut=ownChart.locator('[role="img"]').first();const donutLabel=await donut.getAttribute('aria-label');const donutBackground=await donut.evaluate(n=>n.style.background);
+   check('reseller donut includes purple unused and amber used with exact quantities',()=>{assert.ok(donutLabel.includes('۱۷ GB'));assert.ok(donutLabel.includes('۳ GB'));assert.ok(donutBackground.includes('139, 92, 246'));assert.ok(donutBackground.includes('245, 158, 11'));});
    await page.screenshot({path:path.join(dir,'reseller-quota-chart-mobile.png'),fullPage:true});
    const ownWidth=await page.evaluate(()=>({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth}));check('reseller volume chart fits mobile viewport',()=>assert.ok(ownWidth.scroll<=ownWidth.client+1));
    await context.close();

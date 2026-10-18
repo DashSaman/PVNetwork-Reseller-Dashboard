@@ -25,5 +25,7 @@ export function quotaChartModel(data: QuotaChartData) {
     { label: "مصرف‌شده از فروش", value: Math.max(0, amount(data.soldGB) - amount(data.soldButUnusedGB)), color: "#f59e0b" },
     { label: "فروخته‌شده، مصرف‌نشده", value: amount(data.soldButUnusedGB), color: "#8b5cf6" },
   ].filter(s => s.value > 0);
-  return { pool, sales, overQuotaGB: sales ? Math.max(0, amount(data.actualUsedGB!) - sales.reduce((n, s) => n + (s.color === "#f59e0b" ? s.value : 0), 0)) : null };
+  // Replace the sold slice with its children; never add them on top of sold.
+  const donut = sales === null ? pool : pool.flatMap(s => s.color === "#0ea5e9" ? sales : [s]);
+  return { pool, sales, donut, overQuotaGB: sales ? Math.max(0, amount(data.actualUsedGB!) - sales.reduce((n, s) => n + (s.color === "#f59e0b" ? s.value : 0), 0)) : null };
 }
