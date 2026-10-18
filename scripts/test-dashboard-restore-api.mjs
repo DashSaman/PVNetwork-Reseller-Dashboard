@@ -72,6 +72,8 @@ try{
  r=await api('PUT',Buffer.from('not a zip'));check('corrupt ZIP rejected',()=>assert.equal(r.status,409));
  const oversized=await fetch(base+'/api/admin/backups/restore',{method:'PUT',headers:{Cookie:cookie(),Origin:base,'Content-Type':'application/zip'},body:Buffer.alloc(64*1024*1024+1)});
  check('oversized upload rejected',()=>assert.equal(oversized.status,409));
+ const concurrent=await Promise.all([api('PUT',archive),api('PUT',archive)]);
+ check('concurrent uploads serialize without overwriting each other',()=>assert.deepEqual(concurrent.map(x=>x.status).sort(),[200,409]));
  r=await api('PUT',archive);check('valid archive preview counts and key checks without disclosure',()=>{assert.equal(r.status,200);assert.equal(r.data.preview.counts.ResellerUser,1);assert.equal(r.data.preview.peerCount,1);assert.ok(!JSON.stringify(r.data).includes(sourceSecret));});
  const token=r.data.token;
  const corruptPath=path.join(data,'.restore',token,'archive.zip'),saved=readFileSync(corruptPath);writeFileSync(corruptPath,Buffer.from('changed'));
@@ -99,6 +101,7 @@ try{
  check('original key installed despite different environment',()=>assert.equal(readFileSync(path.join(data,'.app-secret'),'utf8'),sourceSecret));
  r=await api('GET',undefined,cookie());check('old destination session invalidated',()=>assert.equal(r.status,401));
  r=await api('GET',undefined,cookie('ADMIN','original',sourceSecret));check('restored populated install cannot restore again',()=>assert.equal(r.data.allowed,false));
+ r=await api('POST',{token,password:'Original123!',confirm:'RESTORE'},cookie('ADMIN','original',sourceSecret));check('consumed restore token cannot be replayed',()=>assert.equal(r.status,409));
  for(const [username,password]of[['original','Original123!'],['restored_rep','Reseller123!']]){const response=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});check('restored login '+username,()=>assert.equal(response.status,200));}
  const auth=cookie('ADMIN','original',sourceSecret);
  const response=await fetch(base+'/api/admin/backups',{method:'POST',headers:{Cookie:auth,'Content-Type':'application/json'},body:'{}'});check('backup after restore uses effective key',()=>assert.equal(response.status,200));

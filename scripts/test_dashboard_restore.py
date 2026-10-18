@@ -108,5 +108,26 @@ class RestoreTests(unittest.TestCase):
         stage = self.data / '.restore' / ('b' * 64); stage.mkdir(parents=True)
         (stage / 'archive.zip').write_bytes((self.root / 'bad' / out['name']).read_bytes())
         with self.assertRaises(ValueError): restore.inspect_upload(stage, self.template)
+    def test_incompatible_columns_rejected(self):
+        self.need()
+        with closing(sqlite3.connect(self.source)) as c, c: c.execute('ALTER TABLE Reseller ADD COLUMN futureField TEXT')
+        out = backup.create_archive(self.source, self.root / 'bad-schema', 'source-secret', [])
+        stage = self.data / '.restore' / ('c' * 64); stage.mkdir(parents=True)
+        (stage / 'archive.zip').write_bytes((self.root / 'bad-schema' / out['name']).read_bytes())
+        with self.assertRaises(ValueError): restore.inspect_upload(stage, self.template)
+    def test_each_persistent_domain_blocks_freshness(self):
+        self.need()
+        for table in restore.EMPTY:
+            with self.subTest(table=table):
+                with closing(sqlite3.connect(self.data / 'custom.db')) as c, c:
+                    c.execute(f'INSERT INTO {table}(id,value) VALUES(?,?)',('real','preserve'))
+                with self.assertRaises(ValueError): restore.assert_fresh(self.data / 'custom.db')
+                with closing(sqlite3.connect(self.data / 'custom.db')) as c, c: c.execute(f'DELETE FROM {table}')
+    def test_incomplete_archive_rejected(self):
+        self.need()
+        out=backup.create_archive(self.source,self.root/'incomplete','source-secret',[],panel_errors=[{'id':'missing','name':'missing','error':'offline'}])
+        stage=self.data/'.restore'/('d'*64);stage.mkdir(parents=True)
+        (stage/'archive.zip').write_bytes((self.root/'incomplete'/out['name']).read_bytes())
+        with self.assertRaises(ValueError):restore.inspect_upload(stage,self.template)
 
 if __name__ == '__main__': unittest.main()
