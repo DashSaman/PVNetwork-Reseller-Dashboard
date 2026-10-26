@@ -107,6 +107,34 @@ billing panels was not certified. Production was observed to have one configured
 billing panel; its managed nodes are not additional billing panels. No online
 dependency-advisory clearance or exhaustive upstream-panel audit is claimed.
 
-Final candidate-image and production acceptance results are recorded below after
-their checks complete; private database copies, client IDs, keys and host evidence
-belong outside this public repository.
+## Candidate image and production acceptance
+
+Runtime commit `cb44a60a54360753ae31b3baae3efa0c05d52d4a` was pushed to main
+and deployed as `pv-reseller-dashboard:audit-20261026`, image
+`sha256:6774f29c56015d64ae28f70f69454c33c444b09ab6e552f02f3ac0e6e497fa67`.
+The actual Linux image passed all 45 audit API checks and all 23 Python checks,
+including the POSIX credential-file and symlink cases. Both containers had network
+disabled, no published ports and no production-data mount. The cached dependency
+and runtime bases retained the existing production dependency versions.
+
+After replacing only the dashboard, read-only acceptance passed for the admin and
+all three active resellers. All 57 tracked users were returned by bootstrap and had
+live usage, expiry and status values. The populated installation still refused
+restore uploads; no production restore or real-user mutation fixture was run.
+Legacy sessions, stale credential-bound sessions, anonymous access and bridge-token
+replay into dashboard routes were rejected.
+
+A consistent private database snapshot was taken after gracefully stopping the
+previous dashboard. Every non-log dashboard table matched after replacement;
+existing log rows were preserved. Other container identities/start times, service
+PIDs, listening ports and native inbound configuration matched the pre-deployment
+snapshot. The original loopback binding, network, data mount, runtime key and active
+backup timer were retained. The exact previous dashboard container remains available
+for rollback; no schema migration or global Docker cleanup was performed.
+
+The updated scheduled-backup signer also produced a complete, verified archive.
+Its snapshot matched all eight dashboard tables, including 57 users, three resellers,
+33 permission mappings, panel configuration, settings and 140 operation journals;
+the original recovery key was verified. Independent native-panel databases were
+not exported. Private database copies, client IDs, keys, archive hashes and host
+evidence remain outside this public repository.
