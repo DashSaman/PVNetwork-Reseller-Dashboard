@@ -82,3 +82,34 @@ Client identifiers, subscription secrets, credentials, database copies and full
 before/after evidence are private operational material; never commit them here.
 Deployment must preserve the dashboard's existing loopback binding, data mount,
 network and environment and verify unrelated containers/services/ports unchanged.
+
+## Deployment and final acceptance
+
+Runtime commits `35c2951` and `72176e8` were published to main and deployed on
+2026-10-26. The follow-up lets an already-reserved browser request reach the
+server's retry accounting instead of rejecting it against unreserved balance.
+The final production image passed all 16 lifecycle checks in a container with
+network disabled, no published ports and no production database mount. Production
+build, TypeScript and targeted ESLint passed. The standalone legacy accounting
+runner expects a separately running fixture on port 3299; it was not used as a
+passing test. The self-contained route/SQLite fixtures above verify this change.
+
+Deployment retained the dashboard's existing environment, data mount, network
+and loopback binding. All dashboard rows were compared before/after the container
+replacement. Unrelated container identities/start times, service main PIDs,
+listening ports and native configuration matched. Populated-install restore and
+anonymous-access protections were also checked; no production restore ran.
+
+The two previously requested partial deletions were then resumed through the
+shared API and completed. Their recorded usage was zero, and no other account,
+reseller setting or consumed balance changed. Final count: 57 users and three
+resellers; all 57 remaining users matched every stored selected membership.
+Authenticated admin and all three reseller list APIs passed live checks. One
+native subscription per reseller returned HTTP 200 with 7, 12 and 1 links,
+respectively, matching the selected memberships for those samples.
+
+A complete final dashboard backup was created and verified. The daily backup
+timer remains active. Temporary resources from this build were handled by exact
+identity; no global Docker prune, firewall/port change or unrelated service
+restart was performed. Private operational memory stores archive/evidence paths
+and the rollback container; do not replay completed repair/deployment scripts.
