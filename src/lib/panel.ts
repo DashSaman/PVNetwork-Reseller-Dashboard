@@ -7,7 +7,7 @@
 
 import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
 import https from "node:https";
-import { syncNodeClientUpdate, verifyMasterClientUpdate, mutateWithNodePeers, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
+import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifiedClientUsage, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
 export type PanelInbound = {
   id: number;
@@ -51,6 +51,7 @@ export type PanelClientStat = {
 
 export type PanelApiResult<T = unknown> = {
   ok: boolean;
+  pending?: boolean;
   msg?: string;
   data?: T;
 };
@@ -184,7 +185,7 @@ async function panelRequest<T>(
       method,
       headers: baseHeaders(auth, body !== undefined),
       body,
-      signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(init.timeoutMs ?? 20000)]) : AbortSignal.timeout(init?.timeoutMs ?? 20000),
+      signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(init.timeoutMs ?? (method === "POST" && path.startsWith("/panel/api/clients/") ? 60000 : 20000))]) : AbortSignal.timeout(init?.timeoutMs ?? (method === "POST" && path.startsWith("/panel/api/clients/") ? 60000 : 20000)),
     };
     // A private node can have a private CA and a loopback/gateway route. Keep
     // normal hostname + CA validation; never disable verification globally.
@@ -192,7 +193,7 @@ async function panelRequest<T>(
     const json = (await res.json()) as { success?: boolean; msg?: string; obj?: T } | null;
     if (!json) return { ok: false, msg: `پاسخ نامعتبر از پنل (HTTP ${res.status})` };
     if (json.success === true) {
-      if (method !== "GET" && /^\/panel\/api\/(clients\/(add|update|del|resetTraffic)|inbounds\/(add|update|del))/.test(path)) clearDisplayCache(sharedDisplayCache());
+      if (method !== "GET" && /^\/panel\/api\/(clients\/|inbounds\/(add|update|del))/.test(path)) clearDisplayCache(sharedDisplayCache());
       return { ok: true, data: json.obj as T };
     }
     return { ok: false, msg: json.msg || "عملیات در پنل ناموفق بود" };
@@ -366,16 +367,32 @@ export async function addClient(
   protocol: string,
   client: Partial<PanelClient>
 ): Promise<PanelApiResult> {
-  return panelRequest(auth, "/panel/api/clients/add", {
+  const result = await panelRequest(auth, "/panel/api/clients/add", {
     method: "POST",
     json: {
       client: buildClientPayload(protocol, client),
       inboundIds,
     },
   });
+  if (!result.ok) return result;
+  const verified = await ensureClientMembership(auth, client.email || "", inboundIds, panelRequest, client);
+  if (!verified.ok) return verified;
+  if ((result.data as { nodePending?: boolean } | undefined)?.nodePending) return { ok: false, pending: true, msg: "همگام‌سازی لوکیشن‌ها در جریان است؛ همان درخواست را دوباره ادامه دهید" };
+  return verified;
 }
 
 /** ویرایش کلاینت (رکورد یکپارچه — روی همه اینباندهای متصل اعمال می‌شود) */
+export async function resumeClientCreation(auth: PanelAuth, inboundIds: number[], protocol: string, client: Partial<PanelClient>): Promise<PanelApiResult> {
+  const current = await panelRequest<{ client: { uuid?: string; id?: string; subId?: string } }>(auth, `/panel/api/clients/get/${encodeURIComponent(client.email || "")}`);
+  if (current.ok && current.data?.client) {
+    const c = current.data.client;
+    if (c.subId !== client.subId || client.id && (c.uuid || c.id) !== client.id) return { ok: false, msg: "هویت حساب با عملیات ساخت قبلی یکسان نیست" };
+    return attachClient(auth, client.email || "", inboundIds);
+  }
+  if (client.id && /^(?:client )?(?:not found|does not exist)$|^obtain \(record not found\)$/.test((current.msg || "").trim().toLowerCase())) return addClient(auth, inboundIds, protocol, client);
+  return { ok: false, msg: "وضعیت ساخت قبلی قابل تأیید نیست" };
+}
+
 export async function updateClient(
   auth: PanelAuth,
   email: string,
@@ -386,13 +403,7 @@ export async function updateClient(
     const synced = await syncNodeClientUpdate(auth, email, client, panelRequest);
     if (!synced.ok) return synced;
   }
-  const result = await panelRequest(
-    auth,
-    `/panel/api/clients/update/${encodeURIComponent(email)}`,
-    { method: "POST", json: buildClientPayload(protocol, client) }
-  );
-  if (!result.ok || !auth.nodePeers?.length) return result;
-  return verifyMasterClientUpdate(auth, email, client, panelRequest);
+  return updateMasterClient(auth, email, client, panelRequest);
 }
 
 /** اتصال کلاینت موجود به اینباندهای جدید */
@@ -401,10 +412,15 @@ export async function attachClient(
   email: string,
   inboundIds: number[]
 ): Promise<PanelApiResult> {
-  return panelRequest(auth, `/panel/api/clients/${encodeURIComponent(email)}/attach`, {
+  const result = await panelRequest(auth, `/panel/api/clients/${encodeURIComponent(email)}/attach`, {
     method: "POST",
     json: { inboundIds },
   });
+  if (!result.ok) return result;
+  const verified = await ensureClientMembership(auth, email, inboundIds, panelRequest);
+  if (!verified.ok) return verified;
+  if ((result.data as { nodePending?: boolean } | undefined)?.nodePending) return { ok: false, pending: true, msg: "همگام‌سازی لوکیشن‌ها هنوز کامل نشده است" };
+  return verified;
 }
 
 /** جدا کردن کلاینت از اینباندها */
@@ -420,19 +436,17 @@ export async function detachClient(
 }
 
 /** حذف کلاینت از همه اینباندها (رکورد یکتا) */
+export async function getVerifiedClientUsage(auth: PanelAuth, email: string, expectedTotalBytes?: number): Promise<PanelApiResult<number>> {
+  return verifiedClientUsage(auth, email, panelRequest, expectedTotalBytes);
+}
+
 export async function deleteClient(auth: PanelAuth, email: string, progress?: NodeMutationProgress): Promise<PanelApiResult> {
-  if (auth.nodePeers?.length || progress && await progress.load()) return mutateWithNodePeers(auth, email, "delete", panelRequest, progress);
-  return panelRequest(auth, `/panel/api/clients/del/${encodeURIComponent(email)}`, {
-    method: "POST",
-  });
+  return mutateWithNodePeers(auth, email, "delete", panelRequest, progress);
 }
 
 /** ریست ترافیک کلاینت بر اساس ایمیل */
 export async function resetClientTraffic(auth: PanelAuth, email: string, progress?: NodeMutationProgress): Promise<PanelApiResult> {
-  if (auth.nodePeers?.length || progress && await progress.load()) return mutateWithNodePeers(auth, email, "reset", panelRequest, progress);
-  return panelRequest(auth, `/panel/api/clients/resetTraffic/${encodeURIComponent(email)}`, {
-    method: "POST",
-  });
+  return mutateWithNodePeers(auth, email, "reset", panelRequest, progress);
 }
 
 /** کاربران آنلاین */

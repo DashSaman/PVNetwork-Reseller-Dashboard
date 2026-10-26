@@ -19,8 +19,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const format = (req.nextUrl.searchParams.get("format") || "base64").toLowerCase();
   const data = await getPortalData(subId, requestHost);
 
+  if (data.unavailable || data.found && !data.links.length) {
+    return NextResponse.json({ error: "دریافت اشتراک موقتاً ممکن نیست؛ دوباره تلاش کنید" }, { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "5" } });
+  }
   if (!data.found) {
-    return NextResponse.json({ error: "اشتراک یافت نشد" }, { status: 404 });
+    return NextResponse.json({ error: "اشتراک یافت نشد" }, { status: 404, headers: { "Cache-Control": "no-store" } });
   }
 
   if (format === "json") {

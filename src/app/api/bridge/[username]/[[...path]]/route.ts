@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { verifyPassword, randomUuid } from "@/lib/crypto";
 import { BRIDGE_COOKIE, bridgeCookiePath, issueBridgeToken, getBridgeReseller, parseBody, xui } from "@/lib/bridge";
 import { isBlocked, recordFailure, clearFailures, clientIp, LIMITS } from "@/lib/rate-limit";
-import { getAllPanelInbounds, getOnlineAcrossPanels, getPanelConnection } from "@/lib/panel-manager";
+import { getAllPanelInbounds, getAllPanelInboundsFresh, getOnlineAcrossPanels, getPanelConnection } from "@/lib/panel-manager";
 import {
   getAllocatedGB,
   getConsumedGB,
@@ -507,12 +507,12 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
 
   const expiryTime = payload.expiryTime !== undefined ? Math.max(0, Number(payload.expiryTime) || 0) : undefined;
   const enable = payload.enable !== undefined ? !!payload.enable : undefined;
-  const ipLimit = payload.limitIp !== undefined ? Math.max(0, Number(payload.limitIp) || 0) : 0;
+  const ipLimit = payload.limitIp !== undefined ? Math.max(0, Number(payload.limitIp) || 0) : undefined;
   const newUuid = typeof payload.id === "string" && payload.id.trim() ? payload.id.trim() : undefined;
   const newSubId = typeof payload.subId === "string" && payload.subId.trim() ? payload.subId.trim() : undefined;
 
   // اعمال روی پنل‌های دارای این کاربر
-  const panelResult = await getAllPanelInbounds();
+  const panelResult = await getAllPanelInboundsFresh();
   if (!panelResult.ok) return xui(false, panelResult.msg || "هیچ پنلی در دسترس نیست");
   const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
 
@@ -523,10 +523,10 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     if (donePanels.has(ref.panelId)) continue;
     donePanels.add(ref.panelId);
     const bundle = panelResult.panels.find((p) => p.panelId === ref.panelId);
-    if (!bundle) continue;
-    const inb = bundle.inbounds.find((x) => x.id === ref.inboundId);
+    if (!bundle) { errors.push("Required panel unavailable"); continue; }
+    const inb = bundle.inbounds.find((x) => x.clients.some(c => c.email === email));
     const exists = inb ? inb.clients.some((c) => c.email === email) || inb.clientStats.some((c) => c.email === email) : false;
-    if (!exists) continue;
+    if (!exists) { errors.push("Required client unavailable"); continue; }
     const conn = await getPanelConnection(ref.panelId);
     if (!conn.ok) { errors.push(conn.msg); continue; }
     const upd = await updateClient(conn.conn as PanelAuth, email, inb?.protocol || "vless", {
@@ -535,7 +535,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
       limitIp: ipLimit,
       totalGB: trafficGB > 0 ? trafficGB * GB : 0,
       expiryTime: expiryTime ?? undefined,
-      enable: enable ?? true,
+      enable,
       subId: newSubId || tracked.subId || "",
     });
     if (!upd.ok) errors.push(upd.msg || "ویرایش ناموفق");

@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
-import { deleteClient, resetClientTraffic, type PanelAuth } from "./panel";
+import { deleteClient, resetClientTraffic, getVerifiedClientUsage, type PanelAuth } from "./panel";
 import { logActivity } from "./logger";
 import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync";
 
@@ -21,11 +21,8 @@ import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync
 
 export type PanelOpResult = "SUCCESS" | "ALREADY_MISSING" | "FAILED" | "UNREACHABLE";
 
-const MISSING_MARKERS = ["یافت نشد", "not found", "not exist", "does not exist", "no such"];
-
-function classifyOpError(msg: string | undefined): PanelOpResult {
-  const m = (msg || "").toLowerCase();
-  if (MISSING_MARKERS.some((k) => m.includes(k.toLowerCase()))) return "ALREADY_MISSING";
+function classifyOpError(_msg: string | undefined): PanelOpResult {
+  // Only the native adapter may prove absence by reading the client record.
   return "FAILED";
 }
 
@@ -74,7 +71,7 @@ export async function getActiveReservationsGB(resellerId: string): Promise<numbe
   const rows = await db.operationJournal.findMany({
     where: {
       resellerId,
-      type: { in: ["CREATE", "UPDATE"] },
+      type: { in: ["CREATE", "UPDATE", "RESET"] },
       status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] },
     },
     select: { reservedGB: true },
@@ -82,7 +79,7 @@ export async function getActiveReservationsGB(resellerId: string): Promise<numbe
   return rows.reduce((s, r) => s + (r.reservedGB || 0), 0);
 }
 
-type TrackedUser = { id: string; email: string; inboundIds: string; panelId: string; trafficGB: number };
+type TrackedUser = { id: string; email: string; subId?: string | null; inboundIds: string; panelId: string; trafficGB: number };
 
 /** پنل‌های مرتبط با کاربر — خالی/خراب = خطای تعمیر */
 export async function getRequiredUserPanelIds(tracked: TrackedUser): Promise<{ ok: true; panelIds: string[] } | { ok: false; msg: string }> {
@@ -153,7 +150,7 @@ async function commitJournalAccounting(journalId: string, resellerId: string, us
     const j = await tx.operationJournal.findUnique({ where: { id: journalId } });
     if (!j || j.accountingCommitted) return; // idempotent — هیچ‌وقت دوبار
     await tx.reseller.update({ where: { id: resellerId }, data: { consumedGB: { increment: usageGB } } });
-    await tx.operationJournal.update({ where: { id: journalId }, data: { accountingCommitted: true } });
+    await tx.operationJournal.update({ where: { id: journalId }, data: { accountingCommitted: true, reservedGB: 0 } });
   });
 }
 
@@ -164,6 +161,19 @@ function nodeProgress(journalId: string, panelId: string): NodeMutationProgress 
     return row.metadata ? JSON.parse(row.metadata) : {};
   }
   return {
+    async checkpointUsage(bytes) {
+      const row = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
+      const m = JSON.parse(row.metadata || "{}");
+      const byPanel = m.usageByPanel as Record<string, number> | undefined;
+      if (!byPanel) throw new Error("Legacy operation needs accounting review");
+      byPanel[panelId] = Math.max(byPanel[panelId] || 0, bytes / 1073741824);
+      const usage = Object.values(byPanel).reduce((a, b) => a + b, 0);
+      if (row.type === "RESET" && !row.accountingCommitted) {
+        const q = await getQuotaState(row.resellerId);
+        if (!q.unlimited && usage > q.pool - q.allocated - q.consumed - Math.max(0, q.reserved - row.reservedGB)) throw new Error("Insufficient pool for reset");
+      }
+      await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...m, usageByPanel: byPanel }), usageSnapshotGB: usage, ...(row.type === "RESET" && !row.accountingCommitted ? { reservedGB: usage } : {}) } });
+    },
     async load() {
       const m = await metadata();
       return (m.nodeSync as Record<string, NodeMutationState> | undefined)?.[panelId];
@@ -180,9 +190,13 @@ function nodeProgress(journalId: string, panelId: string): NodeMutationProgress 
 async function runPanelOp(journalId: string, panelId: string, op: "delete" | "reset", email: string): Promise<{ panelId: string; result: PanelOpResult }> {
   const conn = await getPanelConnection(panelId);
   if (!conn.ok) return { panelId, result: "UNREACHABLE" };
+  const progress = nodeProgress(journalId, panelId);
+  const journal = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
+  const tracked = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: journal.resellerId, email } } });
+  progress.expectedSubId = tracked?.subId || undefined;
   const r = op === "delete"
-    ? await deleteClient(conn.conn as PanelAuth, email, nodeProgress(journalId, panelId))
-    : await resetClientTraffic(conn.conn as PanelAuth, email, nodeProgress(journalId, panelId));
+    ? await deleteClient(conn.conn as PanelAuth, email, progress)
+    : await resetClientTraffic(conn.conn as PanelAuth, email, progress);
   if (r.ok) return { panelId, result: "SUCCESS" };
   return { panelId, result: classifyOpError(r.msg) };
 }
@@ -200,7 +214,10 @@ async function executeAcrossPanels(
   for (const panelId of targetPanels) {
     if (completed.has(panelId)) continue;
     const r = await runPanelOp(journalId, panelId, op, email);
-    if (r.result === "SUCCESS" || r.result === "ALREADY_MISSING") completed.add(panelId);
+    if (r.result === "SUCCESS" || r.result === "ALREADY_MISSING") {
+      completed.add(panelId);
+      await db.operationJournal.update({ where: { id: journalId }, data: { completedPanels: JSON.stringify([...completed]) } });
+    }
     else failed.push(r);
   }
   if (failed.length > 0) {
@@ -218,6 +235,19 @@ async function executeAcrossPanels(
 }
 
 export type OpResult = { ok: true; debitedGB: number } | { ok: false; status: number; msg: string; partial?: boolean };
+
+async function prepareUsageLedger(journalId: string, panels: PanelBundle[], email: string): Promise<void> {
+  const row = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
+  const m = JSON.parse(row.metadata || "{}");
+  if (m.usageByPanel) return;
+  const targets = parseArr(row.targetPanels), completed = parseArr(row.completedPanels);
+  // Old multi-panel partial journals cannot safely reconstruct a deleted counter.
+  const destructiveProgress = Object.values(m.nodeSync || {}).some(s => (s as NodeMutationState).steps.some(step => step.status !== "PENDING"));
+  if (targets.length > 1 && (completed.length || destructiveProgress)) throw new Error("Legacy partial operation needs accounting review");
+  const usageByPanel = Object.fromEntries(targets.map(id => [id, canonicalUserUsage(panels.filter(p => p.panelId === id), email).usedBytes / 1073741824]));
+  if (targets.length === 1) usageByPanel[targets[0]] = Math.max(usageByPanel[targets[0]], row.usageSnapshotGB || 0);
+  await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...m, usageByPanel }) } });
+}
 
 /** بارگذاری داخل قفل: reseller و tracked تازه */
 async function loadWithinLock(resellerId: string, email: string): Promise<{ reseller: ResellerWithInbounds; tracked: TrackedUser } | { err: OpResult }> {
@@ -261,7 +291,7 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
     let journal = await findResumableJournal(resellerId, email, "DELETE");
     let usageGB = journal?.usageSnapshotGB ?? null;
     if (usageGB === null) {
-      usageGB = Math.round((canonicalUserUsage(snapshot.panels, email).usedBytes / (1024 * 1024 * 1024)) * 10000) / 10000;
+      usageGB = canonicalUserUsage(snapshot.panels, email).usedBytes / 1073741824;
     }
 
     if (!journal) {
@@ -278,12 +308,14 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
     }
 
     const targetPanels = parseArr(journal.targetPanels); // تغییرناپذیر
+    await prepareUsageLedger(journal.id, snapshot.panels, email);
     const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "delete", email);
 
     if (failed.length > 0) {
       return { ok: false, status: 502, partial: true, msg: `حذف ناقص بود — ${failed.length} پنل انجام نشد (${failed.map((f) => f.result).join(", ")}). مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
 
+    usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
     await commitJournalAccounting(journal.id, resellerId, usageGB);
     // حذف محلی + بستن ژورنال در «یک» تراکنش (crash-safe)؛ اگر رکورد قبلاً حذف شده، فقط ژورنال بسته می‌شود
     await db.$transaction(async (tx) => {
@@ -314,15 +346,22 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     if (!readable.ok) return { ok: false, status: 502, msg: `ریست انجام نشد: ${readable.msg}` };
 
     let journal = await findResumableJournal(resellerId, email, "RESET");
-    const usageGB =
+    let usageGB =
       journal?.usageSnapshotGB ??
-      Math.round((canonicalUserUsage(snapshot.panels, email).usedBytes / (1024 * 1024 * 1024)) * 10000) / 10000;
+      canonicalUserUsage(snapshot.panels, email).usedBytes / 1073741824;
+
+    const quota = await getQuotaState(resellerId);
+    const own = journal ? await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } }) : null;
+    if (!own?.accountingCommitted && !quota.unlimited && usageGB > quota.pool - quota.allocated - quota.consumed - Math.max(0, quota.reserved - (own?.reservedGB || 0))) {
+      return { ok: false, status: 403, msg: "برای ریست ترافیک، موجودی آزاد کافی نیست؛ مصرف قبلی باید از پول نماینده پرداخت شود" };
+    }
 
     if (!journal) {
       journal = await db.operationJournal.create({
         data: {
           idempotencyKey: opKey("reset", tracked.id),
           resellerId, userId: tracked.id, email, type: "RESET", status: "RUNNING",
+          reservedGB: usageGB,
           usageSnapshotGB: usageGB,
           targetPanels: JSON.stringify(req.panelIds), completedPanels: "[]", failedPanels: "[]",
         },
@@ -332,12 +371,14 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     }
 
     const targetPanels = parseArr(journal.targetPanels);
+    await prepareUsageLedger(journal.id, snapshot.panels, email);
     const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "reset", email);
 
     if (failed.length > 0) {
       return { ok: false, status: 502, partial: true, msg: `ریست ناقص بود — ${failed.length} پنل انجام نشد. مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
 
+    usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
     await commitJournalAccounting(journal.id, resellerId, usageGB);
     await db.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
     await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "ریست ترافیک کاربر", detail: `${email}${usageGB > 0 ? ` | مصرف قطعی: ${usageGB} گیگ` : ""}`, resellerId });
@@ -373,6 +414,22 @@ export async function updateUserByJournal(
     const quotaBefore = await getQuotaState(resellerId);
     const vq = validateRequestedUserQuota(quotaBefore, desired.trafficGB);
     if (!vq.ok) return { ok: false, status: 403, msg: vq.msg };
+
+    const required = await getRequiredUserPanelIds(loaded.tracked);
+    if (!required.ok) return { ok: false, status: 409, msg: required.msg };
+    const live = await getAllPanelInboundsFresh();
+    const readable = assertRequiredPanelsReadable(live, required.panelIds);
+    if (!readable.ok) return { ok: false, status: 502, msg: readable.msg };
+    let usedBytes = 0;
+    for (const panelId of required.panelIds) {
+      const conn = await getPanelConnection(panelId);
+      if (!conn.ok) return { ok: false, status: 502, msg: conn.msg };
+      const usage = await getVerifiedClientUsage(conn.conn, email);
+      if (!usage.ok || usage.data === undefined) return { ok: false, status: 502, msg: usage.msg || "مصرف حساب قابل تأیید نیست" };
+      usedBytes += Math.max(usage.data, canonicalUserUsage(live.panels.filter(p => p.panelId === panelId), email).usedBytes);
+    }
+    const usedGB = usedBytes / 1073741824;
+    if (desired.trafficGB > 0 && desired.trafficGB < usedGB) return { ok: false, status: 403, msg: "سهمیهٔ جدید نمی‌تواند کمتر از مصرف ثبت‌شدهٔ کاربر باشد" };
 
     // ژورنال UPDATE فعالِ همین کاربر = resume؛ رزرو خودش نباید_again حساب شود
     const existingJournal = await findResumableJournal(resellerId, email, "UPDATE");
@@ -419,6 +476,18 @@ export async function updateUserByJournal(
     }
 
     const errors = await applyRemote();
+    let finalUsedBytes = 0;
+    // A route must not silently skip a required target and then release allocation.
+    for (const panelId of required.panelIds) {
+      const conn = await getPanelConnection(panelId);
+      if (!conn.ok) { errors.push("تأیید پنل مرتبط ممکن نشد"); continue; }
+      const usage = await getVerifiedClientUsage(conn.conn, email, desired.trafficGB * 1073741824);
+      if (!usage.ok || usage.data === undefined) errors.push("مصرف نهایی حساب قابل تأیید نیست");
+      else finalUsedBytes += usage.data;
+    }
+    if (!errors.length && desired.trafficGB > 0 && desired.trafficGB < loaded.tracked.trafficGB) {
+      if (finalUsedBytes > desired.trafficGB * 1073741824) errors.push("مصرف در زمان ویرایش تغییر کرده؛ کاهش سهمیه تأیید نشد");
+    }
     if (errors.length > 0) {
       await db.operationJournal.update({
         where: { id: journal.id },

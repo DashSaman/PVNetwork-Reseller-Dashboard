@@ -77,9 +77,10 @@ try {
   check('allocation commits once without debiting existing consumption', () => { assert.equal(master.clients.get('u1').totalGB, 15 * GB); });
   node.state.fail = true;
   r = await api('/api/reseller/users/u1', { trafficGB: 20 }, 'PUT');
-  check('unavailable node returns partial and master stays at old quota', () => { assert.equal(r.status, 502); assert.equal(master.clients.get('u1').totalGB, 15 * GB); });
+  check('unavailable node fails preflight and master stays at old quota', () => { assert.equal(r.status, 502); assert.equal(master.clients.get('u1').totalGB, 15 * GB); });
   const partial = await db.operationJournal.findFirst({ where: { email: 'u1', status: 'PARTIAL' } });
-  check('partial edit keeps reservation and old local allocation', () => assert.equal(partial.reservedGB, 5));
+  const retained = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: owner.id, email: 'u1' } } });
+  check('failed preflight creates no partial write or unnecessary reservation', () => { assert.equal(partial, null); assert.equal(retained.trafficGB, 15); });
   node.state.fail = false; r = await api('/api/reseller/users/u1', { trafficGB: 20 }, 'PUT');
   check('retry converges to absolute quota and releases reservation', () => { assert.equal(r.status, 200); assert.equal(node.clients.get('u1').totalGB, 20 * GB); });
   const bulk = `/api/admin/resellers/${owner.id}/bulk-extension`;

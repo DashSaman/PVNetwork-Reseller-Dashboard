@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getPanelById, getAllPanelInbounds, buildSubLink } from "@/lib/panel-manager";
+import { getPanelById, getAllPanelInboundsFresh, buildSubLink } from "@/lib/panel-manager";
 import { getResellerWithAccess } from "@/lib/reseller-helpers";
 import { buildV2rayLink, type BuiltLink } from "@/lib/links";
 import { PUBLIC_SERVICE_NAME, PUBLIC_SERVICE_ERROR, publicLocationLabel } from "@/lib/reseller-presentation";
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     const requestHost = fwdHost.split(",")[0].trim().split(":")[0] || "";
 
     // هاست هر پنل: دامنه subBase آن پنل، وگرنه هاست درخواست فعلی
-    const panelResult = await getAllPanelInbounds();
+    const panelResult = await getAllPanelInboundsFresh();
     const links: (BuiltLink & { tag: string; panelName: string; remark: string })[] = [];
     const seen = new Set<string>();
 
@@ -77,6 +77,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       }
     }
 
+    if (!panelResult.ok || !links.length) return NextResponse.json({ error: PUBLIC_SERVICE_ERROR }, { status: 503, headers: { "Cache-Control": "no-store" } });
     return NextResponse.json({
       email,
       subId: tracked.subId || null,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, withResellerLock, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
-import { getAllPanelInbounds } from "@/lib/panel-manager";
+import { getAllPanelInboundsFresh } from "@/lib/panel-manager";
 import { createResellerUserCoreWithinResellerLock } from "@/lib/user-create";
 import { db } from "@/lib/db";
 
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
       ipLimit?: number;
       inbounds?: InboundRef[];
       inboundIds?: number[];
+      requestId?: string;
     };
 
     const prefixRaw = (body.prefix || "").trim();
@@ -34,6 +35,7 @@ export async function POST(req: NextRequest) {
     const prefix = sanitizeName(prefixRaw) || "user";
 
     const count = Math.min(MAX_BULK, Math.max(1, Math.floor(Number(body.count) || 1)));
+    const requestId = (body.requestId || "").trim().slice(0, 48) || undefined;
     const trafficGB = Math.max(0, Number(body.trafficGB) || 0); // ۰ = نامحدود
     const ipLimit = reseller.allowIpLimit ? Math.max(0, Number(body.ipLimit) || 0) : 0;
 
@@ -46,7 +48,8 @@ export async function POST(req: NextRequest) {
     if (reseller.trafficPoolGB > 0) {
       // وضعیت سهمیه فقط از تابع مرجع — رزروهای فعال CREATE لحاظ می‌شوند
       const quota = await getQuotaState(reseller.id, reseller);
-      const need = trafficGB * count;
+      const funded = requestId ? await db.operationJournal.findMany({ where: { resellerId: reseller.id, type: "CREATE", idempotencyKey: { in: Array.from({ length: count }, (_, i) => `create-req:${reseller.id}:${requestId}:${i + 1}`) } } }) : [];
+      const need = trafficGB * count - funded.reduce((sum, j) => sum + (j.status === "SUCCESS" ? trafficGB : Math.min(trafficGB, j.reservedGB)), 0);
       if (need > quota.remaining) {
         return NextResponse.json(
           { error: `ظرفیت پول کافی نیست — برای ${count} کاربر × ${trafficGB} گیگ، ${need} گیگ لازم است اما فقط ${Math.max(0, Math.floor(quota.remaining))} گیگ باقی مانده` },
@@ -77,7 +80,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ---- اسنپ‌شات یک‌باره اینباندهای زنده (برای کل دسته) ----
-    const snapshot = await getAllPanelInbounds();
+    const snapshot = await getAllPanelInboundsFresh();
     if (!snapshot.ok) {
       return NextResponse.json({ error: snapshot.msg || "هیچ پنلی در دسترس نیست" }, { status: 502 });
     }
@@ -91,7 +94,7 @@ export async function POST(req: NextRequest) {
       const name = `${prefix}${String(i).padStart(pad, "0")}`;
       const r = await createResellerUserCoreWithinResellerLock(
         reseller,
-        { name, trafficGB, expiryTime, ipLimit, refs },
+        { name, trafficGB, expiryTime, expiryDays: !body.expiryDate ? body.expiryDays : undefined, ipLimit, refs, requestId: requestId ? `${requestId}:${i}` : undefined },
         snapshot
       );
       if (r.ok) {

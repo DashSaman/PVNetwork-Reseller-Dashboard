@@ -838,6 +838,7 @@ function UsersTab({
     });
   }
 
+  const createAttempt = useRef<{ payload: string; requestId: string } | null>(null);
   async function createUser() {
     if (!name.trim()) {
       toast({ title: "خطا", description: "نام کاربر را وارد کنید", variant: "destructive" });
@@ -859,6 +860,8 @@ function UsersTab({
       return;
     }
     // ---- ساخت گروهی (تعداد > ۱) ----
+    const attemptPayload = JSON.stringify({ name, count: nCount, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds });
+    if (createAttempt.current?.payload !== attemptPayload) createAttempt.current = { payload: attemptPayload, requestId: crypto.randomUUID() };
     if (nCount > 1) {
       setBusy(true);
       const rb = await api<{
@@ -868,7 +871,7 @@ function UsersTab({
         failed: { name: string; error: string }[];
       }>("/api/reseller/users/bulk", {
         method: "POST",
-        body: JSON.stringify({ prefix: name, count: nCount, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds }),
+        body: JSON.stringify({ prefix: name, count: nCount, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds, requestId: createAttempt.current.requestId }),
       });
       setBusy(false);
       if (rb.ok && rb.data) {
@@ -876,11 +879,9 @@ function UsersTab({
           title: "ساخت گروهی انجام شد",
           description: `${faNum(rb.data.createdCount)} کاربر ساخته شد${rb.data.failedCount ? ` — ${faNum(rb.data.failedCount)} ناموفق` : ""}`,
         });
-        setCreateOpen(false);
+        if (!rb.data.failedCount) { setCreateOpen(false); createAttempt.current = null; }
         setBulkResult({ created: rb.data.created || [], failed: rb.data.failed || [] });
-        setName("");
-        setExpiryDate("");
-        setSelectedInbounds([]);
+        if (!rb.data.failedCount) { setName(""); setExpiryDate(""); setSelectedInbounds([]); }
         reload();
       } else {
         toast({ title: "خطا", description: rb.error, variant: "destructive" });
@@ -888,12 +889,14 @@ function UsersTab({
       return;
     }
     setBusy(true);
+    const payload = JSON.stringify({ name, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds });
     const r = await api<{ ok: boolean; email: string; subLink: string | null }>("/api/reseller/users", {
       method: "POST",
-      body: JSON.stringify({ name, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds }),
+      body: JSON.stringify({ ...JSON.parse(payload), requestId: createAttempt.current.requestId }),
     });
     setBusy(false);
     if (r.ok && r.data) {
+      createAttempt.current = null;
       toast({
         title: "کاربر ساخته شد",
         description: r.data.subLink ? "لینک سابسکریپشن آماده است" : `شناسه کاربر: ${r.data.email}`,

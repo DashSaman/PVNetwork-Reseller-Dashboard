@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { getAllPanelInbounds, getPanelById } from "./panel-manager";
+import { getAllPanelInboundsFresh, getPanelById } from "./panel-manager";
 import { buildV2rayLink, type BuiltLink } from "./links";
 
 /**
@@ -11,6 +11,7 @@ export type PortalLink = BuiltLink & { remark: string };
 
 export type PortalData = {
   found: boolean;
+  unavailable?: boolean;
   subId: string;
   email?: string;
   brandName: string;
@@ -32,8 +33,13 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
   const tracked = await db.resellerUser.findFirst({ where: { subId } });
   const reseller = tracked ? await db.reseller.findUnique({ where: { id: tracked.resellerId } }) : null;
 
-  const panelResult = await getAllPanelInbounds().catch(() => null);
-  if (!panelResult?.ok) return empty;
+  const panelResult = await getAllPanelInboundsFresh().catch(() => null);
+  if (!panelResult?.ok) return { ...empty, unavailable: true };
+  if (tracked) {
+    const { getRequiredUserPanelIds } = await import("./accounting-ops");
+    const required = await getRequiredUserPanelIds(tracked);
+    if (!required.ok || required.panelIds.some(id => !panelResult.panels.some(p => p.panelId === id))) return { ...empty, unavailable: true };
+  }
 
   // ---- گذر ۱: پیدا کردن ایمیل کاربر از روی subId ----
   let email = "";

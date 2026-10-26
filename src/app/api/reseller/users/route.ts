@@ -207,7 +207,7 @@ export async function POST(req: NextRequest) {
     const ipLimit = reseller.allowIpLimit ? Math.max(0, Number(body.ipLimit) || 0) : 0;
     const trafficGB = Math.max(0, Number(body.trafficGB) || 0);
 
-    const r = await createResellerUserCore(reseller, { name: body.name || "", trafficGB, expiryTime, ipLimit, refs, requestId });
+    const r = await createResellerUserCore(reseller, { name: body.name || "", trafficGB, expiryTime, expiryDays: !body.expiryDate ? body.expiryDays : undefined, ipLimit, refs, requestId });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
 
     // اعلان تلگرام — ناهمزمان بدون بلاک کردن پاسخ
