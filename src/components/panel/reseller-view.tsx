@@ -855,10 +855,7 @@ function UsersTab({
       toast({ title: "خطا", description: "پول ترافیک شما محدود است — سهمیه کاربر باید عددی مثبت باشد", variant: "destructive" });
       return;
     }
-    if (poolLimited && nTraffic > permissions.remainingGB) {
-      toast({ title: "خطا", description: `باقیمانده پول شما ${faNum(permissions.remainingGB)} گیگ است`, variant: "destructive" });
-      return;
-    }
+    // The server includes this attempt's existing reservation when checking a retry.
     // ---- ساخت گروهی (تعداد > ۱) ----
     const attemptPayload = JSON.stringify({ name, count: nCount, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds });
     if (createAttempt.current?.payload !== attemptPayload) createAttempt.current = { payload: attemptPayload, requestId: crypto.randomUUID() };
