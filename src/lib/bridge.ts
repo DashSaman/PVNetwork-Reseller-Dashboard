@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import { signSession, verifySession } from "./crypto";
+import { signAccountSession, type SessionAccount } from "./crypto";
+import { validateAccountToken } from "./auth-state";
 import type { NextRequest } from "next/server";
 import type { ResellerWithInbounds } from "./reseller-helpers";
 
@@ -17,8 +18,8 @@ export function bridgeCookiePath(username: string): string {
 }
 
 /** صدور توکن نشست پل — همان امضای نشست داشبورد با نقش RESELLER */
-export function issueBridgeToken(reseller: { id: string; username: string }): string {
-  return signSession({ role: "RESELLER", uid: reseller.id, username: reseller.username, exp: Date.now() + BRIDGE_TTL });
+export function issueBridgeToken(reseller: SessionAccount): string {
+  return signAccountSession("RESELLER", reseller, "bridge", Date.now() + BRIDGE_TTL);
 }
 
 /** نشست پل را از کوکی یا Bearer استخراج و اعتبارسنجی می‌کند (مطابقت با username مسیر) */
@@ -27,7 +28,7 @@ export async function getBridgeReseller(
   username: string
 ): Promise<{ ok: true; reseller: ResellerWithInbounds } | { ok: false; error: string }> {
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  const payload = verifySession(bearer || req.cookies.get(BRIDGE_COOKIE)?.value);
+  const payload = await validateAccountToken(bearer || req.cookies.get(BRIDGE_COOKIE)?.value, "bridge");
   if (!payload || payload.role !== "RESELLER") {
     return { ok: false, error: "نشست معتبر نیست — دوباره وارد شوید" };
   }

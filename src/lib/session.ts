@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
-import { verifySession, type SessionPayload } from "./crypto";
+import type { SessionPayload } from "./crypto";
+import { validateAccountToken } from "./auth-state";
 
 export const SESSION_COOKIE = "rp_session";
 const SESSION_TTL = 1000 * 60 * 60 * 12; // ۱۲ ساعت
@@ -23,7 +24,7 @@ export function setDashboardSessionCookie(res: import("next/server").NextRespons
 
 export async function getSession(): Promise<SessionPayload | null> {
   const store = await cookies();
-  return verifySession(store.get(SESSION_COOKIE)?.value);
+  return validateAccountToken(store.get(SESSION_COOKIE)?.value, "dashboard");
 }
 
 export async function requireAdmin(): Promise<SessionPayload | null> {

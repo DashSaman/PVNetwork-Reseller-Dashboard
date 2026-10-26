@@ -115,7 +115,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     if (body.expiryDate) expiryTime = new Date(body.expiryDate + "T23:59:59").getTime();
     else if (body.expiryDays && body.expiryDays > 0) expiryTime = Date.now() + body.expiryDays * 86400000;
     const expiryDays = expiryTime ? Math.ceil((expiryTime - Date.now()) / 86400000) : 0;
-    const ipLimit = body.ipLimit !== undefined ? Math.max(0, Number(body.ipLimit) || 0) : 0;
+    if (body.ipLimit !== undefined && !reseller.allowIpLimit) return NextResponse.json({ error: "تغییر محدودیت دستگاه برای حساب شما مجاز نیست" }, { status: 403 });
+    if (body.ipLimit !== undefined && (!Number.isSafeInteger(body.ipLimit) || body.ipLimit < 0 || body.ipLimit > 10000)) return NextResponse.json({ error: "محدودیت دستگاه باید عدد صحیح بین صفر تا ۱۰۰۰۰ باشد" }, { status: 400 });
+    if (!Number.isSafeInteger(expiryTime) || body.expiryDays !== undefined && (!Number.isSafeInteger(body.expiryDays) || body.expiryDays < 0)) return NextResponse.json({ error: "تاریخ انقضا نامعتبر است" }, { status: 400 });
+    const ipLimit = body.ipLimit;
     const enable = body.enable !== undefined ? !!body.enable : current.enable;
 
     // ---- اینباندهای جدید ----
@@ -201,8 +204,8 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         id: undefined,
         limitIp: ipLimit,
         totalGB: trafficGB ? trafficGB * 1024 * 1024 * 1024 : 0,
-        expiryTime,
-        enable,
+        expiryTime: body.expiryDate || body.expiryDays ? expiryTime : undefined,
+        enable: body.enable === undefined ? undefined : enable,
         subId: body.subId !== undefined ? body.subId : current.subId,
       });
       if (!upd.ok) errors.push(`ویرایش: ${upd.msg}`);

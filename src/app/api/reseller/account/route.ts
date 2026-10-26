@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { requireReseller } from "@/lib/session";
-import { hashPassword, verifyPassword } from "@/lib/crypto";
+import { requireReseller, sessionExpiry, setDashboardSessionCookie } from "@/lib/session";
+import { hashPassword, verifyPassword, signAccountSession } from "@/lib/crypto";
 import { logActivity } from "@/lib/logger";
 
 /** تغییر رمز عبور نماینده — POST { currentPassword, newPassword } */
@@ -25,14 +25,18 @@ export async function POST(req: NextRequest) {
     if (verifyPassword(newPassword, reseller.password)) {
       return NextResponse.json({ error: "رمز جدید نباید با رمز فعلی یکسان باشد" }, { status: 400 });
     }
-    await db.reseller.update({ where: { id: reseller.id }, data: { password: hashPassword(newPassword) } });
+    const password = hashPassword(newPassword);
+    const saved = await db.reseller.updateMany({ where: { id: reseller.id, password: reseller.password, totpSecret: reseller.totpSecret, totpEnabled: reseller.totpEnabled, active: true }, data: { password } });
+    if (saved.count !== 1) return NextResponse.json({ error: "حساب هنگام ویرایش تغییر کرده؛ دوباره وارد شوید" }, { status: 409 });
     await logActivity({
       actorType: "RESELLER",
       actorName: reseller.username,
       action: "تغییر رمز عبور",
       resellerId: reseller.id,
     });
-    return NextResponse.json({ ok: true });
+    const res = NextResponse.json({ ok: true });
+    setDashboardSessionCookie(res, signAccountSession("RESELLER", { ...reseller, password }, "dashboard", sessionExpiry()));
+    return res;
   } catch {
     return NextResponse.json({ error: "خطای داخلی سرور" }, { status: 500 });
   }

@@ -30,7 +30,7 @@ RUN bunx prisma generate \
  && cp /tmp/build.db /app/prisma-template/custom.db
 
 # بیلد next (standalone) + ادغام استاتیک + public — مسیر standalone خودکار پیدا می‌شود
-RUN bunx next build
+RUN APP_SECRET="$(openssl rand -hex 32)" bunx next build
 RUN set -e; ROOT=$(dirname "$(find .next/standalone -maxdepth 3 -name server.js | head -1)") \
  && cp -r .next/static "$ROOT/.next/" \
  && cp -r public "$ROOT/" \

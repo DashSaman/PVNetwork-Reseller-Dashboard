@@ -821,8 +821,8 @@ function UsersTab({
   function openEdit(u: ResellerUserRow) {
     if (u.liveFresh === false || u.expiryTime === null || u.enable === null) return;
     // یافتن refs فعلی کاربر بر اساس تگ‌های اینباند و پنل‌ها
-    const currentRefs: InboundRefForm[] = [];
-    for (const tag of u.inboundTags) {
+    const currentRefs: InboundRefForm[] = [...(u.inboundRefs || [])];
+    for (const tag of u.inboundRefs ? [] : u.inboundTags) {
       const clean = tag.includes(" · ") ? tag.split(" · ")[1] : tag;
       const inb = inbounds.find((i) => (i.remark || i.tag) === clean || i.tag === clean);
       if (inb) currentRefs.push({ panelId: inb.panelId, inboundId: inb.inboundId });
@@ -832,7 +832,7 @@ function UsersTab({
       name: u.name || u.email.split("-")[0],
       trafficGB: String(u.trafficGB || u.totalGB || 0),
       expiryDate: u.expiryTime > 0 ? new Date(u.expiryTime).toISOString().slice(0, 10) : "",
-      ipLimit: "0",
+      ipLimit: "",
       enable: u.enable,
       inbounds: currentRefs,
     });
@@ -917,8 +917,11 @@ function UsersTab({
       method: "PUT",
       body: JSON.stringify({
         ...editForm,
+        inbounds: JSON.stringify(editForm.inbounds) === JSON.stringify(editing.inboundRefs) ? undefined : editForm.inbounds,
+        expiryDate: editForm.expiryDate === (editing.expiryTime && editing.expiryTime > 0 ? new Date(editing.expiryTime).toISOString().slice(0, 10) : "") ? undefined : editForm.expiryDate,
+        enable: editForm.enable === editing.enable ? undefined : editForm.enable,
         trafficGB: Math.max(0, Math.floor(parseNumberInput(editForm.trafficGB) || 0)),
-        ipLimit: Math.max(0, Math.floor(parseNumberInput(editForm.ipLimit) || 0)),
+        ipLimit: permissions.allowIpLimit && editForm.ipLimit.trim() !== "" ? Math.max(0, Math.floor(parseNumberInput(editForm.ipLimit) || 0)) : undefined,
       }),
     });
     setBusy(false);
@@ -1551,12 +1554,12 @@ function UsersTab({
                 </div>
                 {permissions.allowIpLimit && (
                   <div className="space-y-2">
-                    <Label>تعداد دستگاه (۰ = بدون تغییر)</Label>
+                    <Label>تعداد دستگاه (خالی = بدون تغییر)</Label>
                     <NumberInput
                       value={editForm.ipLimit}
                       onValueChange={(v) => setEditForm({ ...editForm, ipLimit: v })}
                     />
-                    <p className="text-xs text-muted-foreground">در ویرایش، مقدار ۰ یعنی بدون محدودیت</p>
+                    <p className="text-xs text-muted-foreground">فقط برای تغییر پر کنید؛ ۰ یعنی بدون محدودیت</p>
                   </div>
                 )}
               </div>

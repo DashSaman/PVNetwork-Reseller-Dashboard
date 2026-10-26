@@ -32,7 +32,7 @@ export async function getAllPanels(): Promise<PanelConfig[]> {
 export async function getPanelById(panelId: string): Promise<PanelConfig | null> {
   if (!panelId) return getPrimaryPanel();
   const p = await db.panelConfig.findUnique({ where: { id: panelId } });
-  return p || getPrimaryPanel();
+  return p;
 }
 
 /** اتصال به یک پنل مشخص (یا پنل اصلی اگر panelId خالی باشد) */
@@ -43,6 +43,7 @@ export async function getPanelConnection(
   if (!config) {
     return { ok: false, msg: "اتصال پنل تنظیم نشده است. ابتدا از بخش تنظیمات، پنل ثنایی را متصل کنید." };
   }
+  if (!config.active) return { ok: false, msg: "پنل مقصد غیرفعال است" };
   const base = normalize(config.baseUrl);
   let nodePeers: Awaited<ReturnType<typeof getNodePeers>>;
   try { nodePeers = await getNodePeers(config.id); }

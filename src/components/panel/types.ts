@@ -37,6 +37,7 @@ export type ResellerUserRow = {
   email: string;
   name: string | null;
   inboundTags: string[];
+  inboundRefs?: InboundRefForm[];
   protocol: string;
   totalGB: number;
   usedGB: number | null;

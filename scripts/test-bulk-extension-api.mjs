@@ -14,7 +14,7 @@ writeFileSync(path.join(dir, 'test.db'), '');
 process.env.DATABASE_URL = `file:../.local-dev/${path.basename(dir)}/test.db`;
 process.env.APP_SECRET = 'bulk-extension-isolated-test-secret';
 const { PrismaClient } = await import('@prisma/client');
-const { hashPassword, signSession, encryptSecret } = await import('../src/lib/crypto.ts');
+const { hashPassword, signAccountSession, encryptSecret } = await import('../src/lib/crypto.ts');
 const GB = 1073741824, EXPIRY = 2000000000000;
 const mocks = [];
 let app, db, r, checks = 0;
@@ -36,11 +36,15 @@ async function mockPanel(name) {
     let body = {}; try { body = JSON.parse(raw || '{}'); } catch {}
     let obj = null, success = true, msg = '';
     if (req.url === '/panel/api/inbounds/list') obj = [{ id: 1, port: 443, protocol: 'vless', tag: name, settings: JSON.stringify({ clients: [...clients.values()] }), clientStats: [...clients.values()].map(c => ({ email: c.email, up: GB, down: 2 * GB, total: c.totalGB, expiryTime: c.expiryTime, enable: c.enable })) }];
-    else if (req.url.startsWith('/panel/api/clients/update/')) {
+    else if (req.url.startsWith('/panel/api/clients/get/')) {
+      const c = clients.get(decodeURIComponent(req.url.split('/').at(-1)));
+      if (c) obj = { client: { ...c, uuid: c.id }, inboundIds: [1], usedTraffic: 3 * GB };
+      else { success = false; msg = 'Obtain (record not found)'; }
+    } else if (req.url.startsWith('/panel/api/clients/update/')) {
       const email = decodeURIComponent(req.url.split('/').at(-1));
       if (mock.beforeUpdate) await mock.beforeUpdate(email);
       if (mock.failUpdate) { success = false; msg = 'mock panel offline'; }
-      else { clients.set(email, { ...clients.get(email), ...body }); mock.writes++; }
+      else { const { uuid, ...patch } = body; clients.set(email, { ...clients.get(email), ...patch }); mock.writes++; }
     } else if (req.url === '/panel/api/clients/onlines') obj = [];
     else if (req.url === '/panel/api/clients/list') obj = [...clients.values()];
     else { success = false; msg = `unimplemented ${req.url}`; }
@@ -66,7 +70,7 @@ try {
   for (const ref of refs) await db.resellerInbound.create({ data: { resellerId: reseller.id, ...ref, inboundTag: 'mock', protocol: 'vless', port: 443 } });
   for (const email of ['u1', 'u2']) await db.resellerUser.create({ data: { resellerId: reseller.id, email, trafficGB: 10, subId: `sub-${email}`, panelId: pa.id, inboundIds: JSON.stringify(refs) } });
   await db.resellerUser.create({ data: { resellerId: outsider.id, email: 'outsider', trafficGB: 10, subId: 'sub-outsider', panelId: pa.id, inboundIds: JSON.stringify(refs) } });
-  const token = (role, uid, username) => 'rp_session=' + signSession({ role, uid, username, exp: Date.now() + 3600000 });
+  const token = (role, uid) => 'rp_session=' + signAccountSession(role, [admin, reseller, outsider].find(a => a.id === uid), 'dashboard', Date.now() + 3600000);
   const ac = token('ADMIN', admin.id, 'admin'), rc = token('RESELLER', reseller.id, reseller.username);
   const temp = net.createServer(); await new Promise(r => temp.listen(0, '127.0.0.1', r)); const port = temp.address().port; await new Promise(r => temp.close(r));
   const base = `http://127.0.0.1:${port}`;

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { publicStreamSettings } from "@/lib/public-stream";
 import { db } from "@/lib/db";
 import { verifyPassword, randomUuid } from "@/lib/crypto";
 import { BRIDGE_COOKIE, bridgeCookiePath, issueBridgeToken, getBridgeReseller, parseBody, xui } from "@/lib/bridge";
@@ -173,7 +174,7 @@ async function bridgeInboundList(reseller: ResellerWithInbounds) {
         down: inb.down,
         total: inb.total,
         settings: JSON.stringify({ clients }),
-        streamSettings: JSON.stringify(inb.stream || {}),
+        streamSettings: JSON.stringify(publicStreamSettings(inb.stream)),
         clientStats,
       });
     }
@@ -508,6 +509,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   const expiryTime = payload.expiryTime !== undefined ? Math.max(0, Number(payload.expiryTime) || 0) : undefined;
   const enable = payload.enable !== undefined ? !!payload.enable : undefined;
   const ipLimit = payload.limitIp !== undefined ? Math.max(0, Number(payload.limitIp) || 0) : undefined;
+  if (ipLimit !== undefined && (!reseller.allowIpLimit || !Number.isSafeInteger(ipLimit) || ipLimit > 10000)) return xui(false, "تغییر محدودیت دستگاه مجاز یا معتبر نیست");
   const newUuid = typeof payload.id === "string" && payload.id.trim() ? payload.id.trim() : undefined;
   const newSubId = typeof payload.subId === "string" && payload.subId.trim() ? payload.subId.trim() : undefined;
 

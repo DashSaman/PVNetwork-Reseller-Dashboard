@@ -2,7 +2,10 @@
 # اتصال دوباره پنل نمایندگی به 3x-ui — ابزار عملیاتی سرور
 # همه مقادیر از /opt/pvnet/CREDENTIALS.txt (خروجی install.sh) یا env خوانده می‌شود
 set -euo pipefail
-cd /opt/pvnet
+umask 077
+cd "${PVNET_DIRECTORY:-/opt/pvnet}"
+TASK_TMP="$(mktemp -d "${TMPDIR:-/tmp}/pvnet-connect.XXXXXXXX")"
+trap 'rm -rf -- "$TASK_TMP"' EXIT
 
 [ -f CREDENTIALS.txt ] || { echo "ERROR: CREDENTIALS.txt not found (run install.sh first)" >&2; exit 1; }
 [ -f .env ] || { echo "ERROR: .env not found" >&2; exit 1; }
@@ -21,20 +24,21 @@ echo "panel : $PANEL_URL"
 echo "3x-ui : host.docker.internal:$XUI_WEB_PORT$XUI_BASEPATH (user: $XUI_USER)"
 
 # ورود به پنل
-curl -s -c /tmp/pv-adm.txt -X POST http://127.0.0.1:3001/api/auth/login \
+export ADMIN_USERNAME ADMIN_PASSWORD XUI_USER XUI_PASS XUI_BASEPATH XUI_WEB_PORT PANEL_URL
+jq -n '{username:env.ADMIN_USERNAME,password:env.ADMIN_PASSWORD}' > "$TASK_TMP/login.json"
+curl -s -c "$TASK_TMP/admin-cookie" -X POST http://127.0.0.1:3001/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d "{\"username\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}"
+  --data-binary @"$TASK_TMP/login.json"
 echo ""
 
 # ذخیره پیکربندی پنل 3x-ui
-jq -n --arg u "$XUI_USER" --arg p "$XUI_PASS" --arg b "$XUI_BASEPATH" --arg w "$XUI_WEB_PORT" --arg s "$PANEL_URL" \
-  '{baseUrl:("http://host.docker.internal:" + $w + $b), username:$u, password:$p, apiToken:"", subBase:$s, subPath:"sub"}' > /tmp/panelcfg.json
+jq -n '{baseUrl:("http://host.docker.internal:" + env.XUI_WEB_PORT + env.XUI_BASEPATH), username:env.XUI_USER, password:env.XUI_PASS, apiToken:"", subBase:env.PANEL_URL, subPath:"sub"}' > "$TASK_TMP/panelcfg.json"
 
-curl -s -b /tmp/pv-adm.txt -X PUT http://127.0.0.1:3001/api/admin/panel-config \
+curl -s -b "$TASK_TMP/admin-cookie" -X PUT http://127.0.0.1:3001/api/admin/panel-config \
   -H 'Content-Type: application/json' \
-  -d @/tmp/panelcfg.json
+  --data-binary @"$TASK_TMP/panelcfg.json"
 echo " <- saved"
 
 sleep 1
-curl -s -b /tmp/pv-adm.txt -X POST http://127.0.0.1:3001/api/admin/panel-test-saved
+curl -s -b "$TASK_TMP/admin-cookie" -X POST http://127.0.0.1:3001/api/admin/panel-test-saved
 echo " <- test"

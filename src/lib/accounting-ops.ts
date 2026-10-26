@@ -34,6 +34,9 @@ export function validateRequestedUserQuota(
   quotaState: QuotaState,
   requestedTrafficGB: number
 ): { ok: true } | { ok: false; msg: string } {
+  if (!Number.isSafeInteger(requestedTrafficGB) || requestedTrafficGB < 0 || requestedTrafficGB > 8388607) {
+    return { ok: false, msg: "سهمیه باید عدد صحیح معتبر و نامنفی بر حسب گیگابایت باشد" };
+  }
   if (quotaState.unlimited) return { ok: true }; // نمایندهٔ نامحدود: ۰ = نامحدود مجاز (رفتار قدیمی)
   if (!Number.isFinite(requestedTrafficGB) || requestedTrafficGB <= 0) {
     return { ok: false, msg: "پول ترافیک شما محدود است — سهمیهٔ کاربر باید عددی مثبت باشد (۰/نامحدود مجاز نیست)" };
@@ -436,7 +439,8 @@ export async function updateUserByJournal(
     const ownReserved = existingJournal?.status ? (await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { reservedGB: true } }))?.reservedGB ?? 0 : 0;
     // payload resume باید با هدف اصلی یکی باشد
     if (existingJournal) {
-      const meta = JSON.parse((await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { metadata: true } }))?.metadata || "{}") as { newTrafficGB?: number; bulkJobId?: string };
+      const meta = JSON.parse((await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { metadata: true } }))?.metadata || "{}") as { newTrafficGB?: number; bulkJobId?: string; kind?: string };
+      if (meta.kind === "SUBSCRIPTION_ROTATION") return { ok: false, status: 409, msg: "تغییر لینک اشتراک در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.bulkJobId) return { ok: false, status: 409, msg: "افزایش گروهی این کاربر در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB) {
         return { ok: false, status: 409, msg: "عملیات ویرایش در جریان با مقدار متفاوتی تعریف شده — ابتدا همان را تمام کنید" };

@@ -13,7 +13,7 @@ mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'test.db'), ''
 process.env.DATABASE_URL = `file:../.local-dev/${path.basename(dir)}/test.db`;
 process.env.APP_SECRET = 'isolated-node-sync-test-key';
 const { PrismaClient } = await import('@prisma/client');
-const { encryptSecret, hashPassword, signSession } = await import('../src/lib/crypto.ts');
+const { encryptSecret, hashPassword, signAccountSession } = await import('../src/lib/crypto.ts');
 let db, app, checks = 0; const servers = [];
 const GB = 1073741824;
 const check = (name, fn) => { fn(); checks++; console.log('PASS', name); };
@@ -65,8 +65,9 @@ try {
   const refs = [{ panelId: p.id, inboundId: 1 }];
   await db.resellerInbound.create({ data: { resellerId: owner.id, panelId: p.id, inboundId: 1, inboundTag: 'mock', protocol: 'vless', port: 443 } });
   for (const e of ['u1', 'u2']) await db.resellerUser.create({ data: { resellerId: owner.id, email: e, subId: 'sub-' + e, trafficGB: 10, panelId: p.id, inboundIds: JSON.stringify(refs) } });
-  const ac = 'rp_session=' + signSession({ role: 'ADMIN', uid: 'admin', username: 'admin', exp: Date.now() + 3600000 });
-  const rc = 'rp_session=' + signSession({ role: 'RESELLER', uid: owner.id, username: owner.username, exp: Date.now() + 3600000 });
+  const admin = await db.adminUser.create({ data: { username: 'admin', password: hashPassword('test-admin') } });
+  const ac = 'rp_session=' + signAccountSession('ADMIN', admin, 'dashboard', Date.now() + 3600000);
+  const rc = 'rp_session=' + signAccountSession('RESELLER', owner, 'dashboard', Date.now() + 3600000);
   const tmp = net.createServer(); await new Promise(r => tmp.listen(0, '127.0.0.1', r)); const port = tmp.address().port; await new Promise(r => tmp.close(r));
   const base = `http://127.0.0.1:${port}`, log = createWriteStream(path.join(dir, 'next.log'));
   app = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', String(port)], { cwd: root, env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' }, windowsHide: true }); app.stdout.pipe(log); app.stderr.pipe(log);

@@ -20,7 +20,7 @@ function run(cmd,args,env=process.env){return new Promise((resolve,reject)=>{con
 const check=(name,fn)=>{fn();checks++;console.log('PASS',name);};
 const hash=p=>{const salt='12345678901234567890123456789012';return salt+':'+crypto.scryptSync(p,salt,64).toString('hex');};
 function enc(plain,key=sourceSecret){const iv=crypto.randomBytes(12),c=crypto.createCipheriv('aes-256-gcm',crypto.createHash('sha256').update(key).digest(),iv);const v=Buffer.concat([c.update(plain),c.final()]);return[iv,c.getAuthTag(),v].map(x=>x.toString('base64')).join('.');}
-function cookie(role='ADMIN',uid='bootstrap',key=secret){const body=Buffer.from(JSON.stringify({role,uid,username:uid,exp:Date.now()+3600000})).toString('base64url');return'rp_session='+body+'.'+crypto.createHmac('sha256',key).update(body).digest('base64url');}
+function cookie(role='ADMIN',uid='bootstrap',key=secret){const c=new DatabaseSync(path.join(data,'custom.db'));const a=c.prepare('SELECT * FROM '+(role==='ADMIN'?'AdminUser':'Reseller')+' WHERE id=?').get(uid);c.close();const username=a?.username||uid;const ver=crypto.createHmac('sha256',key).update(JSON.stringify(['pvnet-account-session-v1',role,uid,username,a?.password||'',!!a?.totpEnabled,a?.totpEnabled?a.totpSecret:null])).digest('hex');const body=Buffer.from(JSON.stringify({role,uid,username,exp:Date.now()+3600000,aud:'dashboard',ver})).toString('base64url');return'rp_session='+body+'.'+crypto.createHmac('sha256',key).update(body).digest('base64url');}
 try{
  if(!container) { writeFileSync(template,''); await run(process.execPath,['node_modules/prisma/build/index.js','db','push','--skip-generate'],{...process.env,DATABASE_URL:`file:../.local-dev/${path.basename(dir)}/template.db`}); }
  copyFileSync(template,path.join(data,'custom.db'));

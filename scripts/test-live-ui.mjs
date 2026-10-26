@@ -10,7 +10,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const dir=path.join(root,'.local-dev',`live-test-${Date.now()}`);mkdirSync(dir,{recursive:true});writeFileSync(path.join(dir,'test.db'),'');
 process.env.DATABASE_URL=`file:../.local-dev/${path.basename(dir)}/test.db`;process.env.APP_SECRET='isolated-live-test-key';
 const {PrismaClient}=await import('@prisma/client');
-const {hashPassword,encryptSecret,signSession}=await import('../src/lib/crypto.ts');
+const {hashPassword,encryptSecret,signAccountSession}=await import('../src/lib/crypto.ts');
 const GB=1073741824,expiry=2000000000000;let db,app,mock,checks=0,reads=0,delay=2600,fail=false;
 const check=(name,fn)=>{fn();checks++;console.log('PASS',name);};
 async function run(cmd,args){await new Promise((resolve,reject)=>{const c=spawn(cmd,args,{cwd:root,env:process.env,windowsHide:true,stdio:'inherit'});c.on('error',reject);c.on('exit',n=>n===0?resolve():reject(Error('child exit '+n)));});}
@@ -32,7 +32,7 @@ try{
  const owner=await db.reseller.create({data:{username:'live_owner',password:hashPassword('LocalDemo123!'),trafficPoolGB:100}});
  await db.resellerInbound.create({data:{resellerId:owner.id,panelId:panel.id,inboundId:1,inboundTag:'mock',protocol:'vless',port:443}});
  for(const email of ['u1','u2'])await db.resellerUser.create({data:{resellerId:owner.id,email,trafficGB:10,subId:'sub-'+email,panelId:panel.id,inboundIds:JSON.stringify([{panelId:panel.id,inboundId:1}])}});
- const cookie=(role,u)=>'rp_session='+signSession({role,uid:u.id,username:u.username,exp:Date.now()+3600000});const ac=cookie('ADMIN',admin),rc=cookie('RESELLER',owner);
+ const cookie=(role,u)=>'rp_session='+signAccountSession(role,u,'dashboard',Date.now()+3600000);const ac=cookie('ADMIN',admin),rc=cookie('RESELLER',owner);
  const portServer=net.createServer();await new Promise(r=>portServer.listen(0,'127.0.0.1',r));const port=portServer.address().port;await new Promise(r=>portServer.close(r));const base=`http://127.0.0.1:${port}`;
  const log=createWriteStream(path.join(dir,'next.log'));app=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','--webpack','--hostname','127.0.0.1','--port',String(port)],{cwd:root,env:{...process.env,NEXT_TELEMETRY_DISABLED:'1'},windowsHide:true});app.stdout.pipe(log);app.stderr.pipe(log);
  for(let n=0;n<120;n++){try{if((await fetch(base)).ok)break;}catch{}await new Promise(r=>setTimeout(r,500));if(n===119)throw Error('dev startup failed');}
@@ -97,6 +97,14 @@ try{
    check('changed cookie role mounts actual representative session',()=>assert.ok(true));
    assert.ok(!(await page.locator('body').innerText()).includes('Delayed panel'));
    check('representative page hides upstream identity',()=>assert.ok(true));
+   let editPayload;
+   await page.route('**/api/reseller/users/u1',async route=>{editPayload=route.request().postDataJSON();await route.fulfill({status:200,contentType:'application/json',body:'{"ok":true}'});});
+   const userRow=page.getByRole('row').filter({hasText:'u1'});await userRow.locator('button[title="ویرایش"]:enabled').click({timeout:20000});
+   const editDialog=page.getByRole('dialog');await editDialog.getByText('تعداد دستگاه (خالی = بدون تغییر)',{exact:true}).waitFor();
+   const saved=page.waitForResponse(r=>r.url().endsWith('/api/reseller/users/u1')&&r.request().method()==='PUT');
+   await editDialog.getByRole('button',{name:'ذخیره',exact:true}).click();await saved;
+   check('unchanged browser edit omits device limit, expiry, status and memberships',()=>{for(const key of ['ipLimit','expiryDate','enable','inbounds'])assert.ok(!(key in editPayload),key+' unexpectedly sent');});
+   await page.unroute('**/api/reseller/users/u1');
    await page.getByRole('button',{name:'آمار و مصرف',exact:true}).click();
    const ownChart=page.getByLabel('نمودار حجم و فروش من',{exact:true});await ownChart.getByText('۱۷ GB',{exact:true}).first().waitFor({timeout:20000});
    check('representative sees its own sold-unused chart without other account data',()=>assert.ok(true));

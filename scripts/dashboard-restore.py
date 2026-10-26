@@ -40,7 +40,9 @@ def ro(path):
 
 def assert_fresh(database):
     with ro(database) as c:
-        if any(c.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in EMPTY):
+        if any(c.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in EMPTY if table != 'Setting'):
+            raise ValueError('Restore requires a fresh installation')
+        if any(not isinstance(key, str) or not re.fullmatch(r'sessionRevoked:[a-f0-9]{64}', key) for (key,) in c.execute('SELECT key FROM Setting')):
             raise ValueError('Restore requires a fresh installation')
 
 def inspect_database(database, template):

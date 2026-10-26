@@ -90,7 +90,7 @@ export function calculateAdminTrafficLedger(input: {
   const resellers = input.resellers.map((reseller) => {
     const users = groups.get(reseller.id) ?? [];
     const reservations = input.reservations
-      .filter((r: LedgerReservationInput & { resellerId: string }) => r.resellerId === reseller.id && (r.type === "CREATE" || r.type === "UPDATE") && ACTIVE_RESERVATION_STATUSES.includes(r.status))
+      .filter((r: LedgerReservationInput & { resellerId: string }) => r.resellerId === reseller.id && ["CREATE", "UPDATE", "RESET"].includes(r.type) && ACTIVE_RESERVATION_STATUSES.includes(r.status))
       .reduce((sum, row) => sum + (row.reservedGB || 0), 0);
     const soldGB = users.reduce((sum, user) => sum + Math.max(0, user.trafficGB || 0), 0);
     const unlimitedUsers = users.filter((user) => user.trafficGB <= 0).length;
@@ -201,7 +201,7 @@ export async function getAdminTrafficLedger(snapshot?: LedgerSnapshot, primaryPa
     db.reseller.findMany({ where: resellerId === undefined ? undefined : { id: resellerId }, select: { id: true, username: true, name: true, trafficPoolGB: true, consumedGB: true } }),
     db.resellerUser.findMany({ where: resellerScope, select: { resellerId: true, email: true, trafficGB: true, inboundIds: true, panelId: true } }),
     db.operationJournal.findMany({
-      where: { ...(resellerScope ?? {}), type: { in: ["CREATE", "UPDATE"] }, status: { in: ACTIVE_RESERVATION_STATUSES } },
+      where: { ...(resellerScope ?? {}), type: { in: ["CREATE", "UPDATE", "RESET"] }, status: { in: ACTIVE_RESERVATION_STATUSES } },
       select: { resellerId: true, reservedGB: true, type: true, status: true },
     }),
   ]);

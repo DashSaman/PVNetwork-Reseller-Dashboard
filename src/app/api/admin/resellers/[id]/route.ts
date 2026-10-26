@@ -4,7 +4,7 @@ import { requireAdmin } from "@/lib/session";
 import { hashPassword } from "@/lib/crypto";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 import { logActivity } from "@/lib/logger";
-import { refKey, type InboundRef } from "@/lib/reseller-helpers";
+import { refKey, withResellerLock, type InboundRef } from "@/lib/reseller-helpers";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -57,6 +57,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       inboundIds?: number[]; // سازگاری قدیمی
     };
 
+    return await withResellerLock(id, async () => {
     const current = await db.reseller.findUnique({ where: { id }, include: { inbounds: true } });
     if (!current) return NextResponse.json({ error: "نماینده پیدا نشد" }, { status: 404 });
 
@@ -80,7 +81,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     }
 
     const data: Record<string, unknown> = {
-      name: body.name?.trim() || null,
+      name: body.name === undefined ? current.name : body.name.trim() || null,
       active: body.active ?? current.active,
       multiLocation: body.multiLocation ?? current.multiLocation,
       allowIpLimit: body.allowIpLimit ?? current.allowIpLimit,
@@ -148,6 +149,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       resellerId: id,
     });
     return NextResponse.json({ ok: true });
+    });
   } catch (e) {
     console.error("update reseller error:", e);
     return NextResponse.json({ error: "خطا در ویرایش نماینده" }, { status: 500 });
@@ -159,6 +161,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
   if (!admin) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
   const { id } = await ctx.params;
 
+  return withResellerLock(id, async () => {
   const current = await db.reseller.findUnique({ where: { id } });
   if (!current) return NextResponse.json({ error: "نماینده پیدا نشد" }, { status: 404 });
 
@@ -180,4 +183,5 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     detail: `نماینده ${current.username} حذف شد`,
   });
   return NextResponse.json({ ok: true });
+  });
 }

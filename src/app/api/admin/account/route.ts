@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
-import { hashPassword, verifyPassword, signSession } from "@/lib/crypto";
+import { hashPassword, verifyPassword, signAccountSession } from "@/lib/crypto";
 import { setDashboardSessionCookie } from "@/lib/session";
 import { SESSION_COOKIE, sessionExpiry } from "@/lib/session";
 import { logActivity } from "@/lib/logger";
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = (await req.json()) as { currentPassword?: string; newUsername?: string; newPassword?: string };
-    const currentPassword = (body.currentPassword || "").trim();
+    const currentPassword = body.currentPassword || "";
     const newUsername = (body.newUsername || "").trim();
     const newPassword = body.newPassword || "";
 
@@ -70,14 +70,15 @@ export async function POST(req: NextRequest) {
       password = hashPassword(newPassword);
     }
 
-    await db.adminUser.update({ where: { id: admin.id }, data: { username, password } });
+    const saved = await db.adminUser.updateMany({ where: { id: admin.id, password: admin.password, username: admin.username, totpSecret: admin.totpSecret, totpEnabled: admin.totpEnabled }, data: { username, password } });
+    if (saved.count !== 1) return NextResponse.json({ error: "حساب هنگام ویرایش تغییر کرده؛ دوباره وارد شوید" }, { status: 409 });
     const detailBits: string[] = [];
     if (username !== admin.username) detailBits.push(`نام کاربری: ${admin.username} → ${username}`);
     if (newPassword) detailBits.push("رمز عبور تغییر کرد");
     await logActivity({ actorType: "ADMIN", actorName: username, action: "تغییر حساب مدیر", detail: detailBits.join(" | ") });
 
     // صدور نشست تازه (نام کاربری ممکن است عوض شده باشد)
-    const token = signSession({ role: "ADMIN", uid: admin.id, username, exp: sessionExpiry() });
+    const token = signAccountSession("ADMIN", { ...admin, username, password }, "dashboard", sessionExpiry());
     const res = NextResponse.json({ ok: true, username });
     setDashboardSessionCookie(res, token);
     return res;

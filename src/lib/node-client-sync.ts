@@ -105,6 +105,7 @@ export async function updateMasterClient(auth: PanelAuth, email: string, patch: 
     if (!current || patch.id && patch.id !== identity(current.client)) return failure("هویت حساب برای ویرایش مطابقت ندارد");
     const supplied = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
     const r = await request(auth, `/panel/api/clients/update/${encodeURIComponent(email)}`, { method: "POST", json: nodePayload(current.client, supplied) });
+    if (r.ok && (r.data as { nodePending?: boolean } | undefined)?.nodePending) return { ok: false, pending: true, msg: "همگام‌سازی لوکیشن‌ها هنوز کامل نشده است" };
     return r.ok ? verifyMasterClientUpdate(auth, email, patch, request) : r;
   } catch { return failure("خواندن و ذخیرهٔ کامل مشخصات حساب ممکن نشد"); }
 }

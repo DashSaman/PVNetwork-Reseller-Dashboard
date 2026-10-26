@@ -8,10 +8,15 @@ function dataDirectory() {
 }
 function runtimeSecret() {
   const file = path.join(dataDirectory(), '.app-secret');
-  if (!fs.existsSync(file)) return process.env.APP_SECRET || 'reseller-panel-local-secret-key-2024';
+  if (!fs.existsSync(file)) {
+    const secret = process.env.APP_SECRET;
+    if (secret && secret !== 'reseller-panel-local-secret-key-2024' && secret.length <= 4096 && !/[\r\n\0]/.test(secret)) return secret;
+    if (process.env.NODE_ENV === 'production') throw Error('A private APP_SECRET or recovery key is required in production');
+    return 'reseller-panel-local-secret-key-2024';
+  }
   if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw Error('Invalid recovery key file');
   const secret = fs.readFileSync(file, 'utf8');
-  if (!secret || secret.length > 4096 || /[\r\n\0]/.test(secret)) throw Error('Invalid recovery key');
+  if (!secret || secret.length > 4096 || /[\r\n\0]/.test(secret) || process.env.NODE_ENV === 'production' && secret === 'reseller-panel-local-secret-key-2024') throw Error('Invalid recovery key');
   return secret;
 }
 module.exports = { runtimeSecret, dataDirectory };

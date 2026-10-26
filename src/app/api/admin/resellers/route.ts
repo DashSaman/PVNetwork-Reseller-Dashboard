@@ -109,6 +109,7 @@ export async function POST(req: NextRequest) {
         multiLocation: !!body.multiLocation,
         trafficPoolGB,
         allowIpLimit: body.allowIpLimit ?? true,
+        allowWhitelabel: body.allowWhitelabel ?? true,
         maxUsers: 0,
         maxTrafficGB: 0,
         maxExpiryDays: 0,

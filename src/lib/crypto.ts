@@ -53,7 +53,26 @@ export type SessionPayload = {
   uid: string; // شناسه در دیتابیس
   username: string;
   exp: number; // timestamp میلی‌ثانیه
+  aud?: "dashboard" | "bridge";
+  ver?: string;
 };
+
+export type SessionAccount = {
+  id: string; username: string; password: string;
+  totpEnabled?: boolean; totpSecret?: string | null;
+};
+
+/** Bind authentication to the current credentials without exposing their hash. */
+export function accountSessionVersion(role: SessionPayload["role"], account: SessionAccount): string {
+  return crypto.createHmac("sha256", SECRET).update(JSON.stringify([
+    "pvnet-account-session-v1", role, account.id, account.username, account.password,
+    !!account.totpEnabled, account.totpEnabled ? account.totpSecret : null,
+  ])).digest("hex");
+}
+
+export function signAccountSession(role: SessionPayload["role"], account: SessionAccount, aud: "dashboard" | "bridge", exp: number): string {
+  return signSession({ role, uid: account.id, username: account.username, exp, aud, ver: accountSessionVersion(role, account) });
+}
 
 function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -71,8 +90,10 @@ export function signSession(payload: SessionPayload): string {
 }
 
 export function verifySession(token: string | undefined | null): SessionPayload | null {
-  if (!token) return null;
-  const [body, sig] = token.split(".");
+  if (!token || token.length > 4096) return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [body, sig] = parts;
   if (!body || !sig) return null;
   const expected = b64url(crypto.createHmac("sha256", SECRET).update(body).digest());
   const a = Buffer.from(sig);
@@ -80,7 +101,10 @@ export function verifySession(token: string | undefined | null): SessionPayload 
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   try {
     const payload = JSON.parse(b64urlDecode(body).toString("utf8")) as SessionPayload;
-    if (!payload.exp || payload.exp < Date.now()) return null;
+    if (!Number.isSafeInteger(payload.exp) || payload.exp < Date.now()
+      || !["ADMIN", "RESELLER"].includes(payload.role)
+      || typeof payload.uid !== "string" || !payload.uid || payload.uid.length > 128
+      || typeof payload.username !== "string" || !payload.username || payload.username.length > 128) return null;
     return payload;
   } catch {
     return null;

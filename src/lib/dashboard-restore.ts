@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { db } from "./db";
 import { dataDirectory } from "../../scripts/runtime-secret.cjs";
+import { isSessionRevocationKey } from "./auth-state";
 
 const exec = promisify(execFile);
 const LIMIT = 64 * 1024 * 1024, TTL = 15 * 60 * 1000;
@@ -14,7 +15,7 @@ const template = () => process.env.RESTORE_TEMPLATE || path.resolve("prisma-temp
 export type RestorePreview = { createdAt: string; sha256: string; counts: Record<string, number>; nativePanelsIgnored: number; encryptedFields: number; peerCount: number; privateRoute: boolean };
 
 export async function restoreAvailability() {
-  const counts = await Promise.all([db.reseller.count(), db.resellerUser.count(), db.resellerInbound.count(), db.panelConfig.count(), db.operationJournal.count(), db.setting.count()]);
+  const counts = await Promise.all([db.reseller.count(), db.resellerUser.count(), db.resellerInbound.count(), db.panelConfig.count(), db.operationJournal.count(), db.setting.findMany({ select: { key: true } }).then(rows => rows.filter(row => !isSessionRevocationKey(row.key)).length)]);
   const fresh = counts.every(n => n === 0);
   const enabled = process.env.DASHBOARD_RESTORE_ENABLED === "1"
     && path.resolve(/* turbopackIgnore: true */ process.env.DASHBOARD_RESTORE_DATA_DIR || "/app/data") === path.resolve(/* turbopackIgnore: true */ dataDirectory())

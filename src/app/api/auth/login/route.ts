@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { verifyPassword, signSession, decryptSecret } from "@/lib/crypto";
+import { verifyPassword, signAccountSession, decryptSecret, type SessionAccount } from "@/lib/crypto";
 import { SESSION_COOKIE, sessionExpiry, setDashboardSessionCookie } from "@/lib/session";
 import { verifyTotp } from "@/lib/totp";
 import { logActivity } from "@/lib/logger";
@@ -34,15 +34,19 @@ async function ensureAdmin() {
 
 export async function POST(req: NextRequest) {
   try {
-    await ensureAdmin();
-    const { username, password, totpCode } = (await req.json()) as {
+    const input = await req.json().catch(() => null);
+    if (!input || typeof input !== "object" || Array.isArray(input)) return NextResponse.json({ error: "بدنهٔ ورود نامعتبر است" }, { status: 400 });
+    const { username, password, totpCode } = input as {
       username?: string;
       password?: string;
       totpCode?: string;
     };
-    if (!username || !password) {
+    if (typeof username !== "string" || !username.trim() || username.length > 128
+      || typeof password !== "string" || !password || password.length > 4096
+      || totpCode !== undefined && (typeof totpCode !== "string" || totpCode.length > 32)) {
       return NextResponse.json({ error: "نام کاربری و رمز عبور الزامی است" }, { status: 400 });
     }
+    await ensureAdmin();
 
     // ---- ضد بشکن: مسدودسازی بر اساس نام کاربری و IP ----
     const ip = clientIp(req);
@@ -69,11 +73,11 @@ export async function POST(req: NextRequest) {
     }
 
     /** صدور نشست مشترک */
-    const issue = (role: "ADMIN" | "RESELLER", uid: string, uname: string, resellerId?: string) => {
-      const token = signSession({ role, uid, username: uname, exp: sessionExpiry() });
-      const res = NextResponse.json({ role, username: uname });
+    const issue = (role: "ADMIN" | "RESELLER", account: SessionAccount) => {
+      const token = signAccountSession(role, account, "dashboard", sessionExpiry());
+      const res = NextResponse.json({ role, username: account.username });
       setDashboardSessionCookie(res, token);
-      return { res, role, uid, uname, resellerId };
+      return { res };
     };
 
     /** گیت دومرحله‌ای — اگر فعال باشد و کد نباشد: need2fa */
@@ -89,6 +93,8 @@ export async function POST(req: NextRequest) {
       }
       const secret = totpSecret ? decryptSecret(totpSecret) : "";
       if (!secret || !verifyTotp(secret, totpCode)) {
+        recordFailure(unameKey, LIMITS.MAX_PER_USERNAME);
+        recordFailure(ipKey, LIMITS.MAX_PER_IP);
         void logActivity({
           ...logCtx,
           action: `${action} — کد دومرحله‌ای اشتباه`,
@@ -113,7 +119,7 @@ export async function POST(req: NextRequest) {
       if (gate) return gate;
       clearFailures(unameKey);
       clearFailures(ipKey);
-      const issued = issue("ADMIN", admin.id, admin.username);
+      const issued = issue("ADMIN", admin);
       await logActivity({ actorType: "ADMIN", actorName: admin.username, action: "ورود ادمین" });
       return issued.res;
     }
@@ -137,7 +143,7 @@ export async function POST(req: NextRequest) {
       if (gate) return gate;
       clearFailures(unameKey);
       clearFailures(ipKey);
-      const issued = issue("RESELLER", reseller.id, reseller.username, reseller.id);
+      const issued = issue("RESELLER", reseller);
       await logActivity({
         actorType: "RESELLER",
         actorName: reseller.username,

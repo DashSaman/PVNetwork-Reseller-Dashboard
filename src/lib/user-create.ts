@@ -12,6 +12,7 @@ import {
   refKey,
   type InboundRef,
   type ResellerWithInbounds,
+  getResellerWithAccess,
 } from "./reseller-helpers";
 
 /**
@@ -93,12 +94,16 @@ async function resumeCreateFromJournal(
   if (!panelResult.ok) return { ok: false, error: panelResult.msg || "هیچ پنلی در دسترس نیست", status: 502 };
   const uuid = meta.uuid;
   const journal = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
-  if (journal.status === "FAILED") {
-    const { getQuotaState } = await import("./accounting-ops");
-    const quota = await getQuotaState(reseller.id);
-    if (!quota.unlimited && meta.trafficGB > quota.remaining) return { ok: false, status: 403, error: "موجودی برای ادامهٔ ساخت کافی نیست" };
-    await db.operationJournal.update({ where: { id: journalId }, data: { status: "RUNNING", reservedGB: meta.trafficGB } });
-  }
+  const { getQuotaState, validateRequestedUserQuota } = await import("./accounting-ops");
+  const quota = await getQuotaState(reseller.id);
+  const valid = validateRequestedUserQuota(quota, meta.trafficGB);
+  if (!valid.ok) return { ok: false, status: 403, error: valid.msg };
+  const tracked = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: reseller.id, email: meta.email } } });
+  if (tracked && tracked.subId !== meta.subId) return { ok: false, status: 409, error: "هویت حساب با عملیات قبلی مطابقت ندارد" };
+  const funded = tracked ? meta.trafficGB : journal.status === "FAILED" ? 0 : journal.reservedGB;
+  const needed = Math.max(0, meta.trafficGB - funded);
+  if (!quota.unlimited && needed > quota.remaining) return { ok: false, status: 403, error: "موجودی برای ادامهٔ ساخت کافی نیست" };
+  if (!tracked && (journal.status === "FAILED" || journal.reservedGB < meta.trafficGB)) await db.operationJournal.update({ where: { id: journalId }, data: { status: "RUNNING", reservedGB: meta.trafficGB } });
   const byPanel = new Map<string, number[]>();
   for (const ref of meta.refs) {
     const arr = byPanel.get(ref.panelId) || [];
@@ -218,6 +223,13 @@ async function createResellerUserCoreInner(
   snapshot: AllPanelsResult | null,
   opts: { checkPool: boolean }
 ): Promise<CoreUserResult> {
+  const currentReseller = await getResellerWithAccess(reseller.id);
+  if (!currentReseller) return { ok: false, status: 403, error: "حساب نماینده فعال نیست" };
+  reseller = currentReseller;
+  const permission = await validateInboundSelection(reseller, params.refs);
+  if (!permission.ok) return { ok: false, status: 403, error: permission.msg };
+  if (!Number.isSafeInteger(params.expiryTime) || !Number.isSafeInteger(params.ipLimit) || params.ipLimit < 0 || params.ipLimit > 10000) return { ok: false, status: 400, error: "زمان یا محدودیت دستگاه نامعتبر است" };
+  if (!reseller.allowIpLimit && params.ipLimit > 0) return { ok: false, status: 403, error: "تعیین محدودیت دستگاه مجاز نیست" };
   // ---- بازیابی idempotent با requestId (قبل از هر محاسبهٔ جدید) ----
   if (params.requestId) {
     const key = `create-req:${reseller.id}:${params.requestId}`;
@@ -241,6 +253,8 @@ async function createResellerUserCoreInner(
         return { ok: false, error: "این شناسهٔ درخواست قبلاً با پارامترهای متفاوت استفاده شده — عملیات جدید نیاز به شناسهٔ جدید دارد", status: 409 };
       }
       if (j.status === "SUCCESS" && meta.done && (meta.email || j.email)) {
+        const existing = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: reseller.id, email: String(meta.email || j.email) } } });
+        if (!existing || existing.subId !== meta.subId) return { ok: false, status: 409, error: "این عملیات قبلی پایان یافته و حساب آن حذف یا تغییر کرده؛ برای ساخت جدید شناسهٔ درخواست جدید لازم است" };
         // عملیات قبلاً کامل شده — همان نتیجه را idempotent برگردان
         const subLink = await buildSubLink(meta.subId || "", reseller, meta.refs?.[0]?.panelId || "");
         return { ok: true, email: String(meta.email || j.email), subId: meta.subId || "", subLink };

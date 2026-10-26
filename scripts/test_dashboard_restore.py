@@ -58,6 +58,14 @@ class RestoreTests(unittest.TestCase):
         self.assertNotIn('source-secret', json.dumps(result))
         self.assertEqual((self.data / 'custom.db').read_bytes(), before)
         self.assertEqual((stage / 'restored/recovery.env').read_text().strip(), 'APP_SECRET=source-secret')
+    def test_only_well_formed_session_revocations_are_allowed_on_fresh_target(self):
+        database = self.data / 'custom.db'
+        with closing(sqlite3.connect(database)) as c, c:
+            c.execute('INSERT INTO Setting(id,key,value) VALUES(?,?,?)', ('logout', 'sessionRevoked:' + 'a' * 64, '9999999999999'))
+        restore.assert_fresh(database)
+        with closing(sqlite3.connect(database)) as c, c:
+            c.execute('INSERT INTO Setting(id,key,value) VALUES(?,?,?)', ('unknown', 'sessionRevoked:invalid', 'keep'))
+        with self.assertRaises(ValueError): restore.assert_fresh(database)
     def test_populated_destination_is_rejected_without_changes(self):
         stage, _ = self.stage(); self.queue(stage)
         with closing(sqlite3.connect(self.data / 'custom.db')) as c, c: c.execute("INSERT INTO Reseller(id,value) VALUES('real','keep')")

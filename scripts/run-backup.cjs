@@ -6,8 +6,9 @@ const { PrismaClient } = require('@prisma/client');
   try {
     const admin = await db.adminUser.findFirst();
     if (!admin) throw new Error('No administrator account exists');
-    const body = Buffer.from(JSON.stringify({ role: 'ADMIN', uid: admin.id, username: admin.username, exp: Date.now() + 600000 })).toString('base64url');
     const secret = require('./runtime-secret.cjs').runtimeSecret();
+    const ver = crypto.createHmac('sha256', secret).update(JSON.stringify(['pvnet-account-session-v1', 'ADMIN', admin.id, admin.username, admin.password, !!admin.totpEnabled, admin.totpEnabled ? admin.totpSecret : null])).digest('hex');
+    const body = Buffer.from(JSON.stringify({ role: 'ADMIN', uid: admin.id, username: admin.username, exp: Date.now() + 600000, aud: 'dashboard', ver })).toString('base64url');
     const signature = crypto.createHmac('sha256', secret).update(body).digest('base64url');
     const url = `http://127.0.0.1:${process.env.PORT || 3000}/api/admin/backups`;
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: `rp_session=${body}.${signature}` }, body: JSON.stringify({ kind: 'daily' }), signal: AbortSignal.timeout(360000) });
