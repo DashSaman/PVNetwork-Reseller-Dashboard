@@ -26,5 +26,27 @@ schema, native-panel configuration or permission boundary changes.
 - Desktop row-hover screenshots and mobile screenshots were inspected. No page
   overflow or client errors; static-only offline behavior remains intact.
 - TypeScript and ESLint for the changed components pass.
-- Production build/deployment acceptance is recorded below after execution. Tests
-  use synthetic SQLite data and loopback panel mocks, never real customer writes.
+- Tests use synthetic SQLite data and loopback panel mocks, never real customer
+  writes.
+
+## Production acceptance
+
+Runtime commit `8309e1cf06571874beef4b1acc75fbfc39640670` was pushed and deployed
+as `pv-reseller-dashboard:history-ui-20261101`, image
+`sha256:97f22173c873794405dae00f7faaa56f6d2ae1e69b01e48a49f4e63cbd6070c3`.
+The production build passes. The actual image passes all 47 API checks with
+`--network none`, synthetic data, no published ports and no production mount;
+its 21 client JavaScript chunks were checked for absence of the removed interface.
+
+Read-only acceptance verified all 57 live customers, both active reseller
+bootstraps (55 customers), the administrator's complete view, authorization
+boundaries and the fresh-install-only restore restriction. A consistent SQLite
+snapshot was taken before replacement. Every non-log table was identical across
+deployment: 57 users, 3 retained reseller rows, 33 inbound assignments, 153 journals
+and 60 settings were preserved. Existing activity log rows were retained.
+
+Unrelated container identities/start times, service PIDs/listeners and native
+inbound configuration matched before and after. The existing loopback binding
+`127.0.0.1:31080`, environment, encryption key, network and data mount were preserved.
+Backup and observation timers remain active. The previous dashboard container is
+retained for rollback; no native client mutation, restore or handover was executed.
