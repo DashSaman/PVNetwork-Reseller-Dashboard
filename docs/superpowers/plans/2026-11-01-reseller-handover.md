@@ -22,10 +22,10 @@ is unchanged. Next/Prisma/SQLite, existing React dialogs and tables.
 - [x] Add admin users API/tab and replace the misleading remove dialog with preview,
   explicit typed confirmation, retry/error state and the handover action. Verify
   actual desktop/mobile behavior using a disposable browser fixture.
-- [ ] Run relevant regression suites, TypeScript, ESLint and production build. Test
+- [x] Run relevant regression suites, TypeScript, ESLint and production build. Test
   the actual candidate image without networking, host ports or production mounts.
 - [x] Compare official native-panel capabilities and document current gaps and useful
   candidates, distinguishing installed-version observations from upstream features.
-- [ ] Push, back up and replace only this dashboard. Compare all live customer and
+- [x] Push, back up and replace only this dashboard. Compare all live customer and
   account rows and unrelated services/ports. Never execute the real handover.
   Record accepted revision, image, test results and backup in incident docs/memory.

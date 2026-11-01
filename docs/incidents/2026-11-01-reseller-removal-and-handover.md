@@ -49,9 +49,35 @@ resolves its canonical working path because the workspace now uses a C: to D:
 junction; this avoids a Next development manifest path failure unrelated to the
 deployed Linux panel. Browser screenshots were visually checked on both sizes.
 
-Candidate-image tests and production acceptance are recorded after completion.
-Production acceptance only reads the removal preview and account lists; it never
-confirms a real handover or changes customer/native data.
+## Candidate image and production acceptance
+
+Runtime commit `5847d507f045ee23eefed18be707a07609e7f199` was pushed to main and
+deployed as `pv-reseller-dashboard:handover-20261101`, image
+`sha256:b89ded42c10f772b18f2cda647d292dc43849c2e0a801f759e2444fcef19e60b`.
+The actual Linux image passed all 25 handover API checks, all 45 existing audit API
+checks and all 23 Python backup/restore/helper checks, without skips. The synthetic
+test containers had network disabled, no published ports and no live-data mount.
+Existing production dependency versions were retained.
+
+Production acceptance read the removal preview and the new account lists. It never
+confirmed a real handover or changed customer/native data. The administrator view
+returned all 57 tracked users with live usage, expiry and status. The admin and all
+three active reseller bootstrap APIs passed, and unauthorized global-user access
+remained denied. The real test reseller remains available for the user to hand over
+through the new dialog.
+
+The consistent pre-deployment snapshot and final database rows matched for every
+non-log table. Existing activity logs remained present. Other container identities
+and start times, service PIDs, listening ports and native inbound configuration
+matched the baseline. The original loopback binding, network, data mount, runtime
+secret and active daily-backup timer were preserved. Only the dashboard container
+was replaced; its exact predecessor remains retained for rollback.
+
+A final complete backup was generated and verified against all eight dashboard
+tables, including 57 users, three resellers, 33 permission mappings, settings,
+panel configuration and 151 journals. Its recovery key matched the current runtime
+key. Independent native-panel databases were not exported. Private host evidence,
+database snapshots, archive checksums and client identities are kept outside Git.
 
 The independent upstream feature comparison is in
 [the capability comparison](../3x-ui-capability-comparison-2026-11-01.fa.md).
