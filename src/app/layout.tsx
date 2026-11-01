@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { InstallPanel } from '@/components/panel/install-panel';
 
 export const metadata: Metadata = {
   title: "سامانه نمایندگی PvNetWork",
@@ -43,6 +44,7 @@ export default function RootLayout({
       <body className="antialiased bg-background text-foreground min-h-screen flex flex-col [font-family:Vazirmatn,system-ui,sans-serif]">
         {children}
         <Toaster />
+        <InstallPanel />
       </body>
     </html>
   );

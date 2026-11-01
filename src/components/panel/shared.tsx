@@ -101,7 +101,8 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
 /** تاریخ انقضا با برچسب وضعیت */
 export function expiryLabel(expiryTime: number | null): { text: string; tone: "ok" | "warn" | "danger" | "muted" } {
   if (expiryTime === null) return { text: "در حال دریافت", tone: "muted" };
-  if (!expiryTime || expiryTime <= 0) return { text: "نامحدود", tone: "muted" };
+  if (expiryTime < 0) return { text: `${faNum(Math.ceil(Math.abs(expiryTime) / 86400000))} روز از اولین اتصال`, tone: "ok" };
+  if (!expiryTime) return { text: "نامحدود", tone: "muted" };
   const days = Math.ceil((expiryTime - Date.now()) / 86400000);
   if (days < 0) return { text: `منقضی (${Math.abs(days)} روز پیش)`, tone: "danger" };
   if (days <= 3) return { text: `${days} روز مانده`, tone: "warn" };

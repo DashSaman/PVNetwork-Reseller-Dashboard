@@ -63,6 +63,23 @@ class BackupTests(unittest.TestCase):
         restored = sqlite3.connect(target / 'data/custom.db')
         self.assertEqual(restored.execute('select count(*) from ResellerUser').fetchone()[0], 2)
         restored.close()
+    def test_customer_groups_history_alerts_and_pending_batches_survive_backup(self):
+        settings = [
+            ('customerMeta:u1', json.dumps({'labels': ['shop', 'package-a']})),
+            ('customerHistory:u1', json.dumps({'startedAt': 1000, 'observedAt': 2000, 'lifetimeGB': 3, 'gaps': 0, 'days': [{'day': '2026-11-01', 'usedGB': 1}]})),
+            ('customerAlertPreferences:r1', json.dumps({'usagePercent': 85, 'expiryDays': 5})),
+            ('customerStatusBatch:r1:fixture', json.dumps({'enable': False, 'users': [{'id': 'u1', 'email': 'user'}]})),
+        ]
+        with sqlite3.connect(self.db) as conn:
+            conn.execute('CREATE TABLE Setting(key TEXT PRIMARY KEY, value TEXT)')
+            conn.executemany('INSERT INTO Setting VALUES(?,?)', settings)
+        conn.close()
+        result = self.make()
+        target = self.root / 'with-customer-settings'
+        backup.restore_archive(self.out / result['name'], target)
+        with sqlite3.connect(target / 'data/custom.db') as conn:
+            self.assertEqual(conn.execute('SELECT key,value FROM Setting ORDER BY key').fetchall(), sorted(settings))
+        conn.close()
     def test_restore_refuses_existing_destination_without_overwriting(self):
         result = self.make()
         target = self.root / 'existing'; target.mkdir(); marker = target / 'important'; marker.write_text('keep')

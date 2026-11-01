@@ -21,6 +21,7 @@ import { toast } from "@/hooks/use-toast";
 import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput, parseNumberInput } from "./shared";
 import { ThemeToggle } from "./theme";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
+import { CustomerToolsBar, CustomerRowTools, useCustomerMetadata } from "./customer-tools";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
@@ -734,6 +735,10 @@ function UsersTab({
   const [busy, setBusy] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
+  const tools = useCustomerMetadata('reseller', users);
+  const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
+  const [labelFilter, setLabelFilter] = useState('');
+  const [activityFilter, setActivityFilter] = useState('');
 
   // ---- مرتب‌سازی، صفحه‌بندی و خروجی CSV ----
   type SortKey = "email" | "traffic" | "expiry" | "enable";
@@ -757,7 +762,7 @@ function UsersTab({
     const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
     const lines = sorted.map((u) => {
       const pct = u.totalGB > 0 && u.usedGB !== null ? Math.round((u.usedGB / u.totalGB) * 100) : null;
-      const exp = u.expiryTime === null ? "در حال دریافت" : u.expiryTime > 0 ? new Date(u.expiryTime).toISOString().slice(0, 10) : "نامحدود";
+      const exp = u.expiryTime === null ? "در حال دریافت" : u.expiryTime > 0 ? new Date(u.expiryTime).toISOString().slice(0, 10) : u.expiryTime < 0 ? `${Math.ceil(-u.expiryTime / 86400000)} روز از اولین اتصال` : "نامحدود";
       return [
         esc(u.name || ""), esc(u.email), esc(u.inboundTags.join(" + ")),
         esc(u.usedGB === null ? "" : Math.round(u.usedGB * 100) / 100), esc(u.totalGB > 0 ? u.totalGB : "نامحدود"),
@@ -791,6 +796,8 @@ function UsersTab({
     return "20";
   });
   const [expiryDate, setExpiryDate] = useState("");
+  const [expiryMode, setExpiryMode] = useState<'from-now' | 'first-use'>('from-now');
+  const [firstUseDays, setFirstUseDays] = useState('30');
   const [ipLimit, setIpLimit] = useState(permissions.allowIpLimit ? "2" : "0");
   const [selectedInbounds, setSelectedInbounds] = useState<InboundRefForm[]>([]);
 
@@ -855,9 +862,13 @@ function UsersTab({
       toast({ title: "خطا", description: "پول ترافیک شما محدود است — سهمیه کاربر باید عددی مثبت باشد", variant: "destructive" });
       return;
     }
+    if (expiryMode === 'first-use' && (!Number.isInteger(parseNumberInput(firstUseDays)) || parseNumberInput(firstUseDays) <= 0 || parseNumberInput(firstUseDays) > 36500)) {
+      toast({ title: 'خطا', description: 'تعداد روز اعتبار را بین ۱ و ۳۶۵۰۰ وارد کنید', variant: 'destructive' });return;
+    }
+    const validity = { expiryMode, expiryDate: expiryMode === 'first-use' ? undefined : expiryDate, expiryDays: expiryMode === 'first-use' ? parseNumberInput(firstUseDays) : undefined };
     // The server includes this attempt's existing reservation when checking a retry.
     // ---- ساخت گروهی (تعداد > ۱) ----
-    const attemptPayload = JSON.stringify({ name, count: nCount, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds });
+    const attemptPayload = JSON.stringify({ name, count: nCount, trafficGB: nTraffic, ...validity, ipLimit: nIpLimit, inbounds: selectedInbounds });
     if (createAttempt.current?.payload !== attemptPayload) createAttempt.current = { payload: attemptPayload, requestId: crypto.randomUUID() };
     if (nCount > 1) {
       setBusy(true);
@@ -868,7 +879,7 @@ function UsersTab({
         failed: { name: string; error: string }[];
       }>("/api/reseller/users/bulk", {
         method: "POST",
-        body: JSON.stringify({ prefix: name, count: nCount, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds, requestId: createAttempt.current.requestId }),
+        body: JSON.stringify({ prefix: name, count: nCount, trafficGB: nTraffic, ...validity, ipLimit: nIpLimit, inbounds: selectedInbounds, requestId: createAttempt.current.requestId }),
       });
       setBusy(false);
       if (rb.ok && rb.data) {
@@ -886,7 +897,7 @@ function UsersTab({
       return;
     }
     setBusy(true);
-    const payload = JSON.stringify({ name, trafficGB: nTraffic, expiryDate, ipLimit: nIpLimit, inbounds: selectedInbounds });
+    const payload = JSON.stringify({ name, trafficGB: nTraffic, ...validity, ipLimit: nIpLimit, inbounds: selectedInbounds });
     const r = await api<{ ok: boolean; email: string; subLink: string | null }>("/api/reseller/users", {
       method: "POST",
       body: JSON.stringify({ ...JSON.parse(payload), requestId: createAttempt.current.requestId }),
@@ -1044,12 +1055,15 @@ function UsersTab({
     );
   }
 
-  const filtered = users.filter(
-    (u) =>
-      !search ||
-      u.email.toLowerCase().includes(search.toLowerCase()) ||
-      (u.name || "").toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = users.filter(u => {
+    const meta = tools.data.get(u.email);
+    const labels = meta?.labels || [];
+    const stamp = meta?.lastOnline;
+    const labelMatch = !labelFilter || (labelFilter === '__none' ? labels.length === 0 : labels.includes(labelFilter));
+    const activityMatch = !activityFilter || (activityFilter === 'never' ? stamp === 0 : stamp != null && stamp > 0 && stamp < Date.now() - Number(activityFilter) * 86400000 && !onlineSet.has(u.email));
+    const query = search.trim().toLowerCase();
+    return labelMatch && activityMatch && (!query || `${u.email} ${u.name || ''} ${labels.join(' ')}`.toLowerCase().includes(query));
+  });
 
   // مرتب‌سازی
   const sorted = [...filtered].sort((a, b) => {
@@ -1118,6 +1132,8 @@ function UsersTab({
         </div>
       </div>
 
+      <CustomerToolsBar users={users} visible={filtered} metadata={tools.data} selected={selectedCustomers} setSelected={setSelectedCustomers} labelFilter={labelFilter} setLabelFilter={setLabelFilter} activityFilter={activityFilter} setActivityFilter={setActivityFilter} reload={() => { void tools.reload();reload(); }} />
+      {tools.error && <p role="status" className="text-xs text-muted-foreground">{tools.error}</p>}
       {panelError && (
         <p role="status" className={`text-sm border rounded-md px-3 py-2 ${livePending ? 'text-muted-foreground' : 'tone-danger'}`}>{panelError}</p>
       )}
@@ -1143,6 +1159,7 @@ function UsersTab({
                         کاربر {renderSortIcon("email")}
                       </button>
                     </TableHead>
+                    <TableHead>پیگیری و گروه</TableHead>
                     <TableHead>لوکیشن‌ها</TableHead>
                     <TableHead>
                       <button type="button" className="font-semibold inline-flex items-center" onClick={() => toggleSort("traffic")}>
@@ -1195,6 +1212,7 @@ function UsersTab({
                           </div>
                         </div>
                       </TableCell>
+                      <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} online={onlineSet.has(u.email)} checked={selectedCustomers.has(u.email)} onCheck={() => setSelectedCustomers(previous => { const next = new Set(previous);if (next.has(u.email)) next.delete(u.email);else if (next.size < 50) next.add(u.email);return next; })} /></TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1 max-w-40">
                           {u.inboundTags.slice(0, 3).map((t, idx) => (
@@ -1351,9 +1369,10 @@ function UsersTab({
               )}
             </div>
             <div className="space-y-2">
-              <Label>تاریخ انقضا</Label>
-              <Input dir="ltr" className="latin-input" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
-              <p className="text-xs text-muted-foreground">خالی = نامحدود</p>
+              <Label>شروع اعتبار</Label>
+              <select aria-label="شروع اعتبار کاربر" className="h-10 w-full rounded-lg border bg-background px-3 text-sm" value={expiryMode} onChange={e => setExpiryMode(e.target.value as 'from-now' | 'first-use')}><option value="from-now">از زمان ساخت / تاریخ ثابت</option><option value="first-use">از اولین اتصال</option></select>
+              {expiryMode === 'first-use' ? <label className="block text-sm">تعداد روز از اولین اتصال<Input aria-label="روز اعتبار از اولین اتصال" type="number" min={1} max={36500} value={firstUseDays} onChange={e => setFirstUseDays(e.target.value)} /></label> : <Input dir="ltr" className="latin-input" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} /> }
+              <p className="text-xs text-muted-foreground">{expiryMode === 'first-use' ? 'تا اولین اتصال، روزهای اعتبار کم نمی‌شود.' : 'تاریخ خالی = نامحدود'}</p>
               <div className="flex flex-wrap gap-1.5">
                 {[
                   { d: 30, l: "۱ ماه" },
@@ -1366,7 +1385,7 @@ function UsersTab({
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => setExpiryDate(new Date(Date.now() + p.d * 86400000).toISOString().slice(0, 10))}
+                    onClick={() => expiryMode === 'first-use' ? setFirstUseDays(String(p.d)) : setExpiryDate(new Date(Date.now() + p.d * 86400000).toISOString().slice(0, 10))}
                   >
                     {p.l}
                   </Button>

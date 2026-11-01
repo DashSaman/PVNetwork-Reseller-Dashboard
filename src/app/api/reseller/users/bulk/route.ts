@@ -1,3 +1,4 @@
+import { expiryFromInput } from "@/lib/customer-model";
 import { NextRequest, NextResponse } from "next/server";
 import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, withResellerLock, validateUsername, sanitizeName, type InboundRef } from "@/lib/reseller-helpers";
@@ -23,6 +24,7 @@ export async function POST(req: NextRequest) {
       trafficGB?: number;
       expiryDate?: string;
       expiryDays?: number;
+      expiryMode?: "from-now" | "first-use";
       ipLimit?: number;
       inbounds?: InboundRef[];
       inboundIds?: number[];
@@ -72,12 +74,9 @@ export async function POST(req: NextRequest) {
     }
 
     // ---- انقضا ----
-    let expiryTime = 0; // ۰ = نامحدود
-    if (body.expiryDate) {
-      expiryTime = new Date(body.expiryDate + "T23:59:59").getTime();
-    } else if (body.expiryDays && body.expiryDays > 0) {
-      expiryTime = Date.now() + body.expiryDays * 24 * 60 * 60 * 1000;
-    }
+    let expiryTime: number;
+    try { expiryTime = expiryFromInput(body); }
+    catch (e) { return NextResponse.json({ error: (e as Error).message }, { status: 400 }); }
 
     // ---- اسنپ‌شات یک‌باره اینباندهای زنده (برای کل دسته) ----
     const snapshot = await getAllPanelInboundsFresh();

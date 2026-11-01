@@ -246,7 +246,7 @@ async function createResellerUserCoreInner(
       const samePayload =
         meta.name === params.name &&
         meta.trafficGB === params.trafficGB &&
-        (params.expiryDays ? meta.expiryDays === params.expiryDays : meta.expiryTime === params.expiryTime) &&
+        (params.expiryDays ? meta.expiryDays === params.expiryDays && Math.sign(meta.expiryTime || 0) === Math.sign(params.expiryTime) : meta.expiryTime === params.expiryTime) &&
         meta.ipLimit === params.ipLimit &&
         JSON.stringify(meta.refs) === JSON.stringify(params.refs);
       if (!samePayload) {

@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "./crypto";
 import { logActivity } from "./logger";
+import { getResellerWithAccess, withResellerLock } from './reseller-helpers';
 
 /**
  * اعلان‌های تلگرام — هر نماینده بات خودش را دارد (وایت‌لیبل دوستانه)
@@ -129,6 +130,13 @@ export async function sendThresholdAlerts(
   reseller: ResellerTg & { brandName: string | null },
   alerts: ThresholdAlert[]
 ): Promise<void> {
+  return withResellerLock(reseller.id, async () => {
+    const current = await getResellerWithAccess(reseller.id);
+    if (current) await sendThresholdAlertsLocked(current, alerts);
+  });
+}
+
+async function sendThresholdAlertsLocked(reseller: ResellerTg & { brandName: string | null }, alerts: ThresholdAlert[]): Promise<void> {
   const tgReady = !!reseller.tgEnabled && !!reseller.tgBotToken && !!reseller.tgChatId;
   const mirzaReady = !!reseller.mirzaEnabled && !!reseller.mirzaBotToken && !!reseller.mirzaChatId;
   if ((!tgReady && !mirzaReady) || alerts.length === 0) return;
@@ -150,7 +158,7 @@ export async function sendThresholdAlerts(
   const expiry = pending.filter((a) => a.type === "expiry");
   const lines: string[] = [`⚠️ <b>${brand}</b> — هشدار مصرف`];
   if (usage.length) {
-    lines.push("<b>مصرف ۸۰٪ به بالا:</b>");
+    lines.push("<b>مصرف نزدیک سقف سهمیه:</b>");
     for (const u of usage) lines.push(`• ${escapeHtml(u.email)} — ${u.pct ?? 100}٪ مصرف شده`);
   }
   if (expiry.length) {

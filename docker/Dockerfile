@@ -63,6 +63,7 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/prisma-template ./prisma-template
 COPY docker/entrypoint.sh /app/entrypoint.sh
 COPY scripts/panel-backup.py scripts/run-backup.cjs scripts/configure-node-sync.cjs /app/scripts/
+COPY scripts/run-customer-observations.cjs /app/scripts/
 COPY scripts/dashboard-restore.py scripts/restore-crypto.cjs scripts/runtime-secret.cjs /app/scripts/
 ENV DASHBOARD_RESTORE_ENABLED=1
 ENV DASHBOARD_RESTORE_DATA_DIR=/app/data

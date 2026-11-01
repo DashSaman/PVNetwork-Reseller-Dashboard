@@ -441,6 +441,7 @@ export async function updateUserByJournal(
     if (existingJournal) {
       const meta = JSON.parse((await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { metadata: true } }))?.metadata || "{}") as { newTrafficGB?: number; bulkJobId?: string; kind?: string };
       if (meta.kind === "SUBSCRIPTION_ROTATION") return { ok: false, status: 409, msg: "تغییر لینک اشتراک در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
+      if (meta.kind === "CUSTOMER_STATUS") return { ok: false, status: 409, msg: "تغییر گروهی وضعیت در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.bulkJobId) return { ok: false, status: 409, msg: "افزایش گروهی این کاربر در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB) {
         return { ok: false, status: 409, msg: "عملیات ویرایش در جریان با مقدار متفاوتی تعریف شده — ابتدا همان را تمام کنید" };

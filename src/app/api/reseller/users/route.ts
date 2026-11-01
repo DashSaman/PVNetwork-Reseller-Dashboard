@@ -1,3 +1,4 @@
+import { expiryFromInput } from "@/lib/customer-model";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
@@ -7,6 +8,7 @@ import { getQuotaState } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { sendThresholdAlerts, type ThresholdAlert } from "@/lib/telegram";
 import { PUBLIC_SERVICE_ERROR, publicLocationLabel } from "@/lib/reseller-presentation";
+import { loadAlertPreferences } from '@/lib/customer-observations';
 
 /** لیست کاربران نماینده از روی همه پنل‌ها */
 export async function GET() {
@@ -141,14 +143,15 @@ export async function GET() {
 
   // ---- هشدارها: مصرف ≥ ۸۰٪ و انقضای نزدیک (≤ ۳ روز) ----
   const alerts: { email: string; type: "usage" | "expiry"; pct?: number; days?: number }[] = [];
+  const thresholds = await loadAlertPreferences(reseller.id);
   for (const row of rows) {
     if (row.totalGB > 0) {
       const pct = Math.round((row.usedGB / row.totalGB) * 100);
-      if (pct >= 80) alerts.push({ email: row.email, type: "usage", pct });
+      if (pct >= thresholds.usagePercent) alerts.push({ email: row.email, type: "usage", pct });
     }
     if (row.expiryTime > 0) {
       const days = Math.ceil((row.expiryTime - Date.now()) / 86400000);
-      if (days >= 0 && days <= 3) alerts.push({ email: row.email, type: "expiry", days });
+      if (days >= 0 && days <= thresholds.expiryDays) alerts.push({ email: row.email, type: "expiry", days });
     }
   }
   // اعلان تلگرام — ناهمزمان و بدون بلاک کردن پاسخ (نرخ محدود داخل تابع)
@@ -181,6 +184,7 @@ export async function POST(req: NextRequest) {
       trafficGB?: number;
       expiryDate?: string;
       expiryDays?: number;
+      expiryMode?: "from-now" | "first-use";
       ipLimit?: number;
       inbounds?: InboundRef[]; // فرمت جدید {panelId, inboundId}
       inboundIds?: number[]; // سازگاری قدیمی (پنل اصلی)
@@ -198,12 +202,9 @@ export async function POST(req: NextRequest) {
       .map((r) => ({ panelId: r.panelId || primaryPanelId, inboundId: Number(r.inboundId) }))
       .filter((r) => Number.isFinite(r.inboundId));
 
-    let expiryTime = 0; // ۰ = نامحدود
-    if (body.expiryDate) {
-      expiryTime = new Date(body.expiryDate + "T23:59:59").getTime();
-    } else if (body.expiryDays && body.expiryDays > 0) {
-      expiryTime = Date.now() + body.expiryDays * 24 * 60 * 60 * 1000;
-    }
+    let expiryTime: number;
+    try { expiryTime = expiryFromInput(body); }
+    catch (e) { return NextResponse.json({ error: (e as Error).message }, { status: 400 }); }
     const ipLimit = reseller.allowIpLimit ? Math.max(0, Number(body.ipLimit) || 0) : 0;
     const trafficGB = Math.max(0, Number(body.trafficGB) || 0);
 

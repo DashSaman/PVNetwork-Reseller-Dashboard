@@ -193,7 +193,8 @@ async function panelRequest<T>(
     const json = (await res.json()) as { success?: boolean; msg?: string; obj?: T } | null;
     if (!json) return { ok: false, msg: `پاسخ نامعتبر از پنل (HTTP ${res.status})` };
     if (json.success === true) {
-      if (method !== "GET" && /^\/panel\/api\/(clients\/|inbounds\/(add|update|del))/.test(path)) clearDisplayCache(sharedDisplayCache());
+      const readOnlyClientPost = /^\/panel\/api\/clients\/(?:onlines|lastOnline|ips\/[^/]+)$/.test(path);
+      if (method !== "GET" && !readOnlyClientPost && /^\/panel\/api\/(clients\/|inbounds\/(add|update|del))/.test(path)) clearDisplayCache(sharedDisplayCache());
       return { ok: true, data: json.obj as T };
     }
     return { ok: false, msg: json.msg || "عملیات در پنل ناموفق بود" };
@@ -310,6 +311,14 @@ export async function getOnlineEmails(auth: PanelAuth): Promise<PanelApiResult<s
   if (!r.ok) return r;
   const list = Array.isArray(r.data) ? r.data.filter((x): x is string => typeof x === "string") : [];
   return { ok: true, data: list };
+}
+
+/** Read-only POST: native last-seen map; never forwards request-controlled fields. */
+export async function getLastOnline(auth: PanelAuth): Promise<PanelApiResult<Record<string, number>>> {
+  const result = await panelRequest<Record<string, number>>(auth, '/panel/api/clients/lastOnline', { method: 'POST', json: {}, timeoutMs: 8000 });
+  if (!result.ok) return result;
+  if (!result.data || typeof result.data !== 'object' || Array.isArray(result.data)) return { ok: false, msg: 'Last-online data unavailable' };
+  return result;
 }
 
 /** IPهای ثبت‌شده یک کلاینت — مسیر جدید (online-stats) */
