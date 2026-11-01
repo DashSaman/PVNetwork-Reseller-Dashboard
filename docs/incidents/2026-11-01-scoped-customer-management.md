@@ -75,3 +75,11 @@ without skips. The backup regression initially exposed its own unclosed SQLite
 fixture handle on Windows; explicit connection closing fixed cleanup and the whole
 suite passed. One older fixture initially stopped at the local CLI's interactive
 notice; rerun with the established unattended CI environment passed all34checks.
+
+The real first collection observed55/57 accounts and safely skipped2 because they
+have protected pre-existing unfinished journals. These are not new customer writes
+or lost traffic. Do not replay/release those old operations to satisfy a graph
+count. The collector reports its partial result with exit2; the dashboard-owned
+systemd unit recognizes that code as a completed partial run, retains the journal
+counts and runs again on schedule. It must not mark unknown usage as zero. Actual
+operation identifiers and account mappings remain in private evidence only.

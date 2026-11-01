@@ -12,6 +12,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+SuccessExitStatus=2
 ExecStart=$DOCKER_BIN exec $CONTAINER_NAME node /app/scripts/run-customer-observations.cjs
 User=root
 UMask=0077
