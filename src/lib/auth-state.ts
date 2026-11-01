@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "./db";
 import { accountSessionVersion, verifySession, type SessionPayload, type SessionAccount } from "./crypto";
+import { isAdminManagedReseller } from "./reseller-ownership";
 
 export const SESSION_REVOCATION_PREFIX = "sessionRevoked:";
 export const isSessionRevocationKey = (key: string) => /^sessionRevoked:[a-f0-9]{64}$/.test(key);
@@ -19,6 +20,7 @@ export async function validateAccountToken(token: string | undefined, audience: 
     ? await db.adminUser.findUnique({ where: { id: payload.uid } })
     : await db.reseller.findUnique({ where: { id: payload.uid } });
   if (!account || "active" in account && !account.active || !matchesAccountSession(payload, account, audience)) return null;
+  if (payload.role === "RESELLER" && await isAdminManagedReseller(account.id)) return null;
   if (audience === "bridge" && (payload.role !== "RESELLER" || !("mirzaEnabled" in account) || !account.mirzaEnabled)) return null;
   if (await db.setting.findUnique({ where: { key: revokedKey(token!) }, select: { key: true } })) return null;
   return payload;

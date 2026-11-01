@@ -5,6 +5,7 @@ import { hashPassword } from "@/lib/crypto";
 import { getAllPanelInbounds } from "@/lib/panel-manager";
 import { logActivity } from "@/lib/logger";
 import { refKey, withResellerLock, type InboundRef } from "@/lib/reseller-helpers";
+import { handoverToken, isAdminManagedReseller } from "@/lib/reseller-ownership";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -14,7 +15,10 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const r = await db.reseller.findUnique({ where: { id }, include: { inbounds: true, users: true } });
   if (!r) return NextResponse.json({ error: "نماینده پیدا نشد" }, { status: 404 });
+  if (await isAdminManagedReseller(id)) return NextResponse.json({ error: "این نماینده به مدیریت ادمین منتقل شده است" }, { status: 409 });
+  const activeOperations = await db.operationJournal.count({ where: { resellerId: id, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } } });
   return NextResponse.json({
+    handover: { token: handoverToken(id, r.username, r.users), activeOperations, userCount: r.users.length },
     reseller: {
       id: r.id,
       username: r.username,
@@ -60,6 +64,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     return await withResellerLock(id, async () => {
     const current = await db.reseller.findUnique({ where: { id }, include: { inbounds: true } });
     if (!current) return NextResponse.json({ error: "نماینده پیدا نشد" }, { status: 404 });
+    if (await isAdminManagedReseller(id)) return NextResponse.json({ error: "این نماینده به مدیریت ادمین منتقل شده و قابل فعال‌سازی نیست" }, { status: 409 });
 
     // اگر پول کوچک‌تر از تعهدات قطعی (تخصیص + رزروهای فعال + مصرف) شود، اجازه داده نمی‌شود
     if (body.trafficPoolGB !== undefined) {
@@ -164,13 +169,14 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
   return withResellerLock(id, async () => {
   const current = await db.reseller.findUnique({ where: { id } });
   if (!current) return NextResponse.json({ error: "نماینده پیدا نشد" }, { status: 404 });
+  if (await isAdminManagedReseller(id)) return NextResponse.json({ error: "سابقهٔ کاربران منتقل‌شده به ادمین باید حفظ شود" }, { status: 409 });
 
   // حذف ناامن ممنوع: کاربران tracked یا عملیات فعال یعنی کلاینت‌های ریموتِ متعلق به این نماینده زنده‌اند
   const userCount = await db.resellerUser.count({ where: { resellerId: id } });
   const activeOps = await db.operationJournal.count({ where: { resellerId: id, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } } });
   if (userCount > 0 || activeOps > 0) {
     return NextResponse.json(
-      { error: `این نماینده ${userCount} کاربر فعال و ${activeOps} عملیات در جریان دارد — ابتدا کاربران را مدیریت کنید و سپس حذف را تکرار کنید (حذف رکورد محلی، کلاینت‌های VPN ریموت را زنده نگه می‌دارد)` },
+      { error: `این نماینده ${userCount} کاربر و ${activeOps} عملیات ناتمام دارد؛ از گزینهٔ انتقال کاربران به مدیریت ادمین استفاده کنید` },
       { status: 409 }
     );
   }

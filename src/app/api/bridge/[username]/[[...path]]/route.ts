@@ -112,7 +112,7 @@ async function bridgeLogin(req: NextRequest, username: string) {
   }
 
   const row = await db.reseller.findUnique({ where: { username: user } });
-  if (!row || !row.active || !verifyPassword(password, row.password)) {
+  if (!row || !row.active || await (await import("@/lib/reseller-ownership")).isAdminManagedReseller(row.id) || !verifyPassword(password, row.password)) {
     recordFailure(unameKey, LIMITS.MAX_PER_USERNAME);
     void logActivity({ actorType: "RESELLER", actorName: user, action: "ورود ناموفق ربات به پل 3x-ui" });
     return xui(false, "نام کاربری یا رمز عبور اشتباه است");

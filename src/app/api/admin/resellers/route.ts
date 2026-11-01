@@ -4,12 +4,15 @@ import { requireAdmin } from "@/lib/session";
 import { hashPassword } from "@/lib/crypto";
 import { logActivity } from "@/lib/logger";
 import { validateUsername, type InboundRef } from "@/lib/reseller-helpers";
+import { adminManagedResellers } from "@/lib/reseller-ownership";
 
 export async function GET() {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
 
+  const transferred = await adminManagedResellers();
   const resellers = await db.reseller.findMany({
+    where: { id: { notIn: [...transferred.keys()] } },
     orderBy: { createdAt: "desc" },
     include: {
       inbounds: true,

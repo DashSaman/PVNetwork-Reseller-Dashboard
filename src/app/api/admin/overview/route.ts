@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
 import { getAdminTrafficLedger } from "@/lib/admin-traffic-ledger";
+import { adminManagedResellers } from "@/lib/reseller-ownership";
 
 /**
  * Admin overview — 100% LOCAL DB only، بدون هیچ تماس با 3x-ui.
@@ -10,12 +11,14 @@ import { getAdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 export async function GET() {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
+  const transferredIds = [...(await adminManagedResellers()).keys()];
+  const visible = { id: { notIn: transferredIds } };
 
   const [resellers, users, logs, activeResellers, trafficLedger] = await Promise.all([
-    db.reseller.count(),
+    db.reseller.count({ where: visible }),
     db.resellerUser.count(),
     db.activityLog.count(),
-    db.reseller.count({ where: { active: true } }),
+    db.reseller.count({ where: { ...visible, active: true } }),
     getAdminTrafficLedger(),
   ]);
 
@@ -42,10 +45,14 @@ export async function GET() {
 
   // تفکیک کاربران به تفکیک نماینده
   const resellersData = await db.reseller.findMany({
+    where: visible,
     select: { username: true, name: true, _count: { select: { users: true } } },
   });
-  const resellersBreakdown = resellersData
-    .map((r) => ({ name: r.name || r.username, users: r._count.users }))
+  const adminManagedUsers = transferredIds.length ? await db.resellerUser.count({ where: { resellerId: { in: transferredIds } } }) : 0;
+  const resellersBreakdown = [
+    ...resellersData.map((r) => ({ name: r.name || r.username, users: r._count.users })),
+    ...(adminManagedUsers ? [{ name: "تحت مدیریت ادمین", users: adminManagedUsers }] : []),
+  ]
     .sort((a, b) => b.users - a.users)
     .slice(0, 8);
 

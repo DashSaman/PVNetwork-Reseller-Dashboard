@@ -196,6 +196,7 @@ export function calculateAdminTrafficLedger(input: {
 /** Local-only mode is safe for the fast /overview endpoint; live metrics stay null. */
 export async function getAdminTrafficLedger(snapshot?: LedgerSnapshot, primaryPanelId = "", resellerId?: string): Promise<AdminTrafficLedger> {
   const [{ db }, { canonicalUserUsage }] = await Promise.all([import("./db"), import("./reseller-helpers")]);
+  const transferred = await (await import("./reseller-ownership")).adminManagedResellers();
   const resellerScope = resellerId === undefined ? undefined : { resellerId };
   const [resellers, users, reservations] = await Promise.all([
     db.reseller.findMany({ where: resellerId === undefined ? undefined : { id: resellerId }, select: { id: true, username: true, name: true, trafficPoolGB: true, consumedGB: true } }),
@@ -206,7 +207,7 @@ export async function getAdminTrafficLedger(snapshot?: LedgerSnapshot, primaryPa
     }),
   ]);
   return calculateAdminTrafficLedger({
-    resellers,
+    resellers: resellers.map(r => transferred.has(r.id) ? { ...r, name: `مدیریت ادمین (${transferred.get(r.id)?.sourceName || transferred.get(r.id)?.sourceUsername || r.username})` } : r),
     users,
     reservations,
     snapshot,

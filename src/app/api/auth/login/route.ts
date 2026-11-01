@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
       reseller = resellers.find((r) => r.username.toLowerCase() === unameLower) || null;
     }
     if (reseller && verifyPassword(password, reseller.password)) {
-      if (!reseller.active) {
+      if (!reseller.active || await (await import("@/lib/reseller-ownership")).isAdminManagedReseller(reseller.id)) {
         return NextResponse.json({ error: "حساب شما غیرفعال شده است. با مدیر تماس بگیرید." }, { status: 403 });
       }
       const gate = totpGate(!!reseller.totpEnabled, reseller.totpSecret, "ورود نماینده", {

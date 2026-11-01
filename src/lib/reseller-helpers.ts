@@ -25,6 +25,7 @@ export function canonicalUserUsage(
 
 import { db } from "@/lib/db";
 import type { Reseller, ResellerInbound } from "@prisma/client";
+import { isAdminManagedReseller } from "./reseller-ownership";
 
 export type ResellerWithInbounds = Reseller & { inbounds: ResellerInbound[] };
 
@@ -33,7 +34,7 @@ export type InboundRef = { panelId: string; inboundId: number };
 
 export async function getResellerWithAccess(uid: string): Promise<ResellerWithInbounds | null> {
   const r = await db.reseller.findUnique({ where: { id: uid }, include: { inbounds: true } });
-  return r && r.active ? r : null;
+  return r && r.active && !await isAdminManagedReseller(uid) ? r : null;
 }
 
 export function bytesToGB(bytes: number): number {

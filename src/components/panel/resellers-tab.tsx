@@ -18,7 +18,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { ResellerHandoverDialog } from "./reseller-handover-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput, NumberInput, parseNumberInput } from "./shared";
 import type { InboundInfo, ResellerInfo, InboundRefForm } from "./types";
@@ -183,18 +183,6 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
     } else {
       toast({ title: "خطا", description: r.error, variant: "destructive" });
     }
-  }
-
-  async function confirmDelete() {
-    if (!deleting) return;
-    const r = await api(`/api/admin/resellers/${deleting.id}`, { method: "DELETE" });
-    if (r.ok) {
-      toast({ title: "موفق", description: "نماینده حذف شد" });
-      void load();
-    } else {
-      toast({ title: "خطا", description: r.error, variant: "destructive" });
-    }
-    setDeleting(null);
   }
 
   async function toggleActive(r: ResellerInfo) {
@@ -389,7 +377,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                             <Button size="icon" variant="ghost" title={r.active ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleActive(r)}>
                               <KeyRound className={`h-4 w-4 ${r.active ? "text-[var(--brand)]" : "text-red-400"}`} />
                             </Button>
-                            <Button size="icon" variant="ghost" title="حذف" onClick={() => setDeleting(r)}>
+                            <Button size="icon" variant="ghost" title="حذف" aria-label={`حذف نماینده ${r.username}`} onClick={() => setDeleting(r)}>
                               <Trash2 className="h-4 w-4 text-red-400" />
                             </Button>
                           </div>
@@ -573,21 +561,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
       </Dialog>
 
       {/* تایید حذف */}
-      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>حذف نماینده {deleting?.username}؟</AlertDialogTitle>
-            <AlertDialogDescription>
-              با حذف نماینده، دسترسی او قطع می‌شود. کاربران او در پنل ثنایی باقی می‌مانند اما دیگر از این پنل قابل مدیریت نیستند.
-              این عمل قابل بازگشت نیست.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>انصراف</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-500 text-white">حذف کن</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleting && <ResellerHandoverDialog reseller={deleting} onClose={() => setDeleting(null)} onChanged={() => { void load(); }} />}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import { api, StatCard, faDate, gbLabel, formatUsageGB, faNum, PvLogo } from "./shared";
 import { ResellersTab } from "./resellers-tab";
+import { AdminUsersTab } from "./admin-users-tab";
 import { PanelSettingsTab, LogsTab } from "./settings-logs";
 import { ThemeToggle } from "./theme";
 import { BackupsTab } from "./backups-tab";
@@ -43,7 +44,7 @@ import {
   Legend,
 } from "recharts";
 
-type Tab = "overview" | "resellers" | "settings" | "logs" | "backups";
+type Tab = "overview" | "resellers" | "users" | "settings" | "logs" | "backups";
 
 type OverviewData = {
   stats: {
@@ -167,6 +168,7 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "overview", label: "داشبورد", icon: <LayoutDashboard className="h-4 w-4" /> },
     { id: "resellers", label: "نماینده‌ها", icon: <Users className="h-4 w-4" /> },
+    { id: "users", label: "کاربران", icon: <UserCheck className="h-4 w-4" /> },
     { id: "settings", label: "تنظیمات و پنل‌ها", icon: <Plug className="h-4 w-4" /> },
     { id: "logs", label: "گزارش‌ها", icon: <History className="h-4 w-4" /> },
     { id: "backups", label: "بکاپ", icon: <Download className="h-4 w-4" /> },
@@ -224,6 +226,7 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
       <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6">
         {tab === "overview" && <OverviewTab inbounds={inbounds} panelConnected={panelConnected} reloadInbounds={loadInbounds} />}
         {tab === "resellers" && <ResellersTab inbounds={inbounds} panelConnected={panelConnected} />}
+        {tab === "users" && <AdminUsersTab />}
         {tab === "settings" && <PanelSettingsTab />}
         {tab === "logs" && <LogsTab />}
         {tab === "backups" && <BackupsTab />}
