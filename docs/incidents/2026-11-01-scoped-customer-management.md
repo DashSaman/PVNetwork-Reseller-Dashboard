@@ -64,8 +64,49 @@ A dedicated portable-backup regression compares the restored values exactly.
 New-server restoration instructions remain fresh-install-only. Install this panel's
 observation timer after restore; it never migrates native infrastructure.
 
-Deployment and final acceptance evidence will be recorded after the immutable
-candidate passes Linux tests and the production data/service comparison.
+## Deployment and final acceptance
+
+Runtime commit `4e60b216c5bba75b41b4bfc2c365d0eabf1c77c4` is pushed and deployed as
+`pv-reseller-dashboard:customers-20261101`, image
+`sha256:9f874f712fe7eb8933897a26c211b63df1e9d3bacab4d4499c8a859a5055230b`.
+Accepted container:
+`68dd72558ad610766f5f050d49d7d5652f15ca9c5ea6a9c965ba31cf9e18777f`.
+Immediate retained rollback: `pv-reseller-dashboard-rollback-customers-20261101`.
+Earlier rollbacks and cached dependency/runtime bases remain intact. Host script
+follow-up `169dbbec10022d50e608ab6e90230063e65d1bdc` handles partial collection exit2;
+it did not rebuild/restart the accepted runtime container.
+
+Actual Linux image passed47 new API+25 handover+45 audit checks and all24Python
+tests with no skips. Containers used network none, published no ports and mounted
+only synthetic fixture scripts, never production data. Production read-only
+acceptance checked admin/global users, both active resellers (55users), inactive
+owner rejection, metadata isolation, stale credentials/audience denial, static PWA
+assets and fresh-target restore protection. Final live read returned finite
+traffic/expiry/status for all57 tracked accounts. No real test user/status change,
+native mutation, transfer or restore was performed.
+
+All non-log dashboard rows matched exactly across deployment. Existing settings
+were retained; subsequent observation changed only its own history/lease settings.
+Customer/representative rows, accounting,33inbound mappings and151existing journals
+were compared unchanged again after the job. Other running container IDs/start
+times, unrelated service PIDs/listeners and native inbound configuration matched.
+Original runtime key/environment, data mount/network and127.0.0.1:31080 binding were
+preserved. Both the existing backup timer and new half-hour observation timer are
+active; no listening port was added. Build receipt had1.78GB free; no global Docker
+prune or unrelated cleanup was performed.
+
+Private evidence: `/opt/pv-reseller/backup/customers-20261101/` contains immutable
+build/test receipts and full logs, consistent pre-deploy DB, private runtime env,
+before/after host snapshots, deployment and schedule acceptance. Do not publish
+those private database/credential/identifier files.
+
+Complete final archive:
+`/opt/pv-reseller/data/backups/pvnet-20261101T144046Z-967ac40c5117.zip`,83484bytes,
+SHA256 `c498b17d158f27dca309b18a8a0bf46a76f07e21811f19378a209f93a2852066`.
+All8 archived tables were compared with live data, including57users,3retained owner
+rows,33inbound maps,151journals and59settings; recovery key verified. Existing logs
+were preserved (380archived rows; creation appends a later log). Native panel DBs
+were not exported, consistent with the user's narrowed backup scope.
 
 Local verified results:44 unit checks;54 new API/browser checks (47 API+7browser),
 25 handover API,45 existing audit API,34 bulk/backup API. Full source ESLint,

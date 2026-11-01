@@ -33,6 +33,6 @@ dashboard-owned observation job. No schema/dependency change.
   installation. Browser-check selection, filters, partial errors and narrow layouts.
 - [x] Integrate configurable existing threshold delivery and dashboard-owned timer;
   test isolated scheduler runs without real recipients or native mutation.
-- [ ] Run fresh regression suites, lint/types/build and immutable Linux-image tests.
+- [x] Run fresh regression suites, lint/types/build and immutable Linux-image tests.
   Commit/push, deploy with dashboard-only rollback, compare protected data and
   unrelated host state, create/verify full backup, update repo incident and memory.
