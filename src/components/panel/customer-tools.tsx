@@ -4,11 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { History, Tags, Bell } from 'lucide-react';
-import { api, faDate, faNum, Spinner } from './shared';
+import { Tags, Bell } from 'lucide-react';
+import { api, faDate, faNum } from './shared';
 import { toast } from '@/hooks/use-toast';
-import type { UsageHistory } from '@/lib/customer-model';
 
 type Metadata = { email: string; labels: string[]; lastOnline: number | null };
 type Customer = { email: string; name?: string | null; usedGB?: number | null };
@@ -27,33 +25,14 @@ export function useCustomerMetadata(scope: 'admin' | 'reseller', users: Customer
   return { data, reload, error };
 }
 
-export function CustomerRowTools({ user, meta, checked, onCheck, adminId, online }: { user: Customer; meta?: Metadata; checked?: boolean; onCheck?: () => void; adminId?: string; online?: boolean }) {
-  const [historyOpen, setHistoryOpen] = useState(false);
+export function CustomerRowTools({ user, meta, checked, onCheck, online }: { user: Customer; meta?: Metadata; checked?: boolean; onCheck?: () => void; online?: boolean }) {
   return <div className="space-y-1.5 min-w-36 max-w-56">
     <div className="flex items-center gap-2">
       {onCheck && <input type="checkbox" aria-label={`انتخاب ${user.email}`} checked={checked || false} onChange={onCheck} className="h-4 w-4 accent-teal-500" />}
       <span className="text-[11px] text-muted-foreground">{online ? 'اکنون آنلاین' : meta?.lastOnline == null ? 'آخرین اتصال: نامشخص' : meta.lastOnline === 0 ? 'اتصالی ثبت نشده' : `آخرین اتصال: ${faDate(meta.lastOnline)}`}</span>
     </div>
     <div className="flex flex-wrap gap-1">{meta?.labels.map(label => <Badge variant="outline" className="text-[10px] border-violet-500/30 text-violet-600 dark:text-violet-300" key={label}>{label}</Badge>)}</div>
-    <Button size="sm" variant="ghost" className="h-6 px-1 text-[11px]" onClick={() => setHistoryOpen(true)} aria-label={`سابقه ${user.email}`}><History className="h-3 w-3" />مصرف و سابقه</Button>
-    {historyOpen && <CustomerHistoryDialog email={user.email} adminId={adminId} onClose={() => setHistoryOpen(false)} />}
   </div>;
-}
-
-export function CustomerHistoryDialog({ email, adminId, onClose }: { email: string; adminId?: string; onClose: () => void }) {
-  const [data, setData] = useState<{ history: UsageHistory | null; operations: { type: string; status: string; createdAt: string }[] } | null>(null);
-  const [error, setError] = useState('');
-  useEffect(() => { let alive = true;void api<typeof data>(adminId ? `/api/admin/customer-observations?id=${encodeURIComponent(adminId)}` : `/api/reseller/customer-tools/history?email=${encodeURIComponent(email)}`).then(r => { if (!alive) return;if (r.ok) setData(r.data || null);else setError(r.error || 'اطلاعات دریافت نشد'); });return () => { alive = false; }; }, [email, adminId]);
-  const types: Record<string, string> = { CREATE: 'ساخت', UPDATE: 'ویرایش', RESET: 'بازنشانی مصرف', DELETE: 'حذف' };
-  const states: Record<string, string> = { SUCCESS: 'موفق', PARTIAL: 'ناقص', RUNNING: 'در جریان', NEEDS_REPAIR: 'نیازمند بررسی', FAILED: 'ناموفق', PENDING: 'در انتظار' };
-  return <Dialog open onOpenChange={open => !open && onClose()}><DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>مصرف و سابقهٔ کاربر</DialogTitle><DialogDescription dir="ltr">{email}</DialogDescription></DialogHeader>
-    {error ? <p role="alert">{error}</p> : !data ? <Spinner /> : <>
-      <p className="text-xs text-muted-foreground">{data.history ? `آغاز ثبت: ${faDate(data.history.startedAt)} · آخرین بررسی: ${faDate(data.history.observedAt)}` : 'ثبت مصرف از اولین بررسی خودکار آغاز می‌شود؛ اطلاعات روزهای گذشته ساخته نمی‌شود.'}</p>
-      {!!data.history?.gaps && <p className="text-xs text-amber-500">بخشی از سابقه به علت تغییر شمارندهٔ خارج از پنل کامل نیست.</p>}
-      {data.history?.days.length ? <><div className="h-56 w-full" dir="ltr"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.history.days.slice(-30)}><XAxis dataKey="day" tick={{ fontSize: 9 }} /><YAxis tick={{ fontSize: 10 }} /><Tooltip formatter={v => [`${Number(v).toFixed(3)} GB`, 'مصرف ثبت‌شده']} /><Bar dataKey="usedGB" fill="#8b5cf6" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div><p className="text-[11px] text-muted-foreground">مصرف بین دو بررسی، در روز پایان بازه ثبت می‌شود؛ زمان‌های بدون بررسی پوشش کامل ندارند. نگه‌داری ۹۰ روز.</p></> : <p className="rounded-xl border p-4 text-sm">هنوز بازهٔ مصرف ثبت نشده است.</p>}
-      <div className="space-y-2"><h3 className="font-bold text-sm">آخرین عملیات</h3>{data.operations.length ? data.operations.map((op, i) => <div key={i} className="flex justify-between gap-2 border-b py-2 text-xs"><span>{types[op.type] || 'عملیات کاربر'} · {states[op.status] || op.status}</span><span>{faDate(op.createdAt)}</span></div>) : <p className="text-xs text-muted-foreground">عملیاتی ثبت نشده است.</p>}</div>
-    </>}
-  </DialogContent></Dialog>;
 }
 
 export function CustomerToolsBar({ users, visible, metadata, selected, setSelected, labelFilter, setLabelFilter, activityFilter, setActivityFilter, reload }: {

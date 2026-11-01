@@ -166,8 +166,13 @@ try{
    await page.getByLabel('برچسب‌های کاربران').fill('فروشگاه، تست رابط');await page.getByRole('button',{name:'ذخیره',exact:true}).click();
    await page.getByRole('dialog').waitFor({state:'hidden'});
    check('browser can edit labels after successful bulk status',()=>assert.ok(true));
-   await page.getByLabel('سابقه first_customer',{exact:true}).click();await page.getByRole('heading',{name:'مصرف و سابقهٔ کاربر'}).waitFor();
-   await page.waitForTimeout(300);await page.screenshot({path:path.join(dir,'history-desktop.png'),fullPage:true});await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+   const customerRow=page.getByRole('row').filter({has:page.getByLabel('انتخاب first_customer',{exact:true})});
+   await customerRow.getByText('تست رابط',{exact:true}).waitFor();
+   const rowText=await customerRow.innerText();
+   check('reseller row still shows current usage and last connection',()=>{assert.match(rowText,/GB/);assert.match(rowText,/آخرین اتصال:/)});
+   const historyCount=await page.getByRole('button',{name:/^سابقه /}).count();
+   check('reseller no longer offers unused consumption history',()=>assert.equal(historyCount,0));
+   await customerRow.hover();await page.screenshot({path:path.join(dir,'customer-tools-desktop.png'),fullPage:true});
    await page.getByLabel('فیلتر گروه کاربران').selectOption('');await page.getByRole('button',{name:'کاربر جدید',exact:true}).click();
    await page.getByLabel('شروع اعتبار کاربر').selectOption('first-use');await page.getByLabel('روز اعتبار از اولین اتصال').fill('45');
    await page.waitForTimeout(300);await page.screenshot({path:path.join(dir,'first-use-desktop.png'),fullPage:true});
@@ -175,6 +180,19 @@ try{
    await page.setViewportSize({width:390,height:844});await page.waitForTimeout(300);await page.screenshot({path:path.join(dir,'first-use-mobile.png'),fullPage:true});await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
    await page.waitForTimeout(300);await page.screenshot({path:path.join(dir,'customer-tools-mobile.png'),fullPage:true});
    const size=await page.evaluate(()=>({content:document.documentElement.scrollWidth,viewport:innerWidth}));check('customer tools mobile has no page overflow',()=>assert.ok(size.content<=size.viewport+1,JSON.stringify(size)));
+   const adminContext=await browser.newContext({viewport:{width:1280,height:950}});
+   try{
+    await adminContext.addCookies([{name:'rp_session',value:cookie.slice('rp_session='.length),url:base}]);
+    const adminPage=await adminContext.newPage();adminPage.on('pageerror',e=>errors.push(e.message));
+    await adminPage.goto(base,{waitUntil:'networkidle'});await adminPage.getByRole('button',{name:'کاربران',exact:true}).click();
+    await adminPage.getByRole('heading',{name:'همهٔ کاربران',exact:true}).waitFor();
+    const adminRow=adminPage.getByRole('row').filter({has:adminPage.getByText('first_customer',{exact:true})});
+    await adminRow.getByText(/گیگ/).first().waitFor();await adminRow.getByText('تست رابط',{exact:true}).waitFor();
+    const adminText=await adminRow.innerText(),adminHistoryCount=await adminPage.getByRole('button',{name:/^سابقه /}).count();
+    check('admin keeps current usage and labels',()=>{assert.match(adminText,/گیگ/);assert.match(adminText,/تست رابط/)});
+    check('admin no longer offers unused consumption history',()=>assert.equal(adminHistoryCount,0));
+    await adminRow.hover();await adminPage.screenshot({path:path.join(dir,'admin-customers-desktop.png'),fullPage:true});
+   }finally{await adminContext.close()}
    await page.evaluate(async()=>{await navigator.serviceWorker.ready;});await page.reload({waitUntil:'networkidle'});
    const cached=await page.evaluate(async()=>{const keys=await caches.keys();const requests=await Promise.all(keys.filter(k=>k.startsWith('pvnet-panel-static-')).map(async k=>(await (await caches.open(k)).keys()).map(r=>new URL(r.url).pathname)));return requests.flat();});
    check('installed worker caches static assets and no private data',()=>{assert.ok(cached.includes('/offline.html'));assert.ok(cached.every(p=>p==='/offline.html'||p.startsWith('/icons/')||p.startsWith('/fonts/')))});

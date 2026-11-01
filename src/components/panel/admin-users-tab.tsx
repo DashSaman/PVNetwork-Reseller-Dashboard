@@ -75,7 +75,7 @@ export function AdminUsersTab() {
       <Table><TableHeader><TableRow><TableHead>کاربر</TableHead><TableHead>پیگیری و گروه</TableHead><TableHead>مدیریت</TableHead><TableHead>مصرف / سهمیه</TableHead><TableHead>انقضا</TableHead><TableHead>وضعیت</TableHead><TableHead>اشتراک</TableHead></TableRow></TableHeader>
         <TableBody>{filtered.slice(currentPage * 15, currentPage * 15 + 15).map(u => <TableRow key={u.id}>
           <TableCell><div className="font-bold">{u.name || u.email}</div><div className="text-xs text-muted-foreground" dir="ltr">{u.email}</div></TableCell>
-          <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} adminId={u.id} /></TableCell>
+          <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} /></TableCell>
           <TableCell>{u.adminManaged ? <div className="space-y-1"><Badge variant="outline">تحت مدیریت ادمین</Badge><div className="text-xs text-muted-foreground">از {u.sourceUsername}</div></div> : u.ownerName}</TableCell>
           <TableCell className="whitespace-nowrap">{u.usedGB === null ? "در حال دریافت" : gbLabel(u.usedGB)} / {u.trafficGB > 0 ? gbLabel(u.trafficGB) : "نامحدود"}</TableCell>
           <TableCell className="whitespace-nowrap">{u.expiryTime !== null && u.expiryTime < 0 ? "پس از اولین اتصال" : expiryLabel(u.expiryTime).text}</TableCell>
