@@ -155,3 +155,28 @@ tests use isolated SQLite databases and loopback native mocks.
 
 This change does not claim that a native node returning HTTP 503 is repaired.
 Its queue remains internally protected until real synchronization is confirmed.
+
+### Accepted follow-up runtime
+
+Commit `2fabac8fcceccfce6c8ad436be1d723eeba67540` is deployed as
+`pv-reseller-dashboard:queued-sync-20261104`, image
+`sha256:eeaaf771b692db5a66fa3b390f554b2b2dc4fe1958945b3b3af613ca3987233c`.
+The actual final Linux image passed 54 customer-management, 35 lifecycle and 45
+audit/auth/bridge checks with network disabled, no real data mount and no ports.
+
+Read-only production acceptance verified all 58 live users, both active reseller
+scopes (56 users plus 2 admin-managed users), and the five saved queues with no
+genuinely unfinished ordinary edit. Every non-log dashboard table was identical
+across replacement. The same encryption key, environment, mount, network and
+`127.0.0.1:31080` binding were retained. Unrelated container identities/start
+times, service PIDs/listeners and native configuration matched; both timers and
+public HTTPS remained healthy. The previous dashboard container is retained for
+rollback. No real customer mutation or repair was replayed.
+
+A fresh native read found the reported account enabled at 50 GB with cumulative
+usage continuing normally, and all five queues fully funded with no reservation.
+One node remained offline/dirty while four were online/clean; these queues were
+not falsely marked synchronized. A complete final dashboard archive was verified
+against all eight tables and its recovery key: 58 users, 3 retained owners,
+33 inbound assignments, 159 journals and 61 settings. No native database export
+or restore was performed. Detailed evidence and archive hashes stay private.
