@@ -54,7 +54,43 @@ API/browser checks (47 API + 14 browser), 45 existing audit/auth/bridge checks a
 and mobile screenshots inspected; no client errors or page overflow. All test
 writes use isolated SQLite databases and loopback native-panel fixtures.
 
-Production image, deployment and scoped recovery acceptance are recorded after
-execution. Client identifiers, credentials, snapshots and private operator evidence
-must not be committed to this repository. Do not blindly replay older repairs or
-release unrelated CREATE/RESET/DELETE reservations.
+## Production acceptance
+
+Runtime commit `c61e3e35261fedf235299841905b28bd49a9ee98` was pushed and deployed
+as `pv-reseller-dashboard:quota-renewal-20261104`, image
+`sha256:f953511bc01c7fc2c8759f08c1d9d0ea5d23d06e32209b0198cb0fabda5190c0`.
+The actual final Linux image passed 47 customer-management, 29 lifecycle/accounting
+and 45 audit/auth/bridge checks with network disabled, no production mount and no
+published ports. Build, TypeScript and targeted ESLint passed.
+
+The container replacement preserved every non-log dashboard table. Read-only
+acceptance verified all 58 live customers and both active reseller bootstraps
+(56 customers, plus 2 retained admin-managed customers). Existing environment,
+encryption key, data mount, network and `127.0.0.1:31080` binding were retained.
+Unrelated container identities/start times, service PIDs/listeners and native
+configuration matched across deployment; the previous dashboard is retained.
+
+After a separate consistent database snapshot and read-only preflight, five
+previously funded ordinary increases were resumed through the shared dashboard
+API. Their controller quotas already matched the journal targets. Reservations
+moved into tracked allocation without changing either reseller's remaining pool
+or consumed balance. Only the reported customer's enable state was changed.
+Every customer's subscription, identity, expiration, memberships and counters
+were checked; unrelated tracked rows and journals were retained unchanged.
+
+A subsequent read confirmed the reported account remained enabled at 50 GB with
+its prior usage retained. One native node still reports offline and four report
+online; queued operations remain visibly pending. This deployment does not repair
+that node's connectivity or claim that offline locations have synchronized.
+Backup and observation timers remain active. A final complete dashboard archive
+was verified against all eight tables, including all 58 users, 3 retained reseller
+rows, 33 inbound assignments, 159 journals and 61 settings; recovery key verified.
+No native database export or production restore was performed.
+
+Only untagged intermediate stages identified from this dashboard's own completed
+build logs were removed to recover build space; runtime/rollback images, protected
+dependency bases, other images/volumes/services and listeners were retained.
+
+Client identifiers, credentials, snapshots and private operator evidence must not
+be committed to this repository. Do not blindly replay older repairs or release
+unrelated CREATE/RESET/DELETE reservations.
