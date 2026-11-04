@@ -54,7 +54,7 @@ double-reservation risk and inability to disable an over-quota account. A separa
 adapter test rejected an unverified queued acknowledgment. Browser testing caught
 and fixed a continuation button that appeared clickable before live data was ready.
 
-Verified locally: 29 lifecycle/accounting API checks, 61 customer-management
+Verified locally: 30 lifecycle/accounting API checks, 61 customer-management
 API/browser checks (47 API + 14 browser), 45 existing audit/auth/bridge checks and
 45 unit checks. TypeScript and ESLint for all changed source files pass. Desktop
 and mobile screenshots inspected; no client errors or page overflow. All test
@@ -92,6 +92,18 @@ Backup and observation timers remain active. A final complete dashboard archive
 was verified against all eight tables, including all 58 users, 3 retained reseller
 rows, 33 inbound assignments, 159 journals and 61 settings; recovery key verified.
 No native database export or production restore was performed.
+
+The final validation follow-up is commit
+`60a24a87bfae4d1486a9c70d0c64797f0f37988a`, deployed as
+`pv-reseller-dashboard:quota-status-guard-20261104`, image
+`sha256:9d6dc6f8493de53ef17c8a290db8b385ee70427d49d70a453efff2fafb90c691`.
+Its actual Linux image passes 47 customer-management, 30 lifecycle/accounting and
+45 audit/auth/bridge checks. Replacement again preserved all dashboard data and
+unrelated services/listeners; the five recoveries were not replayed. Final
+read-only verification found the reported account still enabled more than 28
+minutes after recovery, its prior usage and expiry retained, and a nonempty
+subscription returning 12 links. All five funded settlements remain visibly
+pending, with zero duplicate reservation, while one native node remains offline.
 
 Only untagged intermediate stages identified from this dashboard's own completed
 build logs were removed to recover build space; runtime/rollback images, protected
