@@ -19,6 +19,7 @@ import {
 } from "@/lib/reseller-helpers";
 import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
+import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
 import { logActivity } from "@/lib/logger";
 
@@ -151,8 +152,7 @@ async function allowedRefsResolved(reseller: ResellerWithInbounds): Promise<Set<
 }
 
 async function bridgeInboundList(reseller: ResellerWithInbounds) {
-  const panelResult = await getAllPanelInbounds();
-  if (!panelResult.ok) return xui(false, panelResult.msg || "هیچ پنلی در دسترس نیست");
+  const panelResult = await getSelectableInboundCatalog();
 
   const allowed = await allowedRefsResolved(reseller);
   const tracked = await db.resellerUser.findMany({ where: { resellerId: reseller.id } });
@@ -161,7 +161,7 @@ async function bridgeInboundList(reseller: ResellerWithInbounds) {
   const obj: unknown[] = [];
   for (const bundle of panelResult.panels) {
     for (const inb of bundle.inbounds) {
-      if (!allowed.has(refKey({ panelId: bundle.panelId, inboundId: inb.id }))) continue;
+      if (!allowed.has(refKey({ panelId: bundle.panelId, inboundId: inb.id })) || !panelResult.available.has(refKey({ panelId: bundle.panelId, inboundId: inb.id }))) continue;
       const clients = inb.clients.filter((c) => trackedEmails.has(c.email));
       const clientStats = inb.clientStats.filter((c) => trackedEmails.has(c.email));
       obj.push({

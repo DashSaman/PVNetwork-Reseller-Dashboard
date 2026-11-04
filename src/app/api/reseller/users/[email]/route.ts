@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getPanelConnection, getAllPanelInbounds, buildSubLink } from "@/lib/panel-manager";
+import { getPanelConnection, getAllPanelInboundsFresh, buildSubLink } from "@/lib/panel-manager";
+import { validateAvailableInboundSelection } from '@/lib/inbound-catalog';
 import {
   getResellerWithAccess,
   validateInboundSelection,
@@ -65,7 +66,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     }
 
     // ---- اینباندهای زنده همه پنل‌ها ----
-    const panelResult = await getAllPanelInbounds();
+    const panelResult = await getAllPanelInboundsFresh();
     if (!panelResult.ok) return NextResponse.json({ error: panelResult.msg || "هیچ پنلی در دسترس نیست" }, { status: 502 });
     const inboundIndex = new Map<string, { protocol: string }>();
     const emailExistsInPanel = new Map<string, boolean>();
@@ -132,16 +133,18 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         : currentRefs;
     const selection = await validateInboundSelection(reseller, newRefs);
     if (!selection.ok) return NextResponse.json({ error: selection.msg }, { status: 403 });
+    const curKeys = new Set(currentRefs.map(refKey));
     for (const ref of newRefs) {
-      if (!inboundIndex.has(refKey(ref))) {
+      if (!inboundIndex.has(refKey(ref)) && !curKeys.has(refKey(ref))) {
         return NextResponse.json({ error: "اینباند انتخابی در پنل در دسترس نیست" }, { status: 400 });
       }
     }
 
-    const curKeys = new Set(currentRefs.map(refKey));
     const newKeys = new Set(newRefs.map(refKey));
     const removed = currentRefs.filter((r) => !newKeys.has(refKey(r)));
     const added = newRefs.filter((r) => !curKeys.has(refKey(r)));
+    const selectable = await validateAvailableInboundSelection(added, panelResult);
+    if (!selectable.ok) return NextResponse.json({ error: selectable.msg }, { status: selectable.status });
 
     const applyRemote = async (): Promise<{ errors: string[]; pending: boolean }> => {
     const errors: string[] = [];

@@ -8,10 +8,13 @@
 import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
 import https from "node:https";
 import { nodesSynchronized } from './queued-update';
+import type { InboundRuntimeHealth } from './inbound-availability';
 import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifyClientCreationRecord, verifiedClientUsage, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
 export type PanelInbound = {
   id: number;
+  enable?: boolean;
+  nodeId?: number | null;
   port: number;
   protocol: string;
   tag: string;
@@ -224,6 +227,8 @@ function privateNodeRequest(url: string, tls: NonNullable<PanelAuth["tls"]>, ini
 
 export type RawInbound = {
   id: number;
+  enable?: unknown;
+  nodeId?: unknown;
   port: number;
   protocol: string;
   tag: string;
@@ -257,6 +262,8 @@ function parseInbound(raw: RawInbound): PanelInbound {
   const stream = parseMaybeJson(raw.streamSettings);
   return {
     id: raw.id,
+    enable: typeof raw.enable === 'boolean' ? raw.enable : undefined,
+    nodeId: raw.nodeId === undefined || raw.nodeId === null ? null : Number.isSafeInteger(raw.nodeId) && (raw.nodeId as number) > 0 ? raw.nodeId as number : undefined,
     port: raw.port,
     protocol: raw.protocol,
     tag: raw.tag || `inbound-${raw.id}`,
@@ -457,6 +464,14 @@ export async function getVerifiedClientUsage(auth: PanelAuth, email: string, exp
 export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = false): Promise<boolean> {
   const result = await panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 4000 });
   return result.ok && (allowEmpty && Array.isArray(result.data) && result.data.length === 0 || nodesSynchronized(result.data));
+}
+
+export async function getInboundRuntimeHealth(auth: PanelAuth): Promise<InboundRuntimeHealth> {
+  const [nodes, local] = await Promise.all([
+    panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 3500 }),
+    panelRequest<{ xray?: { state?: unknown } }>(auth, '/panel/api/server/status', { timeoutMs: 3500 }),
+  ]);
+  return { observedAt: Date.now(), localRunning: local.ok && local.data?.xray?.state === 'running', nodes: nodes.ok ? nodes.data : null };
 }
 
 export async function readClientCreation(auth: PanelAuth, inboundIds: number[], expected: Partial<PanelClient>): Promise<PanelApiResult> {

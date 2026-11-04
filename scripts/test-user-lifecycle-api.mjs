@@ -14,7 +14,7 @@ const {PrismaClient}=await import('@prisma/client');const {encryptSecret,hashPas
 const GB=1024**3,clients=new Map(),mode=new Map();let db,app,server,checks=0,nativeAdds=0,nativeAttaches=0;const failures=[];
 function check(name,fn){try{fn();checks++;console.log('PASS',name)}catch(e){failures.push(name+': '+e.message);console.error('FAIL',name,e.message)}}
 const key=(p,e)=>p+':'+e;
-function inbound(p,id){const members=[...clients.entries()].filter(([k,c])=>k.startsWith(p+':')&&c.ids.has(id)).map(([,c])=>c);return {id,tag:'loc-'+id,port:4400+id,protocol:'vless',settings:JSON.stringify({clients:members.map(c=>({...c,uuid:undefined,ids:undefined,used:undefined}))}),clientStats:members.map(c=>({email:c.email,up:c.used,down:0,total:c.totalGB,enable:c.enable,expiryTime:c.expiryTime})),streamSettings:'{}'};}
+function inbound(p,id){const members=[...clients.entries()].filter(([k,c])=>k.startsWith(p+':')&&c.ids.has(id)).map(([,c])=>c);return {id,enable:true,nodeId:null,tag:'loc-'+id,port:4400+id,protocol:'vless',settings:JSON.stringify({clients:members.map(c=>({...c,uuid:undefined,ids:undefined,used:undefined}))}),clientStats:members.map(c=>({email:c.email,up:c.used,down:0,total:c.totalGB,enable:c.enable,expiryTime:c.expiryTime})),streamSettings:'{}'};}
 async function child(args){await new Promise((resolve,reject)=>{const c=spawn(process.execPath,args,{cwd:root,env:process.env,stdio:'inherit',windowsHide:true});c.on('error',reject);c.on('exit',n=>n===0?resolve():reject(Error('child '+n)))})}
 try{
  await child(['node_modules/prisma/build/index.js','db','push','--skip-generate']);db=new PrismaClient();
@@ -23,7 +23,8 @@ try{
   if(url==='/panel/api/inbounds/list'){if(mode.get('delay'))await new Promise(r=>setTimeout(r,1500));obj=[1,2,3].map(id=>inbound(p,id));}
   else if(url==='/panel/api/clients/list')obj=[...clients.entries()].filter(([k])=>k.startsWith(p+':')).map(([,c])=>c);
   else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
-  else if(url==='/panel/api/nodes/list')obj=[{id:1,enable:true,status:'online',configDirty:!!mode.get('node-pending')}];
+  else if(url==='/panel/api/nodes/list')obj=[{id:1,enable:true,status:'online',configDirty:!!mode.get('node-pending'),xrayState:'running',lastHeartbeat:Math.floor(Date.now()/1000)}];
+  else if(url==='/panel/api/server/status')obj={xray:{state:'running'}};
   else if(url==='/panel/api/clients/add'){nativeAdds++;const v=body.client;clients.set(key(p,v.email),{...v,totalGB:mode.get('bad-create-record')?v.totalGB+GB:v.totalGB,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){nativeAttaches++;const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.startsWith('/panel/api/clients/update/')){if(c){if(!m.dropUpdate)Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true}}else{success=false;msg='client not found'}}

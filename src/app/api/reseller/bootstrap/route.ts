@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getResellerWithAccess, refKey, parseInboundRefs } from "@/lib/reseller-helpers";
+import { getResellerWithAccess, parseInboundRefs } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
 import { buildSubLink } from "@/lib/panel-manager";
-import { PUBLIC_SERVICE_NAME, publicLocationLabel } from "@/lib/reseller-presentation";
 
 /**
  * بوت‌استرپ اولین صفحهٔ نماینده («کاربران من») — فقط دادهٔ لوکال DB، بدون هیچ تماس با 3x-ui.
@@ -19,11 +18,6 @@ export async function GET() {
 
   const primaryPanel = await db.panelConfig.findFirst({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   const primaryPanelId = primaryPanel?.id || "";
-  const panelNameById = new Map<string, string>();
-  for (const p of await db.panelConfig.findMany()) panelNameById.set(p.id, p.name);
-
-  // نقشهٔ اینباندهای مجاز از DB — برای پیدا کردن tags هر کاربر
-  const allowedById = new Map(reseller.inbounds.map((i) => [`${i.panelId || primaryPanelId}::${i.inboundId}`, i]));
 
   const trackedUsers = await db.resellerUser.findMany({ where: { resellerId: reseller.id } });
 
@@ -37,26 +31,12 @@ export async function GET() {
     const subPanelId = tracked.panelId || primaryPanelId;
     const subLink = await buildSubLink(tracked.subId || "", reseller, subPanelId);
 
-    // locations: از refs ذخیره‌شدهٔ «همین کاربر» تطبیق با اینباندهای مجاز DB
-    let inboundTags: string[] = [];
-    try {
-      const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId || primaryPanelId);
-      inboundTags = refs
-        .map((r) => {
-          const meta = allowedById.get(`${r.panelId}::${r.inboundId}`);
-          const panelName = panelNameById.get(r.panelId) || "";
-          const tag = meta?.inboundTag || meta?.remark || `#${r.inboundId}`;
-          return publicLocationLabel(tag, panelName);
-        })
-        .filter(Boolean);
-    } catch { /* refs نامعتبر → خالی */ }
-
     rows.push({
       email: tracked.email,
       name: tracked.name,
-      inboundTags,
+      inboundTags: [], // Only the separate verified live catalog supplies visible labels.
       inboundRefs: parseInboundRefs(tracked.inboundIds, tracked.panelId || primaryPanelId),
-      protocol: allowedById.get(inboundTags.length ? "" : "")?.protocol || "-", // live-users آپدیت می‌کند
+      protocol: "-",
       totalGB: tracked.trafficGB || 0,
       usedGB: null,
       expiryTime: null,
@@ -69,23 +49,11 @@ export async function GET() {
   }
   rows.sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
 
-  // اینباندهای مجاز — از DB ResellerInbound (بدون 3x-ui)
-  const inbounds = reseller.inbounds.map((i) => ({
-    inboundId: i.inboundId,
-    panelId: i.panelId || primaryPanelId,
-    panelName: PUBLIC_SERVICE_NAME,
-    tag: publicLocationLabel(i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
-    remark: publicLocationLabel(i.remark || i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
-    protocol: i.protocol,
-    port: i.port,
-    clientsCount: 0, // live آپدیت می‌کند
-  }));
-
   const quota = await getQuotaState(reseller.id, reseller);
 
   const res = NextResponse.json({
     users: rows,
-    inbounds,
+    inbounds: [],
     // bootstrap هیچ بررسی زنده انجام نمی‌دهد — خطای اتصال نمی‌گوید؛ وضعیت زنده live-users تعیین می‌کند
     panelError: "",
     liveStatus: "loading",

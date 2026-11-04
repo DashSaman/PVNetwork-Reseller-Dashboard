@@ -8,6 +8,7 @@ import { getQuotaState } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { sendThresholdAlerts, type ThresholdAlert } from "@/lib/telegram";
 import { PUBLIC_SERVICE_ERROR, publicLocationLabel } from "@/lib/reseller-presentation";
+import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
 import { loadAlertPreferences } from '@/lib/customer-observations';
 
 /** لیست کاربران نماینده از روی همه پنل‌ها */
@@ -27,6 +28,8 @@ export async function GET() {
   if (!panelResult.ok) {
     return NextResponse.json({ error: PUBLIC_SERVICE_ERROR }, { status: 502 });
   }
+  const catalog = await getSelectableInboundCatalog();
+  const allowedLocations = new Set(reseller.inbounds.map(i => `${i.panelId || primaryPanelId}::${i.inboundId}`));
 
   const trackedMap = new Map(trackedUsers.map((u) => [u.email, u]));
   type UserRow = {
@@ -68,10 +71,13 @@ export async function GET() {
             enable: stat.enable ?? true,
           });
         }
-        const tags = tagsByEmail.get(stat.email) || [];
-        tags.push(publicLocationLabel(inb.tag, bundle.panelName));
-        tagsByEmail.set(stat.email, tags);
-        if (!protoByEmail.has(stat.email)) protoByEmail.set(stat.email, inb.protocol);
+        const locationKey = `${bundle.panelId}::${inb.id}`;
+        if (allowedLocations.has(locationKey) && catalog.available.has(locationKey)) {
+          const tags = tagsByEmail.get(stat.email) || [];
+          tags.push(publicLocationLabel(inb.tag, bundle.panelName));
+          tagsByEmail.set(stat.email, tags);
+          if (!protoByEmail.has(stat.email)) protoByEmail.set(stat.email, inb.protocol);
+        }
       }
     }
     for (const email of statByEmail.keys()) {

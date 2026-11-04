@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireReseller } from "@/lib/session";
-import { getAllPanelInbounds } from "@/lib/panel-manager";
+import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
 import { getResellerWithAccess, getAllocatedGB, getConsumedGB } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
-import { PUBLIC_SERVICE_NAME, PUBLIC_SERVICE_ERROR, publicLocationLabel, publicPanelErrors } from "@/lib/reseller-presentation";
+import { PUBLIC_SERVICE_NAME, PUBLIC_SERVICE_ERROR, publicLocationLabel } from "@/lib/reseller-presentation";
 
 /**
  * اینباندهای مجاز نماینده (از همه پنل‌ها) + پول ترافیک او
- * حتی اگر پنلی قطع باشد، دسترسی‌ها و متادیتای اینباندها از دیتابیس برمی‌گردد.
+ * نمایش فقط با تأیید زنده؛ مجوزهای ذخیره‌شده با قطع موقت حذف نمی‌شوند.
  */
 export async function GET() {
   const session = await requireReseller();
@@ -21,22 +21,8 @@ export async function GET() {
   const primaryPanel = await db.panelConfig.findFirst({ orderBy: [{ sortOrder: "asc" }, { updatedAt: "asc" }] });
   const primaryPanelId = primaryPanel?.id || "";
 
-  const panelResult = await getAllPanelInbounds();
+  const panelResult = await getSelectableInboundCatalog();
   const allowed = new Map(reseller.inbounds.map((i) => [`${i.panelId || primaryPanelId}::${i.inboundId}`, i]));
-  const panelNameById = new Map<string, string>();
-  for (const p of await db.panelConfig.findMany()) panelNameById.set(p.id, p.name);
-
-  const dbFallback = reseller.inbounds.map((i) => ({
-    inboundId: i.inboundId,
-    panelId: i.panelId || primaryPanelId,
-    panelName: PUBLIC_SERVICE_NAME,
-    tag: publicLocationLabel(i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
-    remark: publicLocationLabel(i.remark || i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
-    protocol: i.protocol,
-    port: i.port,
-    clientsCount: 0,
-    unavailable: true,
-  }));
 
   type Row = {
     inboundId: number;
@@ -50,15 +36,15 @@ export async function GET() {
     unavailable?: boolean;
   };
 
-  let inbounds: Row[] = dbFallback;
+  let inbounds: Row[] = [];
   let panelError: string | null = null;
 
-  if (panelResult.ok) {
+  if (panelResult.panels.length) {
     const live: Row[] = [];
     for (const bundle of panelResult.panels) {
       for (const i of bundle.inbounds) {
         const key = `${bundle.panelId}::${i.id}`;
-        if (!allowed.has(key)) continue;
+        if (!allowed.has(key) || !panelResult.available.has(key)) continue;
         live.push({
           inboundId: i.id,
           panelId: bundle.panelId,
@@ -71,24 +57,7 @@ export async function GET() {
         });
       }
     }
-    const missing = reseller.inbounds
-      .filter((i) => {
-        const pid = i.panelId || primaryPanelId;
-        const bundle = panelResult.panels.find((p) => p.panelId === pid);
-        return !bundle || !bundle.inbounds.some((p) => p.id === i.inboundId);
-      })
-      .map((i) => ({
-        inboundId: i.inboundId,
-        panelId: i.panelId || primaryPanelId,
-        panelName: PUBLIC_SERVICE_NAME,
-        tag: publicLocationLabel(i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
-        remark: publicLocationLabel(i.remark || i.inboundTag, panelNameById.get(i.panelId || primaryPanelId)),
-        protocol: i.protocol,
-        port: i.port,
-        clientsCount: 0,
-        unavailable: true,
-      }));
-    inbounds = [...live, ...missing];
+    inbounds = live;
   } else {
     panelError = PUBLIC_SERVICE_ERROR;
   }
@@ -99,7 +68,7 @@ export async function GET() {
   return NextResponse.json({
     inbounds,
     panelError,
-    panelErrors: panelResult.ok && panelResult.errors.length ? publicPanelErrors(panelResult.errors) : undefined,
+    observedAt: panelResult.observedAt,
     permissions: {
       multiLocation: reseller.multiLocation,
       allowIpLimit: reseller.allowIpLimit,
@@ -108,5 +77,5 @@ export async function GET() {
       consumedGB,
       remainingGB: (await getQuotaState(reseller.id, reseller)).remaining,
     },
-  });
+  }, { headers: { 'Cache-Control': 'private, no-store, max-age=0' } });
 }

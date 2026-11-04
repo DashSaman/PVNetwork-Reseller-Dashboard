@@ -23,7 +23,9 @@ try{
   let raw='';for await(const b of req)raw+=b;const body=JSON.parse(raw||'{}'),url=req.url;
   requests.push({url,body});let obj,success=true,msg='';
   const email=decodeURIComponent(url.split('/').at(-1)),c=clients.get(email);
-  if(url==='/panel/api/inbounds/list')obj=[1,2].map(id=>({id,tag:'loc-'+id,port:4400+id,protocol:'vless',settings:JSON.stringify({clients:[...clients.values()].filter(v=>v.ids.has(id)).map(v=>({...v,ids:undefined,used:undefined}))}),streamSettings:JSON.stringify({network:'tcp',security:'reality',realitySettings:{privateKey:'PRIVATE-FIXTURE-SENTINEL',settings:{publicKey:'PUBLIC-FIXTURE-KEY'}}}),clientStats:[...clients.values()].filter(v=>v.ids.has(id)).map(v=>({email:v.email,up:v.used,down:0,total:v.totalGB,expiryTime:v.expiryTime,enable:v.enable}))}));
+  if(url==='/panel/api/inbounds/list')obj=[1,2].map(id=>({id,enable:true,nodeId:null,tag:'loc-'+id,port:4400+id,protocol:'vless',settings:JSON.stringify({clients:[...clients.values()].filter(v=>v.ids.has(id)).map(v=>({...v,ids:undefined,used:undefined}))}),streamSettings:JSON.stringify({network:'tcp',security:'reality',realitySettings:{privateKey:'PRIVATE-FIXTURE-SENTINEL',settings:{publicKey:'PUBLIC-FIXTURE-KEY'}}}),clientStats:[...clients.values()].filter(v=>v.ids.has(id)).map(v=>({email:v.email,up:v.used,down:0,total:v.totalGB,expiryTime:v.expiryTime,enable:v.enable}))}));
+  else if(url==='/panel/api/nodes/list')obj=[];
+  else if(url==='/panel/api/server/status')obj={xray:{state:'running'}};
   else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
   else if(url.startsWith('/panel/api/clients/update/')){if(c){const rotating=body.subId&&body.subId!==c.subId;if(holdRotation && rotating){const hold=holdRotation;holdRotation=null;hold.reached();await hold.promise;}Object.assign(c,body);if(rotating&&loseRotationReply){loseRotationReply=false;success=false;msg='lost reply after native update';}}else{success=false;msg='client not found'}}
   else if(url==='/panel/api/clients/onlines')obj=[];

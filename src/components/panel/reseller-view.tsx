@@ -114,6 +114,9 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   const [users, setUsers] = useState<ResellerUserRow[]>([]);
   const [alerts, setAlerts] = useState<UserAlert[]>([]);
   const [inbounds, setInbounds] = useState<InboundInfo[]>([]);
+  const [inboundsLoaded, setInboundsLoaded] = useState(false);
+  const catalogInFlight = useRef(false);
+  const lastCatalogAt = useRef(0);
   const [permissions, setPermissions] = useState<ResellerPermissions | null>(null);
   const [whitelabel, setWhitelabel] = useState<WhitelabelInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +129,17 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   const [stats, setStats] = useState<Record<string, number | boolean> | null>(null);
   const [charts, setCharts] = useState<StatsCharts | null>(null);
   const [trafficLedger, setTrafficLedger] = useState<ResellerTrafficRow | null>(null);
+
+  const refreshInboundCatalog = useCallback(async () => {
+    if (catalogInFlight.current) return;
+    catalogInFlight.current = true;
+    try {
+      const r = await api<{ inbounds: InboundInfo[]; permissions: ResellerPermissions }>('/api/reseller/inbounds', { signal: AbortSignal.timeout(8000) });
+      if (r.ok && r.data) { setInbounds(r.data.inbounds);setPermissions(r.data.permissions);lastCatalogAt.current = Date.now(); }
+      else setInbounds([]);
+    } catch { setInbounds([]); }
+    finally { setInboundsLoaded(true);catalogInFlight.current = false; }
+  }, []);
 
   // اولین صفحه فقط بوت‌استرپ (یک snapshot پنل‌ها) — آمار/نمودارِ تب دیگر on-demand بار می‌شود
   const load = useCallback(async () => {
@@ -145,14 +159,14 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
         const previous = prev.find(u => u.email === row.email);
         return { ...row, usedGB: previous?.usedGB ?? null, expiryTime: previous?.expiryTime ?? null, enable: previous?.enable ?? null, liveFresh: false };
       }));
-      setInbounds(b.data.inbounds);
+      void refreshInboundCatalog();
       setPermissions(b.data.permissions);
       setPanelError(b.data.panelError || "");
       setWhitelabel((w) => ({ ...(w ?? { allowWhitelabel: b.data!.brand.allowWhitelabel, brandName: b.data!.brand.brandName, customDomain: b.data!.brand.customDomain, domainVerified: b.data!.brand.domainVerified, verifyToken: null as string | null, subHost: undefined, subPort: undefined }), ...b.data!.brand }));
     } else {
       setPanelError(b.error || "خطا در دریافت داده‌ها");
     }
-  }, []);
+  }, [refreshInboundCatalog]);
 
   /** یک تابع مشترک برای refresh داده زنده */
   const refreshLiveUsers = useCallback(async () => {
@@ -198,6 +212,17 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastCatalogAt.current > 20000) setInbounds([]);
+      void refreshInboundCatalog();
+    };
+    const timer = setInterval(refresh, 15000);
+    document.addEventListener('visibilitychange', refresh);window.addEventListener('focus', refresh);window.addEventListener('online', refresh);
+    return () => { clearInterval(timer);document.removeEventListener('visibilitychange', refresh);window.removeEventListener('focus', refresh);window.removeEventListener('online', refresh); };
+  }, [refreshInboundCatalog]);
+
   // داده زنده — اولین fetch
   useEffect(() => {
     if (!users.length || liveLoaded) return;
@@ -240,6 +265,8 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     };
   }, [tab]);
 
+  const catalogByRef = new Map(inbounds.map(i => [refKey({ panelId: i.panelId, inboundId: i.inboundId }), i]));
+  const visibleUsers = users.map(u => ({ ...u, inboundTags: (u.inboundRefs || []).flatMap(r => { const i = catalogByRef.get(refKey(r));return i ? [i.remark || i.tag] : []; }) }));
   const statsReady = stats !== null;
   const statsPending = !!stats?.livePending;
   useEffect(() => {
@@ -317,7 +344,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
       </nav>
 
       <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
-        {tab === "users" && permissions && <UsersTab session={session} users={users} inbounds={inbounds} permissions={permissions} loading={loading} livePending={livePending} panelError={panelError} reload={load} alerts={alerts} />}
+        {tab === "users" && permissions && <UsersTab session={session} users={visibleUsers} inbounds={inbounds} inboundsLoaded={inboundsLoaded} refreshInbounds={refreshInboundCatalog} permissions={permissions} loading={loading} livePending={livePending} panelError={panelError} reload={load} alerts={alerts} />}
         {tab === "stats" && permissions && <StatsTab stats={stats} charts={charts} trafficLedger={trafficLedger} />}
         {tab === "brand" && <BrandTab whitelabel={whitelabel} reload={load} />}
         {tab === "account" && <AccountSettingsTab username={session.username} />}
@@ -707,6 +734,8 @@ function UsersTab({
   livePending,
   users,
   inbounds,
+  inboundsLoaded,
+  refreshInbounds,
   permissions,
   loading,
   panelError,
@@ -717,6 +746,8 @@ function UsersTab({
   livePending: boolean;
   users: ResellerUserRow[];
   inbounds: InboundInfo[];
+  inboundsLoaded: boolean;
+  refreshInbounds: () => Promise<void>;
   permissions: ResellerPermissions;
   loading: boolean;
   panelError: string;
@@ -846,7 +877,10 @@ function UsersTab({
   }
 
   const createAttempt = useRef<{ payload: string; requestId: string } | null>(null);
+  const selectableKeys = new Set(inbounds.map(i => refKey({ panelId: i.panelId, inboundId: i.inboundId })));
+  const missingSelection = selectedInbounds.some(r => !selectableKeys.has(refKey(r)));
   async function createUser() {
+    if (missingSelection) { toast({ title: 'انتخاب لوکیشن تغییر کرده', description: 'گزینه‌های ناموجود را از انتخاب حذف و دوباره بررسی کنید.', variant: 'destructive' });void refreshInbounds();return; }
     if (!name.trim()) {
       toast({ title: "خطا", description: "نام کاربر را وارد کنید", variant: "destructive" });
       return;
@@ -893,7 +927,7 @@ function UsersTab({
         if (!rb.data.failedCount) { setName(""); setExpiryDate(""); setSelectedInbounds([]); }
         reload();
       } else {
-        toast({ title: "خطا", description: rb.error, variant: "destructive" });
+        toast({ title: "خطا", description: rb.error, variant: "destructive" });void refreshInbounds();
       }
       return;
     }
@@ -918,7 +952,7 @@ function UsersTab({
       // باز کردن خودکار پنجره لینک‌ها برای کاربر تازه‌ساخته
       if (!r.data.pending) void openLinks(r.data.email, name);
     } else {
-      toast({ title: "خطا", description: r.error, variant: "destructive" });
+      toast({ title: "خطا", description: r.error, variant: "destructive" });void refreshInbounds();
     }
   }
 
@@ -1397,8 +1431,9 @@ function UsersTab({
             </div>
             <div className="space-y-2">
               <Label>اینباندها (لوکیشن‌ها) {permissions.multiLocation ? "— چندگانه" : ""}</Label>
+              {missingSelection && <div role="status" className="rounded-lg border border-amber-500/30 p-2 text-xs space-y-2"><p>بعضی لوکیشن‌های انتخابی دیگر در دسترس نیستند. انتخاب شما بدون تأیید تغییر نمی‌کند.</p><Button type="button" size="sm" variant="outline" onClick={() => setSelectedInbounds(previous => previous.filter(r => selectableKeys.has(refKey(r))))}>حذف گزینه‌های ناموجود از انتخاب</Button></div>}
               {inbounds.length === 0 ? (
-                <p className="text-sm text-muted-foreground">اینباندی برای شما تعریف نشده — با مدیر تماس بگیرید.</p>
+                <p className="text-sm text-muted-foreground">{inboundsLoaded ? 'فعلاً لوکیشن آنلاین و قابل استفاده‌ای در دسترس نیست؛ فهرست خودکار به‌روز می‌شود.' : 'در حال بررسی لوکیشن‌های قابل استفاده…'}</p>
               ) : (
                 <div className="space-y-3 max-h-52 overflow-y-auto rounded-xl border border-border p-2.5">
                   {groupByPanel(inbounds).map((g) => (
@@ -1412,6 +1447,7 @@ function UsersTab({
                               key={`${g.panelId}-${i.inboundId}`}
                               type="button"
                               disabled={i.unavailable}
+                              aria-pressed={selected}
                               onClick={() => toggleInboundSelection(g.panelId, i.inboundId)}
                               className={`rounded-lg border p-2 text-right transition-colors disabled:opacity-40 ${
                                 selected
@@ -1433,7 +1469,7 @@ function UsersTab({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>انصراف</Button>
-            <Button onClick={createUser} disabled={busy} className="brand-gradient text-white hover:opacity-90 font-bold">
+            <Button onClick={createUser} disabled={busy || missingSelection || !inboundsLoaded || !inbounds.length} className="brand-gradient text-white hover:opacity-90 font-bold">
               {busy && <Spinner className="h-4 w-4" />} {parseNumberInput(count) > 1 ? `ساخت ${faNum(parseNumberInput(count))} کاربر` : "ساخت کاربر"}
             </Button>
           </DialogFooter>

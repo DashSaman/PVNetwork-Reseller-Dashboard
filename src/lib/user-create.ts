@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { getPanelConnection, getAllPanelInboundsFresh, buildSubLink, type AllPanelsResult } from "./panel-manager";
 import { addClient, resumeClientCreation, readClientCreation, arePanelNodesSynchronized, type PanelAuth, type PanelClient } from "./panel";
 import { creationMetadata, isSavedQueuedCreation, type CreationMetadata } from './queued-create';
+import { validateAvailableInboundSelection } from './inbound-catalog';
 import { randomHex, randomUuid } from "./crypto";
 type TypePanelAuth = import("./panel").PanelAuth;
 import { logActivity } from "./logger";
@@ -106,7 +107,13 @@ async function resumeCreateFromJournal(
   const funded = tracked ? meta.trafficGB : journal.status === "FAILED" ? 0 : journal.reservedGB;
   const needed = Math.max(0, meta.trafficGB - funded);
   if (!quota.unlimited && needed > quota.remaining) return { ok: false, status: 403, error: "موجودی برای ادامهٔ ساخت کافی نیست" };
-  if (!tracked && (journal.status === "FAILED" || journal.reservedGB < meta.trafficGB)) await db.operationJournal.update({ where: { id: journalId }, data: { status: "RUNNING", reservedGB: meta.trafficGB } });
+  let reservationReady = !!tracked || journal.status !== 'FAILED' && journal.reservedGB >= meta.trafficGB;
+  const ensureReservation = async () => {
+    if (!reservationReady) {
+      await db.operationJournal.update({ where: { id: journalId }, data: { status: 'RUNNING', reservedGB: meta.trafficGB } });
+      reservationReady = true;
+    }
+  };
   const byPanel = new Map<string, number[]>();
   for (const ref of meta.refs) {
     const arr = byPanel.get(ref.panelId) || [];
@@ -126,6 +133,15 @@ async function resumeCreateFromJournal(
       limitIp: meta.ipLimit, totalGB: meta.trafficGB * 1024 * 1024 * 1024,
       ...(!saved ? { expiryTime: meta.expiryTime, enable: true } : {}), subId: meta.subId,
     };
+    if (!saved) {
+      const existing = await readClientCreation(conn.conn, inboundIds, expected);
+      if (existing.ok) {
+        remoteComplete++;pending ||= !await arePanelNodesSynchronized(conn.conn, true);continue;
+      }
+      const selectable = await validateAvailableInboundSelection(meta.refs, panelResult);
+      if (!selectable.ok) return { ok: false, status: selectable.status, error: selectable.msg };
+      await ensureReservation();
+    }
     // A saved account may have started first-use validity or become exhausted.
     // Confirm current immutable identity/allocation; never recreate or re-enable it.
     let r = saved ? await readClientCreation(conn.conn, inboundIds, expected) : await resumeClientCreation(conn.conn as TypePanelAuth, inboundIds, protocol, expected);
@@ -136,6 +152,7 @@ async function resumeCreateFromJournal(
     await db.operationJournal.update({ where: { id: journalId }, data: { status: "NEEDS_REPAIR", lastError: "resume: remote incomplete" } });
     return { ok: false, error: "عملیات ساخت قبلی هنوز روی همهٔ پنل‌ها کامل نشده — پس از رفع مشکل، همان درخواست را تکرار کنید", status: 409 };
   }
+  await ensureReservation();
   await finishCreateAtomically(journalId, reseller, { email: meta.email, subId: meta.subId, refs: meta.refs, trafficGB: meta.trafficGB, name: meta.name }, pending);
   const subLink = await buildSubLink(meta.subId, reseller, meta.refs[0]?.panelId || "");
   return { ok: true, email: meta.email, subId: meta.subId, subLink, pending };
@@ -322,6 +339,8 @@ async function createResellerUserCoreInner(
   }
 
   // ---- شناسه‌ها (قبل از هر اثر ماندگار/ریموت — همهٔ validation سبک اینجا تمام می‌شود) ----
+  const selectable = await validateAvailableInboundSelection(refs, panelResult);
+  if (!selectable.ok) return { ok: false, status: selectable.status, error: selectable.msg };
   // پل 3x-ui (ربات میرزا): ایمیل دقیق و subId دلخواه ربات؛ در داشبورد: پسوند تصادفی
   let email: string;
   if (params.exactEmail) {
