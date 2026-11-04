@@ -72,3 +72,16 @@ client errors. TypeScript, targeted ESLint and whitespace checks passed.
 
 Deployment evidence and all private identifiers belong in the private operating
 memory/receipts, never in this public incident record.
+
+## Production acceptance
+
+The final standalone image passed 79 customer, 41 lifecycle and 45 audit checks
+in disposable containers with no external network, host ports or production
+data mount. Read-only production acceptance then verified both active reseller
+scopes against native health: the union contains 11 healthy assigned inbounds;
+the one offline inbound is absent from both catalogs and bridge listings.
+All 64 customers remain live with their stored rows intact. Every non-log
+dashboard table, native inbound configuration, other service/container identity
+and listener matched across the dashboard replacement. Existing backup and
+observation timers remain active. The final archive was checked against all
+eight dashboard tables and its recovery key; it includes no native panel export.
