@@ -25,7 +25,7 @@ try{
   else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
   else if(url==='/panel/api/clients/add'){const v=body.client;clients.set(key(p,v.email),{...v,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
-  else if(url.startsWith('/panel/api/clients/update/')){if(c)Object.assign(c,body);else{success=false;msg='client not found'}}
+  else if(url.startsWith('/panel/api/clients/update/')){if(c){if(!m.dropUpdate)Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true}}else{success=false;msg='client not found'}}
   else if(url.startsWith('/panel/api/clients/del/')){if(m.deleteAckOnly){}else if(m.badMissing){success=false;msg='API route not found'}else if(m.failB&&p==='b'){success=false;msg='temporarily unavailable'}else clients.delete(key(p,email));}
   else if(url.startsWith('/panel/api/clients/resetTraffic/')){if(c){c.used=0;m.resets=(m.resets||0)+1;if(m.loseResetResponse){m.loseResetResponse=false;success=false;msg='connection closed after reset'}}}
   else if(url==='/panel/api/clients/onlines')obj=[];
@@ -48,6 +48,34 @@ try{
  const exhausted=await owner('exhausted',10);await seed(exhausted,'exhausted',9);result=await api(exhausted,'/api/reseller/users/exhausted/reset-traffic','POST',{});check('reset cannot reuse quota when pool has no headroom',()=>{assert.equal(result.status,403);assert.equal(clients.get(key('a','exhausted')).used,9*GB)});
  const enough=await owner('enough',30);await seed(enough,'enough',9);result=await api(enough,'/api/reseller/users/enough/reset-traffic','POST',{});const resetOwner=await db.reseller.findUnique({where:{id:enough.id}});check('funded reset remains supported and consumption debited once',()=>{assert.equal(result.status,200);assert.equal(resetOwner.consumedGB,9);assert.equal(clients.get(key('a','enough')).enable,true)});
  const shrink=await owner('shrink',30);await seed(shrink,'shrink',2);result=await api(shrink,'/api/reseller/users/shrink','PUT',{trafficGB:5});check('legitimate quota decrease above usage remains supported',()=>assert.equal(result.status,200));
+ const renewal=await owner('renewal',50);const renewing=await seed(renewal,'renewing',21.26);renewing.enable=false;renewing.totalGB=20*GB;await db.resellerUser.update({where:{resellerId_email:{resellerId:renewal.id,email:'renewing'}},data:{trafficGB:20}});
+ mode.set('renewing',{pendingUpdate:true});result=await api(renewal,'/api/reseller/users/renewing','PUT',{trafficGB:50});
+ check('verified queued increase is accepted without claiming node completion',()=>{assert.equal(result.status,202);assert.equal(result.data.pending,true);assert.equal(renewing.totalGB,50*GB)});
+ let queued=await db.resellerUser.findUnique({where:{resellerId_email:{resellerId:renewal.id,email:'renewing'}}});
+ check('queued increase moves reservation into allocation exactly once',()=>assert.equal(queued.trafficGB,50));
+ result=await api(renewal,'/api/reseller/users/renewing','PUT',{enable:true});
+ check('queued increase can activate healthy locations without resetting usage',()=>{assert.equal(result.status,202);assert.equal(result.data.pending,true);assert.equal(renewing.enable,true)});
+ const reserved=await db.operationJournal.findFirst({where:{resellerId:renewal.id,email:'renewing',type:'UPDATE'}});
+ check('queued retry retains pending journal without double reservation',()=>{assert.equal(reserved.reservedGB,0);assert.equal(reserved.status,'PARTIAL');assert.equal(renewing.used,21.26*GB)});
+ // Reproduce a legacy partially applied increase: native50, tracked20, reserved30.
+ await db.resellerUser.update({where:{id:queued.id},data:{trafficGB:20}});await db.operationJournal.update({where:{id:reserved.id},data:{reservedGB:30,metadata:JSON.stringify({newTrafficGB:50})}});
+ result=await api(renewal,'/api/reseller/users/renewing','PUT',{enable:true});
+ check('enable-only resumes a legacy funded increase using its original quota',()=>{assert.equal(result.status,202);assert.equal(result.data.pending,true)});
+ result=await api(renewal,'/api/reseller/users/renewing','PUT',{trafficGB:40});
+ check('a pending update cannot change its funded target',()=>assert.equal(result.status,409));
+ mode.delete('renewing');result=await api(renewal,'/api/reseller/users/renewing','PUT',{trafficGB:50});
+ check('same quota retry completes with zero free pool and no duplicate charge',()=>{assert.equal(result.status,200)});
+ result=await api(renewal,'/api/reseller/users/renewing','PUT',{enable:true});
+ check('customer can activate after the funded increase finishes',()=>{assert.equal(result.status,200);assert.equal(renewing.enable,true);assert.equal(renewing.used,21.26*GB)});
+ const over=await owner('overshoot',10);const exceeded=await seed(over,'overshoot',10.1);result=await api(over,'/api/reseller/users/overshoot','PUT',{enable:false});
+ check('an exhausted customer can be disabled without lowering quota or resetting use',()=>{assert.equal(result.status,200);assert.equal(exceeded.enable,false);assert.equal(exceeded.used,10.1*GB)});
+ result=await api(over,'/api/reseller/users/overshoot','PUT',{enable:true});check('activation never bypasses exhausted quota',()=>assert.equal(result.status,403));
+ const delayed=await owner('queued-decrease',30);await seed(delayed,'queued-decrease',2);mode.set('queued-decrease',{pendingUpdate:true});result=await api(delayed,'/api/reseller/users/queued-decrease','PUT',{trafficGB:5});
+ const decreased=await db.resellerUser.findUnique({where:{resellerId_email:{resellerId:delayed.id,email:'queued-decrease'}}});
+ check('queued quota decrease never refunds the still-usable old allocation',()=>{assert.equal(result.status,502);assert.equal(decreased.trafficGB,10)});
+ const unverified=await owner('unverified-queue',50);await seed(unverified,'unverified-queue',2);mode.set('unverified-queue',{pendingUpdate:true,dropUpdate:true});result=await api(unverified,'/api/reseller/users/unverified-queue','PUT',{trafficGB:20});
+ const unverifiedUser=await db.resellerUser.findUnique({where:{resellerId_email:{resellerId:unverified.id,email:'unverified-queue'}}});
+ check('unverified queued acknowledgement never commits local allocation',()=>{assert.equal(result.status,502);assert.equal(unverifiedUser.trafficGB,10)});
  const orphan=await seed(shrink,'orphan',3);orphan.ids=new Set();result=await api(shrink,'/api/reseller/users/orphan','DELETE');const orphanOwner=await db.reseller.findUnique({where:{id:shrink.id}});check('orphan without inbound stats deletes using verified central usage',()=>{assert.equal(result.status,200);assert.equal(orphanOwner.consumedGB,3);assert.equal(clients.has(key('a','orphan')),false)});
  const deletion=await owner('deletion');await seed(deletion,'ack-only',1);mode.set('ack-only',{deleteAckOnly:true});result=await api(deletion,'/api/reseller/users/ack-only','DELETE');const ackTracked=await db.resellerUser.findUnique({where:{resellerId_email:{resellerId:deletion.id,email:'ack-only'}}});check('fake delete success is rejected and local allocation retained',()=>{assert.ok(result.status>=400);assert.equal(ackTracked.trafficGB,10)});
  await seed(deletion,'bad-missing',1);mode.set('bad-missing',{badMissing:true});result=await api(deletion,'/api/reseller/users/bad-missing','DELETE');check('unrelated not-found response cannot release quota',()=>assert.ok(result.status>=400));

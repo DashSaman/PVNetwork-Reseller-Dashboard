@@ -27,7 +27,7 @@ try{
   else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
   else if(url==='/panel/api/clients/add'){const v=body.client;clients.set(key(p,v.email),{...v,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
-  else if(url.startsWith('/panel/api/clients/update/')){if(m.failUpdate){success=false;msg='temporary failure'}else if(c)Object.assign(c,body);else{success=false;msg='client not found'}}
+  else if(url.startsWith('/panel/api/clients/update/')){if(m.failUpdate){success=false;msg='temporary failure'}else if(c){Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true}}else{success=false;msg='client not found'}}
   else if(url.startsWith('/panel/api/clients/del/')){if(m.deleteAckOnly){}else if(m.badMissing){success=false;msg='API route not found'}else if(m.failB&&p==='b'){success=false;msg='temporarily unavailable'}else clients.delete(key(p,email));}
   else if(url.startsWith('/panel/api/clients/resetTraffic/')){if(c){c.used=0;m.resets=(m.resets||0)+1;if(m.loseResetResponse){m.loseResetResponse=false;success=false;msg='connection closed after reset'}}}
   else if(url==='/panel/api/clients/onlines')obj=[];
@@ -173,6 +173,18 @@ try{
    const historyCount=await page.getByRole('button',{name:/^سابقه /}).count();
    check('reseller no longer offers unused consumption history',()=>assert.equal(historyCount,0));
    await customerRow.hover();await page.screenshot({path:path.join(dir,'customer-tools-desktop.png'),fullPage:true});
+   mode.set('first_customer',{pendingUpdate:true});
+   const queuedUsage=first.used;const queuedResult=await api(source,'/api/reseller/users/first_customer','PUT',{trafficGB:20});
+   await page.reload({waitUntil:'networkidle'});await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).click();
+   const queuedQuota=await page.getByLabel('سهمیهٔ کاربر در ویرایش').inputValue();
+   check('browser resumes original queued quota instead of old allocation',()=>{assert.equal(queuedResult.status,202);assert.equal(queuedQuota,'20')});
+   await page.getByRole('dialog').getByRole('switch').click();await page.getByRole('dialog').getByRole('button',{name:'ذخیره',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+   await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).waitFor();
+   check('browser queued activation preserves usage and pending status',()=>{assert.equal(first.enable,true);assert.equal(first.used,queuedUsage)});
+   await page.screenshot({path:path.join(dir,'queued-update-desktop.png'),fullPage:true});
+   mode.delete('first_customer');await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'ذخیره',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+   await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).waitFor({state:'hidden'});
+   check('browser clears pending marker only after native sync confirmation',()=>assert.ok(true));
    await page.getByLabel('فیلتر گروه کاربران').selectOption('');await page.getByRole('button',{name:'کاربر جدید',exact:true}).click();
    await page.getByLabel('شروع اعتبار کاربر').selectOption('first-use');await page.getByLabel('روز اعتبار از اولین اتصال').fill('45');
    await page.waitForTimeout(300);await page.screenshot({path:path.join(dir,'first-use-desktop.png'),fullPage:true});

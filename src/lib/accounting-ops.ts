@@ -399,13 +399,26 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
 export async function updateUserByJournal(
   resellerId: string,
   email: string,
-  desired: { trafficGB: number; note?: string; snapshotStartedAt?: number },
-  applyRemote: () => Promise<string[]>,
+  desired: { trafficGB: number; enable?: boolean; note?: string; snapshotStartedAt?: number },
+  applyRemote: () => Promise<string[] | { errors: string[]; pending: boolean }>,
   commitLocal: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<void>
-): Promise<{ ok: true } | { ok: false; status: number; msg: string; partial?: boolean }> {
+): Promise<{ ok: true; pending?: boolean } | { ok: false; status: number; msg: string; partial?: boolean }> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
+
+    // Resolve an unfinished target before validating a stale inherited quota.
+    const existingJournal = await findResumableJournal(resellerId, email, "UPDATE");
+    const existingRow = existingJournal ? await db.operationJournal.findUnique({ where: { id: existingJournal.id } }) : null;
+    const meta = JSON.parse(existingRow?.metadata || "{}") as { newTrafficGB?: number; bulkJobId?: string; kind?: string; localCommitted?: boolean };
+    if (existingJournal) {
+      if (meta.localCommitted && desired.snapshotStartedAt !== undefined && existingRow!.updatedAt.getTime() >= desired.snapshotStartedAt) return { ok: false, status: 409, msg: "کاربر هنگام آماده‌سازی درخواست تغییر کرده؛ صفحه را بازخوانی و دوباره ویرایش کنید" };
+      if (meta.kind === "SUBSCRIPTION_ROTATION") return { ok: false, status: 409, msg: "تغییر لینک اشتراک در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
+      if (meta.kind === "CUSTOMER_STATUS") return { ok: false, status: 409, msg: "تغییر گروهی وضعیت در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
+      if (meta.bulkJobId) return { ok: false, status: 409, msg: "افزایش گروهی این کاربر در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
+      if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB) return { ok: false, status: 409, msg: `ویرایش قبلی با سهمیهٔ ${meta.newTrafficGB} گیگ هنوز در جریان است؛ ابتدا همان ویرایش را ادامه دهید` };
+    }
+    const ownReserved = existingRow?.reservedGB ?? 0;
 
     // C1: نمایندهٔ محدود هرگز کاربر نامحدود نمی‌سازد
     if (desired.snapshotStartedAt !== undefined) {
@@ -432,21 +445,7 @@ export async function updateUserByJournal(
       usedBytes += Math.max(usage.data, canonicalUserUsage(live.panels.filter(p => p.panelId === panelId), email).usedBytes);
     }
     const usedGB = usedBytes / 1073741824;
-    if (desired.trafficGB > 0 && desired.trafficGB < usedGB) return { ok: false, status: 403, msg: "سهمیهٔ جدید نمی‌تواند کمتر از مصرف ثبت‌شدهٔ کاربر باشد" };
-
-    // ژورنال UPDATE فعالِ همین کاربر = resume؛ رزرو خودش نباید_again حساب شود
-    const existingJournal = await findResumableJournal(resellerId, email, "UPDATE");
-    const ownReserved = existingJournal?.status ? (await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { reservedGB: true } }))?.reservedGB ?? 0 : 0;
-    // payload resume باید با هدف اصلی یکی باشد
-    if (existingJournal) {
-      const meta = JSON.parse((await db.operationJournal.findUnique({ where: { id: existingJournal.id }, select: { metadata: true } }))?.metadata || "{}") as { newTrafficGB?: number; bulkJobId?: string; kind?: string };
-      if (meta.kind === "SUBSCRIPTION_ROTATION") return { ok: false, status: 409, msg: "تغییر لینک اشتراک در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
-      if (meta.kind === "CUSTOMER_STATUS") return { ok: false, status: 409, msg: "تغییر گروهی وضعیت در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
-      if (meta.bulkJobId) return { ok: false, status: 409, msg: "افزایش گروهی این کاربر در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
-      if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB) {
-        return { ok: false, status: 409, msg: "عملیات ویرایش در جریان با مقدار متفاوتی تعریف شده — ابتدا همان را تمام کنید" };
-      }
-    }
+    if (desired.trafficGB > 0 && desired.trafficGB < usedGB && (desired.trafficGB !== loaded.tracked.trafficGB || desired.enable === true)) return { ok: false, status: 403, msg: "سهمیهٔ کاربر از مصرف فعلی کمتر است؛ ابتدا حجم کافی اضافه کنید و سپس فعال کنید" };
 
     // C2: دلتای افزایش سهمیه باید قبل از اولین اثر ریموت رزرو شود
     const delta = Math.max(0, desired.trafficGB - loaded.tracked.trafficGB);
@@ -480,7 +479,9 @@ export async function updateUserByJournal(
       await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null } });
     }
 
-    const errors = await applyRemote();
+    const remote = await applyRemote();
+    const errors = Array.isArray(remote) ? remote : remote.errors;
+    const pending = !Array.isArray(remote) && remote.pending;
     let finalUsedBytes = 0;
     // A route must not silently skip a required target and then release allocation.
     for (const panelId of required.panelIds) {
@@ -493,6 +494,8 @@ export async function updateUserByJournal(
     if (!errors.length && desired.trafficGB > 0 && desired.trafficGB < loaded.tracked.trafficGB) {
       if (finalUsedBytes > desired.trafficGB * 1073741824) errors.push("مصرف در زمان ویرایش تغییر کرده؛ کاهش سهمیه تأیید نشد");
     }
+    // A queued decrease must keep the larger allocation until every node confirms.
+    if (pending && (desired.trafficGB < loaded.tracked.trafficGB || loaded.tracked.trafficGB === 0 && desired.trafficGB > 0)) errors.push("کاهش سهمیه تا پایان همگام‌سازی لوکیشن‌ها ثبت نهایی نمی‌شود");
     if (errors.length > 0) {
       await db.operationJournal.update({
         where: { id: journal.id },
@@ -507,9 +510,20 @@ export async function updateUserByJournal(
       await commitLocal(tx);
       await tx.operationJournal.update({
         where: { id: jid },
-        data: { status: "SUCCESS", reservedGB: 0, completedPanels: jTargets, failedPanels: "[]" },
+        data: { status: pending ? "PARTIAL" : "SUCCESS", reservedGB: 0, completedPanels: pending ? "[]" : jTargets, failedPanels: "[]", lastError: pending ? "تغییر در مرجع ثبت شده؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند" : null, metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: true, nativePending: pending }) },
       });
     });
-    return { ok: true };
+    return { ok: true, pending };
   });
+}
+
+/** An enable-only continuation must not resurrect the old pre-increase quota. */
+export async function pendingUpdateQuota(resellerId: string, email: string, fallback: number): Promise<number> {
+  const journal = await findResumableJournal(resellerId, email, "UPDATE");
+  if (!journal) return fallback;
+  const row = await db.operationJournal.findUnique({ where: { id: journal.id }, select: { metadata: true } });
+  try {
+    const meta = JSON.parse(row?.metadata || "{}");
+    return !meta.kind && !meta.bulkJobId && Number.isSafeInteger(meta.newTrafficGB) && meta.newTrafficGB >= fallback ? meta.newTrafficGB : fallback;
+  } catch { return fallback; }
 }

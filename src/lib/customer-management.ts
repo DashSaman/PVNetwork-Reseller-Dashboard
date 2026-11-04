@@ -22,11 +22,15 @@ export async function ownedCustomers(resellerId: string, input: unknown) {
 export async function customerMetadata(users: { id: string; email: string }[]) {
   const entries = await db.setting.findMany({ where: { key: { in: users.map(u => customerMetaKey(u.id)) } } });
   const values = new Map(entries.map(s => [s.key, s.value]));
+  const updates = await db.operationJournal.findMany({ where: { userId: { in: users.map(u => u.id) }, type: 'UPDATE', status: { in: ['PENDING', 'RUNNING', 'PARTIAL'] } }, orderBy: { createdAt: 'desc' }, select: { userId: true, metadata: true } });
   return users.map(u => {
     const value = parseSetting<{ labels?: unknown } | null>(values.get(customerMetaKey(u.id)), null);
     let labels: string[] = [];
     try { labels = normalizedLabels(value?.labels || []); } catch { /* Invalid restored metadata must not break the user list. */ }
-    return { email: u.email, labels };
+    const operation = updates.find(j => j.userId === u.id);
+    const pending = parseSetting<{ newTrafficGB?: number; kind?: string; bulkJobId?: string; localCommitted?: boolean } | null>(operation?.metadata, null);
+    const pendingUpdate = pending && !pending.kind && !pending.bulkJobId && Number.isSafeInteger(pending.newTrafficGB) && pending.newTrafficGB! >= 0 ? { trafficGB: pending.newTrafficGB!, localCommitted: pending.localCommitted === true } : null;
+    return { email: u.email, labels, pendingUpdate };
   });
 }
 

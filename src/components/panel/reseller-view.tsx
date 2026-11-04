@@ -837,7 +837,7 @@ function UsersTab({
     setEditing(u);
     setEditForm({
       name: u.name || u.email.split("-")[0],
-      trafficGB: String(u.trafficGB || u.totalGB || 0),
+      trafficGB: String(tools.data.get(u.email)?.pendingUpdate?.trafficGB ?? u.trafficGB ?? u.totalGB ?? 0),
       expiryDate: u.expiryTime > 0 ? new Date(u.expiryTime).toISOString().slice(0, 10) : "",
       ipLimit: "",
       enable: u.enable,
@@ -924,7 +924,7 @@ function UsersTab({
   async function saveEdit() {
     if (!editing || !editForm) return;
     setBusy(true);
-    const r = await api<{ ok: boolean }>(`/api/reseller/users/${encodeURIComponent(editing.email)}`, {
+    const r = await api<{ ok: boolean; pending?: boolean }>(`/api/reseller/users/${encodeURIComponent(editing.email)}`, {
       method: "PUT",
       body: JSON.stringify({
         ...editForm,
@@ -937,9 +937,10 @@ function UsersTab({
     });
     setBusy(false);
     if (r.ok) {
-      toast({ title: "موفق", description: "کاربر ویرایش شد" });
+      toast({ title: r.data?.pending ? "تغییر ثبت شد" : "موفق", description: r.data?.pending ? "سهمیه یک‌بار ثبت شد؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند. وضعیت را از «ادامهٔ ویرایش» پیگیری کنید." : "کاربر ویرایش شد" });
       setEditing(null);
       setEditForm(null);
+      void tools.reload();
       reload();
     } else {
       toast({ title: "خطا", description: r.error, variant: "destructive" });
@@ -970,12 +971,13 @@ function UsersTab({
 
   async function toggleEnable(u: ResellerUserRow) {
     if (u.liveFresh === false || u.enable === null) return;
-    const r = await api(`/api/reseller/users/${encodeURIComponent(u.email)}`, {
+    const r = await api<{ pending?: boolean }>(`/api/reseller/users/${encodeURIComponent(u.email)}`, {
       method: "PUT",
       body: JSON.stringify({ enable: !u.enable }),
     });
     if (r.ok) {
-      toast({ title: "موفق", description: !u.enable ? "کاربر فعال شد" : "کاربر غیرفعال شد" });
+      toast({ title: r.data?.pending ? "تغییر ثبت شد" : "موفق", description: r.data?.pending ? "وضعیت در مرجع ثبت شد؛ برخی لوکیشن‌ها هنوز در انتظار همگام‌سازی هستند." : !u.enable ? "کاربر فعال شد" : "کاربر غیرفعال شد" });
+      void tools.reload();
       reload();
     } else {
       toast({ title: "خطا", description: r.error, variant: "destructive" });
@@ -1212,7 +1214,7 @@ function UsersTab({
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} online={onlineSet.has(u.email)} checked={selectedCustomers.has(u.email)} onCheck={() => setSelectedCustomers(previous => { const next = new Set(previous);if (next.has(u.email)) next.delete(u.email);else if (next.size < 50) next.add(u.email);return next; })} /></TableCell>
+                      <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} online={onlineSet.has(u.email)} onResume={() => openEdit(u)} resumeDisabled={u.liveFresh === false || u.expiryTime === null || u.enable === null} checked={selectedCustomers.has(u.email)} onCheck={() => setSelectedCustomers(previous => { const next = new Set(previous);if (next.has(u.email)) next.delete(u.email);else if (next.size < 50) next.add(u.email);return next; })} /></TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1 max-w-40">
                           {u.inboundTags.slice(0, 3).map((t, idx) => (
@@ -1547,6 +1549,7 @@ function UsersTab({
           </DialogHeader>
           {editForm && (
             <div className="grid gap-4 py-2">
+              {editing && tools.data.get(editing.email)?.pendingUpdate && <p role="status" className="rounded-lg border border-amber-500/30 p-3 text-xs text-amber-700 dark:text-amber-300">ویرایش قبلی هنوز کامل نشده است. سهمیهٔ همان ویرایش در فرم قرار گرفته است؛ برای پیگیری دوباره ذخیره کنید. مصرف کاربر ریست نمی‌شود.</p>}
               <div className="space-y-2">
                 <Label>نام/یادداشت</Label>
                 <Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
@@ -1555,6 +1558,7 @@ function UsersTab({
                 <div className="space-y-2">
                   <Label>سهمیه ترافیک (گیگ) {poolLimited ? "— الزامی" : "— ۰ = نامحدود"}</Label>
                   <NumberInput
+                    aria-label="سهمیهٔ کاربر در ویرایش"
                     value={editForm.trafficGB}
                     onValueChange={(v) => setEditForm({ ...editForm, trafficGB: v })}
                   />

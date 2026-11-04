@@ -17,7 +17,7 @@ import {
   type InboundRef,
   type ResellerWithInbounds,
 } from "@/lib/reseller-helpers";
-import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState } from "@/lib/accounting-ops";
+import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
 import { logActivity } from "@/lib/logger";
@@ -502,7 +502,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
       ? (Math.max(0, Number(payload.totalGB) || 0) > 0 ? bytesToGB(Math.max(0, Number(payload.totalGB) || 0)) : 0)
       : payload.trafficGB !== undefined
         ? Math.max(0, Number(payload.trafficGB) || 0)
-        : tracked.trafficGB;
+        : await pendingUpdateQuota(reseller.id, email, tracked.trafficGB);
   // سرویس مشترک UPDATE — resumable
   // اعتبارسنجی سهمیه در سرویس مشترک updateUserByJournal
 
@@ -519,7 +519,8 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
 
   const errors: string[] = [];
-  const applyRemote = async (): Promise<string[]> => {
+  const applyRemote = async (): Promise<{ errors: string[]; pending: boolean }> => {
+  let pending = false;
   const donePanels = new Set<string>();
   for (const ref of refs) {
     if (donePanels.has(ref.panelId)) continue;
@@ -540,14 +541,14 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
       enable,
       subId: newSubId || tracked.subId || "",
     });
-    if (!upd.ok) errors.push(upd.msg || "ویرایش ناموفق");
+    if (!upd.ok) { if (upd.pending) pending = true; else errors.push(upd.msg || "ویرایش ناموفق"); }
   }
-  return errors;
+  return { errors, pending };
   };
   const updateRes = await updateUserByJournal(
     reseller.id,
     email,
-    { trafficGB, snapshotStartedAt },
+    { trafficGB, enable, snapshotStartedAt },
     applyRemote,
     async (tx) => {
       await tx.resellerUser.update({
@@ -564,7 +565,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
     detail: `${email} | سهمیه: ${trafficGB || "نامحدود"}GB`,
     resellerId: reseller.id,
   });
-  return xui(true, "");
+  return xui(true, updateRes.pending ? "تغییر ثبت شد؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند" : "", updateRes.pending ? { nodePending: true } : undefined);
 }
 
 async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string) {

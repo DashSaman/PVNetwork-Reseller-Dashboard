@@ -105,8 +105,11 @@ export async function updateMasterClient(auth: PanelAuth, email: string, patch: 
     if (!current || patch.id && patch.id !== identity(current.client)) return failure("هویت حساب برای ویرایش مطابقت ندارد");
     const supplied = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
     const r = await request(auth, `/panel/api/clients/update/${encodeURIComponent(email)}`, { method: "POST", json: nodePayload(current.client, supplied) });
-    if (r.ok && (r.data as { nodePending?: boolean } | undefined)?.nodePending) return { ok: false, pending: true, msg: "همگام‌سازی لوکیشن‌ها هنوز کامل نشده است" };
-    return r.ok ? verifyMasterClientUpdate(auth, email, patch, request) : r;
+    if (!r.ok) return r;
+    const verified = await verifyMasterClientUpdate(auth, email, { ...patch, id: identity(current.client) }, request);
+    if (!verified.ok) return verified;
+    if ((r.data as { nodePending?: boolean } | undefined)?.nodePending) return { ok: false, pending: true, msg: "تغییر در مرجع تأیید شد؛ همگام‌سازی برخی لوکیشن‌ها هنوز کامل نشده است" };
+    return verified;
   } catch { return failure("خواندن و ذخیرهٔ کامل مشخصات حساب ممکن نشد"); }
 }
 
@@ -152,7 +155,7 @@ export async function syncNodeClientUpdate(auth: PanelAuth, email: string, clien
 export async function verifyMasterClientUpdate(auth: PanelAuth, email: string, client: Partial<PanelClient>, request: NativeRequest): Promise<PanelApiResult> {
   try {
     const after = await detail(request, auth, email);
-    if (!after || !(["totalGB", "expiryTime", "enable", "subId"] as const).every(k => client[k] === undefined || after.client[k] === client[k])) return failure("ذخیرهٔ نهایی حساب مرجع تأیید نشد");
+    if (!after || client.id !== undefined && identity(after.client) !== client.id || !(["totalGB", "expiryTime", "enable", "subId", "limitIp", "flow", "password", "tgId", "reset"] as const).every(k => client[k] === undefined || after.client[k] === client[k])) return failure("ذخیرهٔ نهایی حساب مرجع تأیید نشد");
     return { ok: true };
   } catch { return failure("خواندن نتیجهٔ نهایی حساب مرجع موفق نبود"); }
 }

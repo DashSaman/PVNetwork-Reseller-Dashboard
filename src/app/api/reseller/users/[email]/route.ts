@@ -23,7 +23,7 @@ import {
   type PanelAuth,
 } from "@/lib/panel";
 import { randomUuid } from "@/lib/crypto";
-import { deleteUserByJournal, updateUserByJournal, getQuotaState } from "@/lib/accounting-ops";
+import { deleteUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota } from "@/lib/accounting-ops";
 import { logActivity } from "@/lib/logger";
 
 type Ctx = { params: Promise<{ email: string }> };
@@ -107,7 +107,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     // سرویس مشترک UPDATE — resumable: retry همان ژورنال PARTIAL را ادامه می‌دهد
 
     // ---- سهمیه و پول ----
-    const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : tracked.trafficGB;
+    const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : await pendingUpdateQuota(reseller.id, email, tracked.trafficGB);
 
     // اعتبارسنجی سهمیه در سرویس مشترک updateUserByJournal انجام می‌شود (شامل رزرو دلتا و رزرو خودِ عملیات resume)
 
@@ -140,8 +140,9 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const removed = currentRefs.filter((r) => !newKeys.has(refKey(r)));
     const added = newRefs.filter((r) => !curKeys.has(refKey(r)));
 
-    const applyRemote = async (): Promise<string[]> => {
+    const applyRemote = async (): Promise<{ errors: string[]; pending: boolean }> => {
     const errors: string[] = [];
+    let pending = false;
 
     // گروه‌بندی به تفکیک پنل
     const removedByPanel = new Map<string, number[]>();
@@ -208,15 +209,18 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         enable: body.enable === undefined ? undefined : enable,
         subId: body.subId !== undefined ? body.subId : current.subId,
       });
-      if (!upd.ok) errors.push(`ویرایش: ${upd.msg}`);
+      if (!upd.ok) {
+        if (upd.pending) pending = true;
+        else errors.push(`ویرایش: ${upd.msg}`);
+      }
     }
 
-    return errors;
+    return { errors, pending };
     };
     const updateRes = await updateUserByJournal(
       reseller.id,
       email,
-      { trafficGB, snapshotStartedAt },
+      { trafficGB, enable: body.enable, snapshotStartedAt },
       applyRemote,
       async (tx) => {
         await tx.resellerUser.update({
@@ -244,7 +248,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     });
 
     const subLink = await buildSubLink(body.subId !== undefined ? body.subId : current.subId, reseller, newRefs[0]?.panelId || primaryPanelId);
-    return NextResponse.json({ ok: true, subLink });
+    return NextResponse.json({ ok: true, subLink, pending: updateRes.pending === true }, { status: updateRes.pending ? 202 : 200 });
   } catch (e) {
     console.error("update user error:", e);
     return NextResponse.json({ error: "خطای داخلی در ویرایش کاربر" }, { status: 500 });

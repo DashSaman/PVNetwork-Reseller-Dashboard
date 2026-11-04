@@ -10,7 +10,7 @@ const original = () => ({ email: 'user', uuid: 'same-uuid', id: 123, totalGB: 44
 async function fixture(fn) {
   const calls = [];
   async function panel(name) {
-    const p = { client: original(), ids: [1], fail: false, resets: 0, server: null };
+    const p = { client: original(), ids: [1], fail: false, resets: 0, server: null, pending: false, ignorePatch: false };
     p.server = http.createServer(async (req, res) => {
       let raw = ''; for await (const c of req) raw += c;
       const body = raw ? JSON.parse(raw) : null;
@@ -22,7 +22,8 @@ async function fixture(fn) {
         else obj = { client: p.client, inboundIds: p.ids, usedTraffic: 12345 };
       } else if (req.url.includes('/update/')) {
         if (name === 'node') assert.equal(body.limitIp, 3);
-        p.client = { ...p.client, ...body, id: 123 };
+        if (!p.ignorePatch) p.client = { ...p.client, ...body, id: 123 };
+        if (p.pending) obj = { nodePending: true };
       } else if (req.url.includes('/resetTraffic/')) { p.resets++; }
       else if (req.url.includes('/del/')) { p.client = null; }
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success, obj, msg }));
@@ -38,6 +39,15 @@ async function fixture(fn) {
   finally { for (const p of [master, node]) p.server.closeAllConnections(); await Promise.all([master, node].map(p => new Promise(r => p.server.close(r)))); }
 }
 const desired = extra => ({ id: 'same-uuid', email: 'user', totalGB: 44 * GB, expiryTime: 2000000000000, enable: true, subId: 'same-sub', limitIp: 0, ...extra });
+
+test('queued master update is distinguished from an unverified native acknowledgement', () => fixture(async ({ master, auth }) => {
+  master.pending = true;
+  let r = await updateClient(auth, 'user', 'vless', desired({totalGB:50*GB}));
+  assert.equal(r.ok,false);assert.equal(r.pending,true);assert.equal(master.client.totalGB,50*GB);
+  master.ignorePatch = true;
+  r = await updateClient(auth, 'user', 'vless', desired({totalGB:51*GB}));
+  assert.equal(r.ok,false);assert.notEqual(r.pending,true);
+}));
 test('stale unlinked node quota and expiry are updated before master enable; identity/counters/settings preserved', () => fixture(async ({ master, node, auth, calls }) => {
   node.client.totalGB = 20 * GB; node.client.expiryTime = 1800000000000; node.client.enable = false;
   assert.equal((await updateClient(auth, 'user', 'vless', desired())).ok, true);
