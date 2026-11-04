@@ -7,6 +7,7 @@
 
 import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
 import https from "node:https";
+import { nodesSynchronized } from './queued-update';
 import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifiedClientUsage, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
 export type PanelInbound = {
@@ -447,6 +448,21 @@ export async function detachClient(
 /** حذف کلاینت از همه اینباندها (رکورد یکتا) */
 export async function getVerifiedClientUsage(auth: PanelAuth, email: string, expectedTotalBytes?: number): Promise<PanelApiResult<number>> {
   return verifiedClientUsage(auth, email, panelRequest, expectedTotalBytes);
+}
+
+/** Read-only confirmation; never retry the customer's mutation here. */
+export async function arePanelNodesSynchronized(auth: PanelAuth): Promise<boolean> {
+  const result = await panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 4000 });
+  return result.ok && nodesSynchronized(result.data);
+}
+
+export async function isQueuedClientSaved(auth: PanelAuth, email: string, quotaBytes: number, subId: string, inboundIds: number[]): Promise<boolean> {
+  if (!subId || !inboundIds.length) return false;
+  const result = await panelRequest<{ client: { email?: string; uuid?: string; id?: string; subId?: string; totalGB?: number }; inboundIds?: number[] }>(auth, `/panel/api/clients/get/${encodeURIComponent(email)}`, { timeoutMs: 4000 });
+  const client = result.data?.client, ids = result.data?.inboundIds;
+  if (!result.ok || !client || client.email !== email || !(client.uuid || client.id) || client.subId !== subId || client.totalGB !== quotaBytes || !Array.isArray(ids) || !inboundIds.every(id => ids.includes(id))) return false;
+  const usage = await getVerifiedClientUsage(auth, email, quotaBytes);
+  return usage.ok && usage.data !== undefined;
 }
 
 export async function deleteClient(auth: PanelAuth, email: string, progress?: NodeMutationProgress): Promise<PanelApiResult> {

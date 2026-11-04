@@ -24,6 +24,7 @@ try{
   const email=decodeURIComponent(url.split('/').at(-1)),c=clients.get(key(p,email)),m=mode.get(email)||{};
   if(url==='/panel/api/inbounds/list'){if(mode.get('delay'))await new Promise(r=>setTimeout(r,1500));obj=[1,2,3].map(id=>inbound(p,id));}
   else if(url==='/panel/api/clients/list')obj=[...clients.entries()].filter(([k])=>k.startsWith(p+':')).map(([,c])=>c);
+  else if(url==='/panel/api/nodes/list'){if(mode.get('nodes-unavailable')){success=false;msg='temporarily unavailable'}else obj=[{id:1,enable:true,status:mode.get('nodes-offline')?'offline':'online',configDirty:[...mode.values()].some(m=>m?.pendingUpdate===true)}];}
   else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
   else if(url==='/panel/api/clients/add'){const v=body.client;clients.set(key(p,v.email),{...v,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
@@ -149,6 +150,22 @@ try{
  }
  const manifest=await fetch(base+'/manifest.webmanifest');
  check('mobile installation manifest is available',()=>assert.equal(manifest.status,200));
+ const syncOwner=await owner('sync_owner',50);const syncing=await seed(syncOwner,'sync_customer',2);mode.set('sync_customer',{pendingUpdate:true});
+ await api(syncOwner,'/api/reseller/users/sync_customer','PUT',{trafficGB:20});const syncWrites=nativeWrites.length;
+ result=await api(syncOwner,'/api/reseller/customer-tools');
+ const syncJournal=()=>db.operationJournal.findFirst({where:{resellerId:syncOwner.id,email:'sync_customer',type:'UPDATE'}});
+ check('saved dirty queue is distinguished from an unfinished edit',()=>{assert.equal(result.data.users[0].pendingUpdate.localCommitted,true);assert.equal(nativeWrites.length,syncWrites)});
+ mode.delete('sync_customer');mode.set('nodes-offline',true);await api(syncOwner,'/api/reseller/customer-tools');let syncStatus=await syncJournal();
+ check('offline nodes keep paid queue guarded',()=>assert.equal(syncStatus.status,'PARTIAL'));
+ mode.delete('nodes-offline');mode.set('nodes-unavailable',true);await api(syncOwner,'/api/reseller/customer-tools');syncStatus=await syncJournal();
+ check('unsupported or unreachable node API never means completion',()=>assert.equal(syncStatus.status,'PARTIAL'));
+ mode.delete('nodes-unavailable');const syncSub=syncing.subId;syncing.subId='wrong-identity';await api(syncOwner,'/api/reseller/customer-tools');syncStatus=await syncJournal();
+ check('healthy nodes cannot settle a replaced client identity',()=>assert.equal(syncStatus.status,'PARTIAL'));
+ syncing.subId=syncSub;const syncRows=JSON.stringify(await db.resellerUser.findMany({where:{resellerId:syncOwner.id}}));result=await api(syncOwner,'/api/reseller/customer-tools');syncStatus=await syncJournal();
+ check('read-only confirmation finishes queue without rewriting or billing the customer',()=>{assert.equal(syncStatus.status,'SUCCESS');assert.equal(result.data.users[0].pendingUpdate,null);assert.equal(nativeWrites.length,syncWrites);assert.equal(syncing.used,2*GB)});
+ const settledSyncRows=JSON.stringify(await db.resellerUser.findMany({where:{resellerId:syncOwner.id}}));check('confirmation preserves all tracked customer fields',()=>assert.equal(settledSyncRows,syncRows));
+ mode.set('sync_customer',{pendingUpdate:true});await api(syncOwner,'/api/reseller/users/sync_customer','PUT',{trafficGB:25});mode.delete('sync_customer');const collectorWrites=nativeWrites.length;await adminApi('/api/admin/customer-observations','POST');syncStatus=await syncJournal();
+ check('existing background collector confirms saved updates without replaying mutation',()=>{assert.equal(syncStatus.status,'SUCCESS');assert.equal(nativeWrites.length,collectorWrites);assert.equal(syncing.totalGB,25*GB)});
  if(process.env.PLAYWRIGHT_MODULE){
   const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE));const browser=await chromium.launch({headless:true,channel:'chrome'});
   try{
@@ -175,16 +192,25 @@ try{
    await customerRow.hover();await page.screenshot({path:path.join(dir,'customer-tools-desktop.png'),fullPage:true});
    mode.set('first_customer',{pendingUpdate:true});
    const queuedUsage=first.used;const queuedResult=await api(source,'/api/reseller/users/first_customer','PUT',{trafficGB:20});
-   await page.reload({waitUntil:'networkidle'});await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).click();
+   await page.reload({waitUntil:'networkidle'});await page.getByLabel('ویرایش first_customer',{exact:true}).click();
    const queuedQuota=await page.getByLabel('سهمیهٔ کاربر در ویرایش').inputValue();
-   check('browser resumes original queued quota instead of old allocation',()=>{assert.equal(queuedResult.status,202);assert.equal(queuedQuota,'20')});
+   check('browser normal edit opens saved queued quota without an unfinished action',()=>{assert.equal(queuedResult.status,202);assert.equal(queuedQuota,'20')});
+   const resumeCount=await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).count();check('saved reseller edit does not offer a misleading continuation',()=>assert.equal(resumeCount,0));
    await page.getByRole('dialog').getByRole('switch').click();await page.getByRole('dialog').getByRole('button',{name:'ذخیره',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-   await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).waitFor();
+   await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).waitFor({state:'hidden'});
    check('browser queued activation preserves usage and pending status',()=>{assert.equal(first.enable,true);assert.equal(first.used,queuedUsage)});
    await page.screenshot({path:path.join(dir,'queued-update-desktop.png'),fullPage:true});
-   mode.delete('first_customer');await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'ذخیره',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-   await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).waitFor({state:'hidden'});
-   check('browser clears pending marker only after native sync confirmation',()=>assert.ok(true));
+   mode.delete('first_customer');mode.set('nodes-offline',true);const beforeConfirm=nativeWrites.length;
+   await api(source,'/api/reseller/customer-tools');let queuedJournal=await db.operationJournal.findFirst({where:{resellerId:source.id,email:'first_customer',type:'UPDATE',status:'PARTIAL'}});
+   check('offline native node keeps the internal queue protected',()=>assert.ok(queuedJournal));
+   mode.delete('nodes-offline');mode.set('nodes-unavailable',true);await api(source,'/api/reseller/customer-tools');queuedJournal=await db.operationJournal.findUnique({where:{id:queuedJournal.id}});
+   check('unreadable node status cannot falsely finish a saved queue',()=>assert.equal(queuedJournal.status,'PARTIAL'));
+   mode.delete('nodes-unavailable');await page.reload({waitUntil:'networkidle'});await page.getByLabel('انتخاب first_customer',{exact:true}).waitFor();
+   queuedJournal=await db.operationJournal.findUnique({where:{id:queuedJournal.id}});
+   check('metadata automatically confirms healthy nodes without another customer mutation',()=>{assert.equal(queuedJournal.status,'SUCCESS');assert.equal(nativeWrites.length,beforeConfirm);assert.equal(first.used,queuedUsage);assert.equal(first.totalGB,20*GB)});
+   mode.set('first_customer',{failUpdate:true});await api(source,'/api/reseller/users/first_customer','PUT',{trafficGB:25});await page.reload({waitUntil:'networkidle'});await page.getByRole('button',{name:'ادامهٔ ویرایش first_customer',exact:true}).click();
+   const failedQuota=await page.getByLabel('سهمیهٔ کاربر در ویرایش').inputValue();check('a genuinely incomplete edit still offers its original funded continuation',()=>assert.equal(failedQuota,'25'));
+   mode.delete('first_customer');await page.getByRole('dialog').getByRole('button',{name:'ذخیره',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
    await page.getByLabel('فیلتر گروه کاربران').selectOption('');await page.getByRole('button',{name:'کاربر جدید',exact:true}).click();
    await page.getByLabel('شروع اعتبار کاربر').selectOption('first-use');await page.getByLabel('روز اعتبار از اولین اتصال').fill('45');
    await page.waitForTimeout(300);await page.screenshot({path:path.join(dir,'first-use-desktop.png'),fullPage:true});

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { nextUsageObservation } from './customer-model';
 import { CUSTOMER_ACTIVE, customerHistory, customerHistoryKey, parseSetting } from './customer-management';
 import { canonicalUserUsage, withResellerLock } from './reseller-helpers';
-import { getRequiredUserPanelIds } from './accounting-ops';
+import { getRequiredUserPanelIds, confirmQueuedUserUpdates } from './accounting-ops';
 import { getAllPanelInboundsFresh } from './panel-manager';
 import { sendThresholdAlerts, type ThresholdAlert } from './telegram';
 import { isAdminManagedReseller } from './reseller-ownership';
@@ -32,6 +32,7 @@ export async function collectCustomerObservations() {
     const resellers = await db.reseller.findMany({ take: 100 });
     for (const reseller of resellers) {
       const alerts = await withResellerLock(reseller.id, async () => {
+        await confirmQueuedUserUpdates(reseller.id, true);
         const list: ThresholdAlert[] = [], preferences = await loadAlertPreferences(reseller.id);
         const snapshot = await getAllPanelInboundsFresh();
         const users = await db.resellerUser.findMany({ where: { resellerId: reseller.id }, take: 2000 });

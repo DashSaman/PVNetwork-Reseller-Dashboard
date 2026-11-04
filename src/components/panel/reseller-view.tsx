@@ -937,7 +937,7 @@ function UsersTab({
     });
     setBusy(false);
     if (r.ok) {
-      toast({ title: r.data?.pending ? "تغییر ثبت شد" : "موفق", description: r.data?.pending ? "سهمیه یک‌بار ثبت شد؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند. وضعیت را از «ادامهٔ ویرایش» پیگیری کنید." : "کاربر ویرایش شد" });
+      toast({ title: "کاربر ویرایش شد", description: r.data?.pending ? "تغییر ذخیره شد؛ همگام‌سازی لوکیشن‌ها خودکار پیگیری می‌شود و نیازی به تکرار ویرایش نیست." : undefined });
       setEditing(null);
       setEditForm(null);
       void tools.reload();
@@ -1260,7 +1260,7 @@ function UsersTab({
                           <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.enable === null} title={u.enable === null ? "در انتظار وضعیت زنده" : u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
                             <UserX className={`h-4 w-4 ${u.enable ? "" : "text-[var(--brand)]"}`} />
                           </Button>
-                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.expiryTime === null || u.enable === null} title="ویرایش" onClick={() => openEdit(u)}>
+                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.expiryTime === null || u.enable === null} title="ویرایش" aria-label={`ویرایش ${u.email}`} onClick={() => openEdit(u)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button size="icon" variant="ghost" title="حذف" onClick={() => setDeleting(u)}>

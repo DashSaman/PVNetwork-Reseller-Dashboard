@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
-import { deleteClient, resetClientTraffic, getVerifiedClientUsage, type PanelAuth } from "./panel";
+import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, isQueuedClientSaved, type PanelAuth } from "./panel";
+import { isSavedQueuedUpdate, updateMetadata } from './queued-update';
 import { logActivity } from "./logger";
 import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync";
 
@@ -410,13 +411,14 @@ export async function updateUserByJournal(
     // Resolve an unfinished target before validating a stale inherited quota.
     const existingJournal = await findResumableJournal(resellerId, email, "UPDATE");
     const existingRow = existingJournal ? await db.operationJournal.findUnique({ where: { id: existingJournal.id } }) : null;
-    const meta = JSON.parse(existingRow?.metadata || "{}") as { newTrafficGB?: number; bulkJobId?: string; kind?: string; localCommitted?: boolean };
+    const meta = updateMetadata(existingRow?.metadata || null);
+    const savedQueue = !!existingRow && isSavedQueuedUpdate({ ...loaded.tracked, resellerId }, existingRow);
     if (existingJournal) {
       if (meta.localCommitted && desired.snapshotStartedAt !== undefined && existingRow!.updatedAt.getTime() >= desired.snapshotStartedAt) return { ok: false, status: 409, msg: "کاربر هنگام آماده‌سازی درخواست تغییر کرده؛ صفحه را بازخوانی و دوباره ویرایش کنید" };
       if (meta.kind === "SUBSCRIPTION_ROTATION") return { ok: false, status: 409, msg: "تغییر لینک اشتراک در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.kind === "CUSTOMER_STATUS") return { ok: false, status: 409, msg: "تغییر گروهی وضعیت در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.bulkJobId) return { ok: false, status: 409, msg: "افزایش گروهی این کاربر در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
-      if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB) return { ok: false, status: 409, msg: `ویرایش قبلی با سهمیهٔ ${meta.newTrafficGB} گیگ هنوز در جریان است؛ ابتدا همان ویرایش را ادامه دهید` };
+      if (meta.newTrafficGB !== undefined && meta.newTrafficGB !== desired.trafficGB && !(savedQueue && loaded.tracked.trafficGB > 0 && desired.trafficGB > loaded.tracked.trafficGB)) return { ok: false, status: 409, msg: `ویرایش قبلی با سهمیهٔ ${meta.newTrafficGB} گیگ هنوز در جریان است؛ کاهش سهمیه تا پایان همگام‌سازی مجاز نیست` };
     }
     const ownReserved = existingRow?.reservedGB ?? 0;
 
@@ -476,7 +478,7 @@ export async function updateUserByJournal(
       });
     } else {
       // همان ژورنال: PARTIAL → RUNNING (ادامهٔ همان عملیات، نه عملیات جدید) — رزرو دلتا حفظ می‌شود
-      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null } });
+      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null, reservedGB: Math.max(ownReserved, delta), metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: false, nativePending: false }) } });
     }
 
     const remote = await applyRemote();
@@ -526,4 +528,39 @@ export async function pendingUpdateQuota(resellerId: string, email: string, fall
     const meta = JSON.parse(row?.metadata || "{}");
     return !meta.kind && !meta.bulkJobId && Number.isSafeInteger(meta.newTrafficGB) && meta.newTrafficGB >= fallback ? meta.newTrafficGB : fallback;
   } catch { return fallback; }
+}
+
+/** Settle only already-paid queues after read-only native confirmation.
+ * The collector passes locked=true because it already owns this reseller lock.
+ */
+export async function confirmQueuedUserUpdates(resellerId: string, locked = false): Promise<number> {
+  const confirm = async () => {
+    const journals = await db.operationJournal.findMany({ where: { resellerId, type: 'UPDATE', status: 'PARTIAL', reservedGB: 0 }, take: 2000 });
+    if (!journals.length) return 0;
+    const users = await db.resellerUser.findMany({ where: { resellerId, id: { in: journals.flatMap(j => j.userId ? [j.userId] : []) } } });
+    const connections = new Map<string, PanelAuth | null>();
+    let confirmed = 0;
+    for (const journal of journals) {
+      const user = users.find(u => u.id === journal.userId);
+      if (!user || !isSavedQueuedUpdate(user, journal)) continue;
+      if (await db.operationJournal.count({ where: { resellerId, email: user.email, id: { not: journal.id }, status: { in: ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'] } } })) continue;
+      const required = await getRequiredUserPanelIds(user);
+      if (!required.ok) continue;
+      const refs = parseInboundRefs(user.inboundIds, user.panelId);
+      let ready = true;
+      for (const id of required.panelIds) {
+        if (!connections.has(id)) {
+          const connection = await getPanelConnection(id);
+          connections.set(id, connection.ok && await arePanelNodesSynchronized(connection.conn) ? connection.conn : null);
+        }
+        const auth = connections.get(id);
+        if (!auth || !await isQueuedClientSaved(auth, user.email, user.trafficGB * 1073741824, user.subId || '', refs.filter(r => r.panelId === id).map(r => r.inboundId)) || !await arePanelNodesSynchronized(auth)) { ready = false; break; }
+      }
+      if (!ready) continue;
+      const result = await db.operationJournal.updateMany({ where: { id: journal.id, status: journal.status, updatedAt: journal.updatedAt, reservedGB: 0, metadata: journal.metadata }, data: { status: 'SUCCESS', completedPanels: journal.targetPanels, failedPanels: '[]', lastError: null, metadata: JSON.stringify({ ...updateMetadata(journal.metadata), nativePending: false }) } });
+      confirmed += result.count;
+    }
+    return confirmed;
+  };
+  return locked ? confirm() : withResellerLock(resellerId, confirm);
 }

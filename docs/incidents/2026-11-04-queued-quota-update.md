@@ -112,3 +112,46 @@ dependency bases, other images/volumes/services and listeners were retained.
 Client identifiers, credentials, snapshots and private operator evidence must not
 be committed to this repository. Do not blindly replay older repairs or release
 unrelated CREATE/RESET/DELETE reservations.
+
+## Saved edit versus unfinished write: follow-up
+
+A later report showed the same orange continuation action after another edit.
+The controller already held the funded quota and enabled state. One native node
+still returned HTTP 503 with `status=offline` and `configDirty=true`. The dashboard
+treated a locally committed, fully funded update as unfinished, never confirmed
+it in the existing observation job, and rejected a subsequent larger quota as a
+different target. Repeating the edit could not repair the unavailable node.
+
+The ordinary UPDATE flow now distinguishes a saved background queue only when
+owner, email and tracked ID match, status is PARTIAL, reservation is zero,
+`localCommitted` and `nativePending` are both true, and the safe integer target
+equals tracked allocation. Resellers use the ordinary edit button; no misleading
+continuation is shown for that saved state. Admins retain a read-only background
+sync indicator. Genuinely incomplete writes still expose their original target
+and continuation action.
+
+A subsequent funded increase may reuse a saved queue. Its additional allocation
+is reserved before any native write, and the saved flags are cleared before the
+attempt. Failure therefore remains visible with its new funding protected. A
+verified queued success transfers the reservation into allocation once. Pending
+decreases and unlimited-to-finite changes cannot release still-live allocation;
+destructive, bulk, status and subscription-rotation conflicts remain protected.
+
+Metadata refresh and the existing observation collector can confirm a saved
+queue automatically. They read authenticated node status and the current client,
+verify membership, subscription identity, exact quota and explicit peer usage,
+and recheck node readiness before a compare-and-set journal transition. They do
+not send customer mutations. Every node must explicitly be enabled, online and
+clean; unsupported, malformed, empty, offline or unavailable node data defers
+completion. The collector reuses its existing reseller lock, and an empty install
+still creates no settings or lease. No new listener, timer or credential is added.
+
+Regression evidence: the original code rejected a second funded queued increase
+with HTTP 409. The corrected code passes 47 unit, 35 lifecycle/accounting,
+72 customer-management/browser and 45 audit/auth/bridge checks. Browser coverage
+includes desktop/mobile, saved edits, genuine failures, automatic confirmation
+and unchanged usage. TypeScript and targeted ESLint pass. All writes in these
+tests use isolated SQLite databases and loopback native mocks.
+
+This change does not claim that a native node returning HTTP 503 is repaired.
+Its queue remains internally protected until real synchronization is confirmed.
