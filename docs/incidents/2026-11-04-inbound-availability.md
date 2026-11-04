@@ -20,6 +20,10 @@ could therefore remain visible and receive a new, incomplete creation request.
 - Use the native runtime's `nodeId` association. Child/transitive node IDs belong
   to another namespace and cannot override a direct node. An origin GUID alone
   is provenance, not sufficient evidence of the runtime destination.
+  Native direct nodes may carry the current controller's GUID in `parentGuid`;
+  this is valid. Compare that namespace with authenticated `server/status`.
+  Only transitive/foreign-parent entries are excluded; parent presence alone
+  must not hide a healthy direct node.
 - Read independent controllers concurrently with bounded requests. Share only
   concurrent catalog reads; do not retain a successful availability cache.
   The instant bootstrap remains local-only and returns no unverified choices.
@@ -56,8 +60,10 @@ native mutation is part of this change.
 
 ## Validation before publication
 
-The prior implementation failed 13 new API assertions. With the fix, 54 unit,
-41 lifecycle API, 101 customer/browser and 45 audit API checks passed (241 total).
+The prior implementation failed 13 new API assertions. A separate native-contract
+regression reproduced a healthy direct node wrongly excluded for naming its own
+controller as parent. With the fix, 55 unit, 41 lifecycle API, 101 customer/browser
+and 45 audit API checks passed (242 total).
 These include deleted/disabled/offline/unknown/stale/stopped states, healthy
 return, stale single/bulk/bridge requests, direct links, an unfunded failed retry,
 and preserving existing usage/quota/memberships. Browser testing covers a form

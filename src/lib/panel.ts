@@ -469,9 +469,9 @@ export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = fa
 export async function getInboundRuntimeHealth(auth: PanelAuth): Promise<InboundRuntimeHealth> {
   const [nodes, local] = await Promise.all([
     panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 3500 }),
-    panelRequest<{ xray?: { state?: unknown } }>(auth, '/panel/api/server/status', { timeoutMs: 3500 }),
+    panelRequest<{ xray?: { state?: unknown }; panelGuid?: unknown }>(auth, '/panel/api/server/status', { timeoutMs: 3500 }),
   ]);
-  return { observedAt: Date.now(), localRunning: local.ok && local.data?.xray?.state === 'running', nodes: nodes.ok ? nodes.data : null };
+  return { observedAt: Date.now(), localRunning: local.ok && local.data?.xray?.state === 'running', controllerGuid: local.ok && typeof local.data?.panelGuid === 'string' ? local.data.panelGuid : undefined, nodes: nodes.ok ? nodes.data : null };
 }
 
 export async function readClientCreation(auth: PanelAuth, inboundIds: number[], expected: Partial<PanelClient>): Promise<PanelApiResult> {

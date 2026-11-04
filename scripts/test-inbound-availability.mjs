@@ -35,3 +35,10 @@ test('unknown or ambiguous direct node IDs cannot inherit a child node health',(
   assert.equal(inboundAvailable(remote,{...health,nodes:[node,child]},now),true);
  }
 });
+test('a direct native node may name this controller as its parent',()=>{
+ const scoped={...health,controllerGuid:'this-controller',nodes:[{...node,parentGuid:'this-controller'}]};
+ assert.equal(inboundAvailable(remote,scoped,now),true);
+ assert.equal(inboundAvailable(remote,{...scoped,controllerGuid:'other-controller'},now),false);
+ assert.equal(inboundAvailable(remote,{...scoped,controllerGuid:undefined},now),false);
+ assert.equal(inboundAvailable(remote,{...scoped,nodes:[{...node,parentGuid:'this-controller',transitive:true}]},now),false);
+});
