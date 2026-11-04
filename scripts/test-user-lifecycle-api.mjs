@@ -70,6 +70,8 @@ try{
  const over=await owner('overshoot',10);const exceeded=await seed(over,'overshoot',10.1);result=await api(over,'/api/reseller/users/overshoot','PUT',{enable:false});
  check('an exhausted customer can be disabled without lowering quota or resetting use',()=>{assert.equal(result.status,200);assert.equal(exceeded.enable,false);assert.equal(exceeded.used,10.1*GB)});
  result=await api(over,'/api/reseller/users/overshoot','PUT',{enable:true});check('activation never bypasses exhausted quota',()=>assert.equal(result.status,403));
+ const invalidEnable=[];for(const enable of ['true','false',1,{},null])invalidEnable.push((await api(over,'/api/reseller/users/overshoot','PUT',{enable})).status);
+ check('non-boolean status cannot bypass quota validation or change native state',()=>{assert.deepEqual(invalidEnable,[400,400,400,400,400]);assert.equal(exceeded.enable,false)});
  const delayed=await owner('queued-decrease',30);await seed(delayed,'queued-decrease',2);mode.set('queued-decrease',{pendingUpdate:true});result=await api(delayed,'/api/reseller/users/queued-decrease','PUT',{trafficGB:5});
  const decreased=await db.resellerUser.findUnique({where:{resellerId_email:{resellerId:delayed.id,email:'queued-decrease'}}});
  check('queued quota decrease never refunds the still-usable old allocation',()=>{assert.equal(result.status,502);assert.equal(decreased.trafficGB,10)});

@@ -41,6 +41,12 @@ Offline nodes are not repaired by changing routing, credentials or service ports
 No dependency, database schema, listener, infrastructure editor or scheduled job
 was added. Stored history and the previous removal of the per-customer chart remain.
 
+Final review also found that the single-customer endpoint accepted non-boolean
+`enable` inputs: native writes coerced truthy values while the usage guard compared
+strictly with `true`. The endpoint now rejects such values with HTTP400 before any
+native request or journal write. A red/green regression covers strings, a number,
+an object and null, while retaining the exhausted customer's disabled state.
+
 ## Verification
 
 Red tests reproduced the 403/409 ordering, stale inherited quota, pending commit,

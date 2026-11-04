@@ -60,6 +60,9 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       inboundIds?: number[];
       subId?: string;
     };
+    if (!body || typeof body !== "object" || Array.isArray(body) || body.enable !== undefined && typeof body.enable !== "boolean") {
+      return NextResponse.json({ error: "درخواست نامعتبر است؛ وضعیت کاربر باید مقدار درست/نادرست باشد" }, { status: 400 });
+    }
 
     // ---- اینباندهای زنده همه پنل‌ها ----
     const panelResult = await getAllPanelInbounds();
