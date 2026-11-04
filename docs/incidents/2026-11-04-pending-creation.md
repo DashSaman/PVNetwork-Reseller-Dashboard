@@ -66,3 +66,40 @@ completion. An independent accounting review found a first-use/auto-disable
 confirmation regression; it was reproduced with the API and fixed while retaining
 identity/quota guards. A crash-after-commit fixture also verifies that old SUCCESS
 journals do not depend on a separately written `done` flag.
+
+## Accepted production state
+
+Runtime commit `acd71bb01ab71ebd66b7272d68c0dd6a02fc9c42` is deployed as
+`pv-reseller-dashboard:queued-create-20261104`, image
+`sha256:9e319a2171065c602671efe4b553358db7a1d32fb267bad5db53d813c78d552a`.
+The actual final Linux image passed 61 customer-management, 41 lifecycle and
+45 audit/auth/bridge checks with network disabled, no production mount and no
+published ports. The runtime and a consistent pre-deployment database snapshot
+are retained for rollback.
+
+Deployment acceptance verified 59 current tracked users; one legitimate customer
+had been added while local testing was underway. Every non-log dashboard table
+matched across replacement. Environment, key, mount, network and the existing
+`127.0.0.1:31080` binding stayed the same. Unrelated container identities/start
+times, service PIDs/listeners and native configuration matched; timers remained
+active.
+
+After a fresh consistent snapshot, the notification-free admin reconciliation
+registered five fully verified existing native accounts, bringing the tracked
+total to 64. Original 59 user rows, owner rows, settings and other journals were
+unchanged. Existing reservations moved into allocation with exactly unchanged
+total quota liability and no extra charge. Native client records/memberships
+matched before and after, consumption was retained, and a second reconciliation
+made no change. The reported account's subscription returned all 12 selected,
+nonempty links. No native account was created, updated, deleted or reset during
+the operator reconciliation.
+
+Four older uncertain, absent or identity-conflicting reservations remain
+protected; they were not imported or refunded. Duplicate display names do not
+authorize automatic deletion or merging. The unavailable native node was not
+reconfigured or falsely confirmed ready. A final dashboard backup was verified
+against all eight tables and its recovery key, including 64 users, 3 retained
+owners, 33 assignments, 161 journals and 62 settings. No native database export
+or restore was performed. Private evidence, identifiers and archive hashes remain
+outside the repository. Only this release's own completed untagged builder stages
+were removed; runtime/rollback images and cached dependency bases were retained.
