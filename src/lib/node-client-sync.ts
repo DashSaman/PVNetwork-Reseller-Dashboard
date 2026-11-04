@@ -37,6 +37,7 @@ async function detail(request: NativeRequest, auth: PanelAuth, email: string): P
 export async function ensureClientMembership(auth: PanelAuth, email: string, inboundIds: number[], request: NativeRequest, expected?: Partial<PanelClient>): Promise<PanelApiResult> {
   try {
     let current = await detail(request, auth, email);
+    let pending = false;
     if (!current) return failure("حساب ساخته‌شده در پنل تأیید نشد");
     if (expected?.subId && current.client.subId !== expected.subId) return failure("شناسهٔ اشتراک با درخواست ساخت مطابقت ندارد");
     if (expected?.id && identity(current.client) !== expected.id) return failure("هویت حساب با درخواست ساخت مطابقت ندارد");
@@ -44,14 +45,25 @@ export async function ensureClientMembership(auth: PanelAuth, email: string, inb
     if (missingIds.length) {
       const attached = await request(auth, `/panel/api/clients/${encodeURIComponent(email)}/attach`, { method: "POST", json: { inboundIds: missingIds } });
       if (!attached.ok) return failure("تکمیل اینباندهای انتخابی موفق نبود");
-      if ((attached.data as { nodePending?: boolean } | undefined)?.nodePending) return { ok: false, pending: true, msg: "همگام‌سازی لوکیشن‌ها در جریان است" };
+      pending = (attached.data as { nodePending?: boolean } | undefined)?.nodePending === true;
       const before = current;
       current = await detail(request, auth, email);
       if (!current) return failure("تأیید اینباندها ممکن نشد");
       assertSame(before.client, current.client);
     }
-    return inboundIds.every(id => current!.inboundIds.includes(id)) ? { ok: true } : failure("همهٔ اینباندهای انتخابی هنوز ثبت نشده‌اند");
+    if (!inboundIds.every(id => current!.inboundIds.includes(id))) return failure("همهٔ اینباندهای انتخابی هنوز ثبت نشده‌اند");
+    if (expected && !creationFieldsMatch(current.client, expected)) return failure("مشخصات ثبت‌شدهٔ حساب با درخواست ساخت یکسان نیست");
+    return pending ? { ok: false, pending: true, msg: "ثبت حساب تأیید شد؛ همگام‌سازی لوکیشن‌ها در جریان است" } : { ok: true };
   } catch { return failure("تأیید هویت و اینباندهای حساب ممکن نشد"); }
+}
+
+function creationFieldsMatch(actual: RecordData, expected: Partial<PanelClient>): boolean {
+  return (!expected.id || identity(actual) === expected.id) && (["email", "totalGB", "expiryTime", "enable", "subId", "limitIp"] as const).every(k => expected[k] === undefined || actual[k] === expected[k]);
+}
+/** This verification never attaches, adds, enables or resets a customer. */
+export async function verifyClientCreationRecord(auth: PanelAuth, email: string, inboundIds: number[], expected: Partial<PanelClient>, request: NativeRequest): Promise<PanelApiResult> {
+  try { const current = await detail(request, auth, email); return current && creationFieldsMatch(current.client, expected) && inboundIds.every(id => current.inboundIds.includes(id)) ? { ok: true } : failure("ثبت کامل حساب با مشخصات اصلی تأیید نشد"); }
+  catch { return failure("خواندن حساب ساخته‌شده ممکن نشد"); }
 }
 function peersFor(auth: PanelAuth, master: ClientDetail): NodePeer[] {
   // A linked node is already handled by 3x-ui. Only repair unlinked copies.

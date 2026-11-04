@@ -6,6 +6,7 @@ import { getQuotaState } from "@/lib/accounting-ops";
 import { getAllPanelInboundsFresh } from "@/lib/panel-manager";
 import { createResellerUserCoreWithinResellerLock } from "@/lib/user-create";
 import { db } from "@/lib/db";
+import { isSavedQueuedCreation } from '@/lib/queued-create';
 
 const MAX_BULK = 50;
 
@@ -51,7 +52,8 @@ export async function POST(req: NextRequest) {
       // وضعیت سهمیه فقط از تابع مرجع — رزروهای فعال CREATE لحاظ می‌شوند
       const quota = await getQuotaState(reseller.id, reseller);
       const funded = requestId ? await db.operationJournal.findMany({ where: { resellerId: reseller.id, type: "CREATE", idempotencyKey: { in: Array.from({ length: count }, (_, i) => `create-req:${reseller.id}:${requestId}:${i + 1}`) } } }) : [];
-      const need = trafficGB * count - funded.reduce((sum, j) => sum + (j.status === "SUCCESS" ? trafficGB : Math.min(trafficGB, j.reservedGB)), 0);
+      const tracked = await db.resellerUser.findMany({ where: { resellerId: reseller.id, id: { in: funded.flatMap(j => j.userId ? [j.userId] : []) } } });
+      const need = trafficGB * count - funded.reduce((sum, j) => sum + (j.status === "SUCCESS" || tracked.some(u => isSavedQueuedCreation(u, j)) ? trafficGB : Math.min(trafficGB, j.reservedGB)), 0);
       if (need > quota.remaining) {
         return NextResponse.json(
           { error: `ظرفیت پول کافی نیست — برای ${count} کاربر × ${trafficGB} گیگ، ${need} گیگ لازم است اما فقط ${Math.max(0, Math.floor(quota.remaining))} گیگ باقی مانده` },
@@ -86,6 +88,7 @@ export async function POST(req: NextRequest) {
 
     // ---- حلقه ساخت ----
     const created: { email: string; subId: string; subLink: string | null }[] = [];
+    const pending: { email: string; subId: string; subLink: string | null }[] = [];
     const failed: { name: string; error: string }[] = [];
     const pad = count >= 10 ? 2 : 1;
 
@@ -97,7 +100,7 @@ export async function POST(req: NextRequest) {
         snapshot
       );
       if (r.ok) {
-        created.push({ email: r.email, subId: r.subId, subLink: r.subLink });
+        (r.pending ? pending : created).push({ email: r.email, subId: r.subId, subLink: r.subLink });
       } else {
         failed.push({ name, error: r.error });
         // خطای زیرساختی (اتصال پنل) — ادامه بی‌فایده است
@@ -122,11 +125,13 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({
-      ok: created.length > 0,
+      ok: created.length > 0 || pending.length > 0,
       requested: count,
       createdCount: created.length,
+      pendingCount: pending.length,
       failedCount: failed.length,
       created,
+      pending,
       failed,
     });
     }); // پایان قفل نماینده

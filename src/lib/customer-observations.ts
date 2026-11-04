@@ -7,6 +7,7 @@ import { getRequiredUserPanelIds, confirmQueuedUserUpdates } from './accounting-
 import { getAllPanelInboundsFresh } from './panel-manager';
 import { sendThresholdAlerts, type ThresholdAlert } from './telegram';
 import { isAdminManagedReseller } from './reseller-ownership';
+import { confirmQueuedCreations } from './user-create';
 
 export async function loadAlertPreferences(resellerId: string) {
   const entry = await db.setting.findUnique({ where: { key: `customerAlertPreferences:${resellerId}` } });
@@ -19,7 +20,7 @@ export async function loadAlertPreferences(resellerId: string) {
 export async function collectCustomerObservations() {
   // A fresh installation must remain eligible for backup restore. Even a lease
   // Setting would make the empty-target check fail before any customer exists.
-  if (!await db.resellerUser.count()) return { busy: false, observed: 0, skipped: 0 };
+  if (!await db.resellerUser.count() && !await db.operationJournal.count({ where: { type: 'CREATE', status: { in: ['PARTIAL', 'NEEDS_REPAIR'] } } })) return { busy: false, observed: 0, skipped: 0 };
   const key = 'customerObservationLease', token = randomUUID(), now = Date.now();
   await db.setting.upsert({ where: { key }, create: { key, value: '0' }, update: {} });
   const lease = await db.setting.findUniqueOrThrow({ where: { key } });
@@ -27,12 +28,14 @@ export async function collectCustomerObservations() {
   if (previous?.expires && previous.expires > now) return { busy: true, observed: 0, skipped: 0 };
   const acquired = await db.setting.updateMany({ where: { key, value: lease.value }, data: { value: JSON.stringify({ token, expires: now + 20 * 60000 }) } });
   if (!acquired.count) return { busy: true, observed: 0, skipped: 0 };
-  let observed = 0, skipped = 0;
+  let observed = 0, skipped = 0, registered = 0, creationsConfirmed = 0;
   try {
     const resellers = await db.reseller.findMany({ take: 100 });
     for (const reseller of resellers) {
       const alerts = await withResellerLock(reseller.id, async () => {
         await confirmQueuedUserUpdates(reseller.id, true);
+        const creations = await confirmQueuedCreations(reseller.id, { locked: true, recoverUntracked: true });
+        registered += creations.registered;creationsConfirmed += creations.confirmed;
         const list: ThresholdAlert[] = [], preferences = await loadAlertPreferences(reseller.id);
         const snapshot = await getAllPanelInboundsFresh();
         const users = await db.resellerUser.findMany({ where: { resellerId: reseller.id }, take: 2000 });
@@ -62,7 +65,7 @@ export async function collectCustomerObservations() {
       // Delivery shares the reseller lock with read-triggered delivery, outside collection.
       if (reseller.active && !await isAdminManagedReseller(reseller.id)) await sendThresholdAlerts(reseller, alerts);
     }
-    return { busy: false, observed, skipped };
+    return { busy: false, observed, skipped, registered, creationsConfirmed };
   } finally {
     await db.setting.updateMany({ where: { key, value: JSON.stringify({ token, expires: now + 20 * 60000 }) }, data: { value: '0' } });
   }

@@ -212,7 +212,7 @@ export async function POST(req: NextRequest) {
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
 
     // اعلان تلگرام — ناهمزمان بدون بلاک کردن پاسخ
-    void (async () => {
+    if (!r.pending) void (async () => {
       try {
         const { notifyUserCreated } = await import("@/lib/telegram");
         await notifyUserCreated(reseller, [{ email: r.email, subLink: r.subLink, trafficGB }], "single");
@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
       }
     })();
 
-    return NextResponse.json({ ok: true, email: r.email, subId: r.subId, subLink: r.subLink, trafficGB });
+    return NextResponse.json({ ok: true, pending: !!r.pending, ready: !r.pending, email: r.email, subId: r.subId, subLink: r.subLink, trafficGB }, { status: r.pending ? 202 : 200 });
   } catch (e) {
     console.error("create user error:", e);
     return NextResponse.json({ error: "خطای داخلی در ساخت کاربر" }, { status: 500 });

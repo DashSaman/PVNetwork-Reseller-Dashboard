@@ -875,6 +875,7 @@ function UsersTab({
       const rb = await api<{
         createdCount: number;
         failedCount: number;
+        pendingCount?: number;
         created: { email: string; subLink: string | null }[];
         failed: { name: string; error: string }[];
       }>("/api/reseller/users/bulk", {
@@ -884,8 +885,8 @@ function UsersTab({
       setBusy(false);
       if (rb.ok && rb.data) {
         toast({
-          title: "ساخت گروهی انجام شد",
-          description: `${faNum(rb.data.createdCount)} کاربر ساخته شد${rb.data.failedCount ? ` — ${faNum(rb.data.failedCount)} ناموفق` : ""}`,
+          title: rb.data.pendingCount ? 'حساب‌ها ثبت شدند' : "ساخت گروهی انجام شد",
+          description: `${faNum(rb.data.createdCount)} آماده${rb.data.pendingCount ? ` — ${faNum(rb.data.pendingCount)} در انتظار آماده‌سازی لوکیشن‌ها` : ''}${rb.data.failedCount ? ` — ${faNum(rb.data.failedCount)} ناموفق` : ""}`,
         });
         if (!rb.data.failedCount) { setCreateOpen(false); createAttempt.current = null; }
         setBulkResult({ created: rb.data.created || [], failed: rb.data.failed || [] });
@@ -898,7 +899,7 @@ function UsersTab({
     }
     setBusy(true);
     const payload = JSON.stringify({ name, trafficGB: nTraffic, ...validity, ipLimit: nIpLimit, inbounds: selectedInbounds });
-    const r = await api<{ ok: boolean; email: string; subLink: string | null }>("/api/reseller/users", {
+    const r = await api<{ ok: boolean; email: string; subLink: string | null; pending?: boolean }>("/api/reseller/users", {
       method: "POST",
       body: JSON.stringify({ ...JSON.parse(payload), requestId: createAttempt.current.requestId }),
     });
@@ -906,8 +907,8 @@ function UsersTab({
     if (r.ok && r.data) {
       createAttempt.current = null;
       toast({
-        title: "کاربر ساخته شد",
-        description: r.data.subLink ? "لینک سابسکریپشن آماده است" : `شناسه کاربر: ${r.data.email}`,
+        title: r.data.pending ? 'حساب ثبت شد' : "کاربر ساخته شد",
+        description: r.data.pending ? 'حساب در فهرست قرار گرفت؛ برخی لوکیشن‌ها هنوز آماده نیستند و خودکار پیگیری می‌شوند. ساخت را تکرار نکنید.' : r.data.subLink ? "لینک سابسکریپشن آماده است" : `شناسه کاربر: ${r.data.email}`,
       });
       setCreateOpen(false);
       setName("");
@@ -915,7 +916,7 @@ function UsersTab({
       setSelectedInbounds([]);
       reload();
       // باز کردن خودکار پنجره لینک‌ها برای کاربر تازه‌ساخته
-      void openLinks(r.data.email, name);
+      if (!r.data.pending) void openLinks(r.data.email, name);
     } else {
       toast({ title: "خطا", description: r.error, variant: "destructive" });
     }

@@ -132,10 +132,10 @@ async function findResumableJournal(
 export async function hasActiveOperation(
   resellerId: string,
   email: string,
-  types: ("DELETE" | "RESET" | "UPDATE" | "CREATE")[] = ["DELETE", "RESET", "UPDATE"]
+  types: ("DELETE" | "RESET" | "UPDATE" | "CREATE")[] = ["DELETE", "RESET", "UPDATE", "CREATE"]
 ): Promise<boolean> {
   const n = await db.operationJournal.count({
-    where: { resellerId, email, type: { in: types }, status: { in: ["PENDING", "RUNNING", "PARTIAL"] } },
+    where: { resellerId, email, type: { in: types }, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } },
   });
   return n > 0;
 }
@@ -265,12 +265,12 @@ async function loadWithinLock(resellerId: string, email: string): Promise<{ rese
 /** مانع تداخل: عملیات تخریبی/ویرایش هم‌زمان روی یک کاربر مجاز نیست */
 async function assertNoConflictingOperation(resellerId: string, email: string, self: "DELETE" | "RESET"): Promise<OpResult | null> {
   const rows = await db.operationJournal.findMany({
-    where: { resellerId, email, status: { in: ["PENDING", "RUNNING", "PARTIAL"] } },
+    where: { resellerId, email, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } },
     select: { type: true },
   });
   const conflict = rows.find((r) => r.type !== self);
   if (conflict) {
-    return { ok: false, status: 409, msg: `عملیات ${conflict.type === "UPDATE" ? "ویرایش" : "تخریبی"} دیگری برای این کاربر در جریان است — ابتدا آن را تمام کنید` };
+    return { ok: false, status: 409, msg: conflict.type === 'CREATE' ? 'ساخت حساب ثبت شده؛ تا تأیید همگام‌سازی لوکیشن‌ها، تغییر یا آزادسازی سهمیه مجاز نیست' : `عملیات ${conflict.type === "UPDATE" ? "ویرایش" : "تخریبی"} دیگری برای این کاربر در جریان است — ابتدا آن را تمام کنید` };
   }
   return null;
 }

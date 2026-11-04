@@ -4,6 +4,7 @@ import { getResellerWithAccess, withResellerLock, parseInboundRefs, validateInbo
 import { getRequiredUserPanelIds, confirmQueuedUserUpdates } from './accounting-ops';
 import { isSavedQueuedUpdate } from './queued-update';
 import type { ResellerUser } from '@prisma/client';
+import { confirmQueuedCreations } from './user-create';
 import { getAllPanelInboundsFresh, getPanelConnection, getPrimaryPanel } from './panel-manager';
 import { updateClient, getLastOnline, type PanelClient } from './panel';
 import { logActivity } from './logger';
@@ -22,18 +23,18 @@ export async function ownedCustomers(resellerId: string, input: unknown) {
 }
 
 export async function customerMetadata(users: ResellerUser[]) {
-  await Promise.all([...new Set(users.map(u => u.resellerId))].map(id => confirmQueuedUserUpdates(id)));
+  await Promise.all([...new Set(users.map(u => u.resellerId))].map(async id => { await confirmQueuedUserUpdates(id);await confirmQueuedCreations(id); }));
   const entries = await db.setting.findMany({ where: { key: { in: users.map(u => customerMetaKey(u.id)) } } });
   const values = new Map(entries.map(s => [s.key, s.value]));
-  const updates = await db.operationJournal.findMany({ where: { userId: { in: users.map(u => u.id) }, type: 'UPDATE', status: { in: ['PENDING', 'RUNNING', 'PARTIAL'] } }, orderBy: { createdAt: 'desc' } });
+  const updates = await db.operationJournal.findMany({ where: { userId: { in: users.map(u => u.id) }, type: { in: ['UPDATE', 'CREATE'] }, status: { in: ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'] } }, orderBy: { createdAt: 'desc' } });
   return users.map(u => {
     const value = parseSetting<{ labels?: unknown } | null>(values.get(customerMetaKey(u.id)), null);
     let labels: string[] = [];
     try { labels = normalizedLabels(value?.labels || []); } catch { /* Invalid restored metadata must not break the user list. */ }
-    const operation = updates.find(j => j.userId === u.id);
+    const operation = updates.find(j => j.userId === u.id && j.type === 'UPDATE');
     const pending = parseSetting<{ newTrafficGB?: number; kind?: string; bulkJobId?: string; localCommitted?: boolean } | null>(operation?.metadata, null);
     const pendingUpdate = pending && !pending.kind && !pending.bulkJobId && Number.isSafeInteger(pending.newTrafficGB) && pending.newTrafficGB! >= 0 ? { trafficGB: pending.newTrafficGB!, localCommitted: !!operation && isSavedQueuedUpdate(u, operation) } : null;
-    return { email: u.email, labels, pendingUpdate };
+    return { email: u.email, labels, pendingUpdate, pendingCreate: updates.some(j => j.userId === u.id && j.type === 'CREATE' && j.resellerId === u.resellerId && j.email === u.email) };
   });
 }
 

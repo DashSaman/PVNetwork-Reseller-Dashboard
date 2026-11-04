@@ -8,7 +8,7 @@
 import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
 import https from "node:https";
 import { nodesSynchronized } from './queued-update';
-import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifiedClientUsage, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
+import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifyClientCreationRecord, verifiedClientUsage, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
 export type PanelInbound = {
   id: number;
@@ -386,7 +386,7 @@ export async function addClient(
   });
   if (!result.ok) return result;
   const verified = await ensureClientMembership(auth, client.email || "", inboundIds, panelRequest, client);
-  if (!verified.ok) return verified;
+  if (!verified.ok && !verified.pending) return verified;
   if ((result.data as { nodePending?: boolean } | undefined)?.nodePending) return { ok: false, pending: true, msg: "همگام‌سازی لوکیشن‌ها در جریان است؛ همان درخواست را دوباره ادامه دهید" };
   return verified;
 }
@@ -397,7 +397,10 @@ export async function resumeClientCreation(auth: PanelAuth, inboundIds: number[]
   if (current.ok && current.data?.client) {
     const c = current.data.client;
     if (c.subId !== client.subId || client.id && (c.uuid || c.id) !== client.id) return { ok: false, msg: "هویت حساب با عملیات ساخت قبلی یکسان نیست" };
-    return attachClient(auth, client.email || "", inboundIds);
+    const verified = await ensureClientMembership(auth, client.email || '', inboundIds, panelRequest, client);
+    if (!verified.ok && !verified.pending) return verified;
+    // Re-attaching an already complete membership starts another native fan-out.
+    return await arePanelNodesSynchronized(auth, true) ? { ok: true } : { ok: false, pending: true, msg: 'حساب ثبت شده؛ همگام‌سازی برخی لوکیشن‌ها در جریان است' };
   }
   if (client.id && /^(?:client )?(?:not found|does not exist)$|^obtain \(record not found\)$/.test((current.msg || "").trim().toLowerCase())) return addClient(auth, inboundIds, protocol, client);
   return { ok: false, msg: "وضعیت ساخت قبلی قابل تأیید نیست" };
@@ -451,9 +454,13 @@ export async function getVerifiedClientUsage(auth: PanelAuth, email: string, exp
 }
 
 /** Read-only confirmation; never retry the customer's mutation here. */
-export async function arePanelNodesSynchronized(auth: PanelAuth): Promise<boolean> {
+export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = false): Promise<boolean> {
   const result = await panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 4000 });
-  return result.ok && nodesSynchronized(result.data);
+  return result.ok && (allowEmpty && Array.isArray(result.data) && result.data.length === 0 || nodesSynchronized(result.data));
+}
+
+export async function readClientCreation(auth: PanelAuth, inboundIds: number[], expected: Partial<PanelClient>): Promise<PanelApiResult> {
+  return verifyClientCreationRecord(auth, expected.email || '', inboundIds, expected, (a, p, init) => panelRequest(a, p, { ...init, timeoutMs: 4000 }));
 }
 
 export async function isQueuedClientSaved(auth: PanelAuth, email: string, quotaBytes: number, subId: string, inboundIds: number[]): Promise<boolean> {

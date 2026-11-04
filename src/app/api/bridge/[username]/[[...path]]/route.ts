@@ -271,6 +271,7 @@ async function createOneViaBridge(
     subId: subIdRaw,
   });
   if (!r.ok) return xui(false, r.error);
+  if (r.pending) return xui(false, 'حساب ثبت شده؛ همگام‌سازی لوکیشن‌ها خودکار پیگیری می‌شود', { nodePending: true, email: r.email });
 
   void (async () => {
     try {

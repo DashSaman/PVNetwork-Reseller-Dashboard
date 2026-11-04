@@ -3,9 +3,22 @@ import { db } from '@/lib/db';
 import { requireAdmin } from '@/lib/session';
 import { collectCustomerObservations } from '@/lib/customer-observations';
 import { customerHistory, customerLastOnline, customerMetadata } from '@/lib/customer-management';
+import { confirmQueuedCreations } from '@/lib/user-create';
+import { logActivity } from '@/lib/logger';
 export const maxDuration = 300;
-export async function POST() {
-  if (!await requireAdmin()) return NextResponse.json({ error: 'دسترسی غیرمجاز' }, { status: 401 });
+export async function POST(req: NextRequest) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: 'دسترسی غیرمجاز' }, { status: 401 });
+  // Operator reconciliation only: no observation lease, threshold delivery or native mutation.
+  if (req.nextUrl.searchParams.get('reconcileCreations') === '1') {
+    let registered = 0, confirmed = 0;
+    for (const owner of await db.reseller.findMany({ where: { active: true }, select: { id: true } })) {
+      const result = await confirmQueuedCreations(owner.id, { recoverUntracked: true });
+      registered += result.registered;confirmed += result.confirmed;
+    }
+    if (registered || confirmed) await logActivity({ actorType: 'ADMIN', actorName: admin.username, action: 'پیگیری ساخت‌های ثبت‌شده', detail: `${registered} ثبت محلی؛ ${confirmed} تأیید همگام‌سازی` });
+    return NextResponse.json({ ok: true, registered, confirmed }, { headers: { 'Cache-Control': 'no-store' } });
+  }
   const result = await collectCustomerObservations();
   return NextResponse.json(result, { status: result.busy ? 409 : 200 });
 }
