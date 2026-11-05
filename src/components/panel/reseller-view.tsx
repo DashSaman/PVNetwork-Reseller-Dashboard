@@ -23,6 +23,7 @@ import { ThemeToggle } from "./theme";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { CustomerToolsBar, CustomerRowTools, useCustomerMetadata } from "./customer-tools";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
+import { MirzaSetupGuide } from './mirza-setup-guide';
 import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
 import {
@@ -2319,14 +2320,11 @@ function AccountSettingsTab({ username }: { username: string }) {
           <p className="text-xs text-muted-foreground leading-5">
             میرزا با <b>توکن API همین نمایندگی</b> به فروش و تمدید کاربران شما دسترسی می‌گیرد؛ فقط روی لوکیشن‌های مجاز و تا سقف پول ترافیک شما. ابتدا سوییچ را روشن و ذخیره کنید، سپس توکن اتصال را بسازید. اعلان‌های تلگرام در بخش جداگانه اختیاری‌اند.
           </p>
-          <a
-            href="/guide/mirza-bot"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--brand)]/40 bg-[var(--brand-soft)] px-3 py-1.5 text-xs font-bold text-[var(--brand-deep)] hover:opacity-90 transition-opacity"
-          >
-            📖 راهنمای قدم‌به‌قدم اتصال میرزا
-          </a>
+          <details data-testid="mirza-inline-guide" className="rounded-xl border border-[var(--brand)]/40 bg-[var(--brand-soft)] p-3.5">
+            <summary className="cursor-pointer text-xs font-bold leading-6 text-[var(--brand-deep)]">📖 آموزش تصویری و قدم‌به‌قدم اتصال میرزا</summary>
+            <div className="mt-4"><MirzaSetupGuide /></div>
+            <a href="/guide/mirza-bot" target="_blank" rel="noreferrer" className="mt-4 inline-block text-xs font-bold text-[var(--brand-deep)] underline underline-offset-4">باز کردن آموزش در صفحهٔ جدا</a>
+          </details>
 
           {mirzaEnabled && (
             <div className="rounded-xl border border-[var(--brand)]/40 bg-[var(--brand-soft)] p-3.5 space-y-2.5">
@@ -2378,8 +2376,8 @@ function AccountSettingsTab({ username }: { username: string }) {
                 <li>سوییچ بالا روشن باشد و تنظیمات ذخیره شده باشد</li>
                 <li>در میرزا، پنل ثنایی با نوع <b dir="ltr">x-ui_single</b> اضافه کنید</li>
                 <li>آدرس بالا و توکن API فروش را وارد کنید؛ اگر نام کاربری هم خواست، نام همین نمایندگی را بگذارید</li>
-                <li>لوکیشن‌های قابل فروش را بررسی و شناسه‌های دلخواه را در انتخاب اینباندهای پنل/محصول میرزا ثبت کنید</li>
-                <li>فیلد <b dir="ltr">linksubx</b> را روی آدرس ساب همین جعبه بگذارید</li>
+                <li>در میرزا «تنظیم پروتکل و اینباند» را بزنید و نام کاربری داخلی یک کاربر نمونهٔ خودتان را ارسال کنید تا لوکیشن‌هایش انتخاب شوند</li>
+                <li>در «دامنه لینک ساب» میرزا، لینک کامل ساب همان کاربر نمونه را بفرستید؛ میرزا پایهٔ ساب را خودش ذخیره می‌کند</li>
                 <li>حجم بسته‌ها را با عدد صحیح گیگابایت و حداقل ۱ گیگ تنظیم کنید</li>
                 <li>ربات را ذخیره کنید — از این به بعد فروش‌ها از همین پنل انجام می‌شود</li>
               </ol>
@@ -2395,7 +2393,7 @@ function AccountSettingsTab({ username }: { username: string }) {
               </div>
               {bridgeTestList.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[10px] text-muted-foreground">اینباندهای در دسترس ربات — شناسه هر کدام برای فیلد <b dir="ltr">inboundid</b>:</div>
+                  <div className="text-[10px] text-muted-foreground">لوکیشن‌های آنلاین و مجاز فروش — در میرزا ۰٫۸٫۱ انتخاب با نام کاربری نمونه انجام می‌شود؛ مراحل ۶ و ۷ آموزش را ببینید:</div>
                   <div className="flex flex-wrap gap-1.5">
                     {bridgeTestList.map((i) => (
                       <Badge key={i.id} variant="outline" className="text-[10px] gap-1" dir="ltr">

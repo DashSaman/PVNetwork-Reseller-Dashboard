@@ -88,6 +88,7 @@ try{
  result=await bridge('panel/api/server/status','GET',undefined,passwordKey||'missing');check('account credential changes revoke the old integration key',()=>assert.equal(result.data.success,false));
  result=await own('/api/reseller/mirza/api-token','POST',{});const revoked=result.data.token;await own('/api/reseller/mirza/api-token','DELETE');result=await bridge('panel/api/server/status','GET',undefined,revoked||'missing');check('explicit revocation immediately denies the integration key',()=>assert.equal(result.data.success,false));
  result=await request('/api/reseller/mirza/api-token','POST',{});check('anonymous users cannot issue bridge keys',()=>assert.equal(result.status,401));
+ const visualResponse=await fetch(base+'/guide/mirza-bot'),visualHtml=await visualResponse.text();check('public illustrated guide renders without a login or private API credential',()=>{assert.equal(visualResponse.status,200);assert.ok(visualHtml.includes('آموزش تصویری اتصال میرزا'));assert.ok(visualHtml.includes('تصویر مرحله ۱'))});
  if(process.env.PLAYWRIGHT_MODULE){
   const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE));const browser=await chromium.launch({headless:true,channel:'chrome'});
   try{
@@ -96,6 +97,15 @@ try{
    await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.__mirzaCopied=value}}}));
    await page.goto(base,{waitUntil:'networkidle'});await page.getByRole('button',{name:'تنظیمات حساب',exact:true}).click();
    const keyInput=page.getByLabel('توکن API اتصال فروش',{exact:true});await page.getByRole('button',{name:'ساخت توکن API',exact:true}).waitFor();
+   const inlineGuide=page.getByTestId('mirza-inline-guide');await inlineGuide.locator('summary').first().click();
+   const teaching=inlineGuide.getByTestId('mirza-setup-guide'),beforeTeaching=writes.length;
+   for(let index=0;index<10;index++){
+    await teaching.getByRole('img',{name:new RegExp('تصویر مرحله '+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)])+':')}).waitFor({state:'visible'});
+    if(index<9)await teaching.getByRole('button',{name:'مرحله بعد',exact:true}).click();
+   }
+   check('inline illustrated tutorial covers all ten steps without native mutations',()=>{assert.equal(writes.length,beforeTeaching)});
+   await teaching.getByRole('button',{name:'مرور از ابتدا',exact:true}).click();const beginning=await teaching.getByRole('button',{name:'قبلی',exact:true}).isDisabled();check('tutorial restart and previous-step boundary work',()=>assert.equal(beginning,true));
+   await inlineGuide.locator('summary').first().click();
    const notificationValue=await page.getByLabel('توکن تلگرام اعلان‌ها (اختیاری)',{exact:false}).inputValue();check('browser separates sales API key from the optional Telegram credential',()=>assert.equal(notificationValue,''));
    await page.getByRole('button',{name:'ساخت توکن API',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#bridge-api-token')?.value.startsWith('pvnet_bridge_'));
    const uiKey=await keyInput.inputValue(),keyType=await keyInput.getAttribute('type');check('browser can issue a masked sales key without a notification token',()=>{assert.ok(uiKey);assert.equal(keyType,'password')});
@@ -106,6 +116,26 @@ try{
    await page.getByRole('button',{name:'تعویض توکن API',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'انصراف',exact:true}).click();result=await bridge('panel/api/server/status','GET',undefined,uiKey);check('canceling rotation keeps the current integration key usable',()=>assert.equal(result.data.success,true));
    await page.getByRole('button',{name:'تعویض توکن API',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'تأیید تعویض',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#bridge-api-token')?.value.startsWith('pvnet_bridge_'));const uiRotated=await keyInput.inputValue();const oldResponse=await bridge('panel/api/server/status','GET',undefined,uiKey);result=await bridge('panel/api/server/status','GET',undefined,uiRotated);check('confirmed browser rotation revokes only the old key',()=>{assert.notEqual(uiKey,uiRotated);assert.equal(oldResponse.data.success,false);assert.equal(result.data.success,true)});
    await page.getByRole('button',{name:'لغو توکن API',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'تأیید لغو',exact:true}).click();await page.getByRole('button',{name:'ساخت توکن API',exact:true}).waitFor();result=await bridge('panel/api/server/status','GET',undefined,uiRotated);check('browser revocation immediately stops the old robot key',()=>assert.equal(result.data.success,false));
+   const tutorialIssued=await own('/api/reseller/mirza/api-token','POST',{});
+   const guidePage=await context.newPage();guidePage.on('pageerror',e=>errors.push(e.message));const guideRequests=[];guidePage.on('request',request=>{if(request.url().includes('/api/'))guideRequests.push(request.url())});
+   await guidePage.goto(base+'/guide/mirza-bot',{waitUntil:'networkidle'});const publicGuide=guidePage.getByTestId('mirza-setup-guide');
+   const stateBeforeGuide=await db.setting.findUnique({where:{key:'bridgeApiToken:'+rep.id}}),writesBeforeGuide=writes.length;
+   const navCount=await publicGuide.getByRole('navigation',{name:'انتخاب مرحله آموزش'}).getByRole('button').count();check('public illustrated guide is accessible with ten step controls',()=>assert.equal(navCount,10));
+   for(const [index,label] of [[2,'key'],[6,'locations'],[7,'subscription'],[8,'plans']]){
+    await publicGuide.getByRole('button',{name:'رفتن به مرحله '+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]),exact:true}).click();
+    await publicGuide.screenshot({path:path.join(dir,'mirza-guide-'+label+'-desktop.png')});
+   }
+   const sampleInstructions=await publicGuide.getByTestId('mirza-guide-step').innerText();check('tutorial explains 1024 MB trial size explicitly',()=>assert.ok(sampleInstructions.includes('۱۰۲۴')));
+   const sizes=[];for(const width of [390,320]){await guidePage.setViewportSize({width,height:844});for(let index=0;index<10;index++){
+    await publicGuide.getByRole('button',{name:'رفتن به مرحله '+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]),exact:true}).click();sizes.push(await guidePage.evaluate(()=>({width:innerWidth,content:document.documentElement.scrollWidth})));
+   }}check('every illustrated step fits both 320px and 390px mobile widths',()=>assert.ok(sizes.every(size=>size.content<=size.width+1),JSON.stringify(sizes)));
+   await guidePage.setViewportSize({width:390,height:844});await publicGuide.getByRole('button',{name:'رفتن به مرحله ۸',exact:true}).click();await publicGuide.screenshot({path:path.join(dir,'mirza-guide-subscription-mobile.png')});
+   await guidePage.evaluate(()=>document.documentElement.classList.add('dark'));await publicGuide.screenshot({path:path.join(dir,'mirza-guide-subscription-dark.png')});
+   await publicGuide.locator('summary').click();const troubleshooting=await publicGuide.innerText();const stateAfterGuide=await db.setting.findUnique({where:{key:'bridgeApiToken:'+rep.id}});
+   check('guide keeps full sample link and internal username instructions readable',()=>{assert.ok(troubleshooting.includes('نام کاربری ریز'));assert.ok(troubleshooting.includes('لینک کامل'));assert.ok(!troubleshooting.includes(tutorialIssued.data.token))});
+   check('tutorial navigation never sends API writes or rotates the real sales key',()=>{assert.equal(writes.length,writesBeforeGuide);assert.deepEqual(stateAfterGuide,stateBeforeGuide);assert.deepEqual(guideRequests,[])});
+   await guidePage.close();
+   await page.getByRole('button',{name:'تنظیمات حساب',exact:true}).click();await keyInput.waitFor({state:'visible'});
    await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(dir,'mirza-api-key-mobile.png'),fullPage:true});const width=await page.evaluate(()=>({content:document.documentElement.scrollWidth,viewport:innerWidth}));check('Mirza settings fit mobile without page overflow or script errors',()=>{assert.ok(width.content<=width.viewport+1,JSON.stringify(width));assert.deepEqual(errors,[])});
   }finally{await browser.close()}
  }
