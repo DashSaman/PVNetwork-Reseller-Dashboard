@@ -1966,8 +1966,14 @@ function AccountSettingsTab({ username }: { username: string }) {
   const [mirzaToken, setMirzaToken] = useState("");
   const [mirzaHasToken, setMirzaHasToken] = useState(false);
   const [mirzaEnabled, setMirzaEnabled] = useState(false);
+  const [mirzaSavedEnabled, setMirzaSavedEnabled] = useState(false);
   const [mirzaBusy, setMirzaBusy] = useState(false);
   const [bridgeUrl, setBridgeUrl] = useState("");
+  const [bridgeSubBase, setBridgeSubBase] = useState('');
+  const [bridgeApiToken, setBridgeApiToken] = useState('');
+  const [bridgeHasApiToken, setBridgeHasApiToken] = useState(false);
+  const [bridgeKeyBusy, setBridgeKeyBusy] = useState(false);
+  const [bridgeKeyAction, setBridgeKeyAction] = useState<'rotate' | 'revoke' | null>(null);
   const [bridgeTestBusy, setBridgeTestBusy] = useState(false);
   const [bridgeTestResult, setBridgeTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [bridgeTestList, setBridgeTestList] = useState<{ id: number; tag: string; protocol: string; port: number }[]>([]);
@@ -1975,6 +1981,7 @@ function AccountSettingsTab({ username }: { username: string }) {
   // آدرس پل 3x-ui برای اتصال ربات — پس از اولین رندر (دسترسی به location)
   useEffect(() => {
     setBridgeUrl(`${window.location.origin}/api/bridge/${encodeURIComponent(username)}`);
+    setBridgeSubBase(`${window.location.origin}/api/s`);
   }, [username]);
 
   function copyBridgeUrl() {
@@ -1982,6 +1989,20 @@ function AccountSettingsTab({ username }: { username: string }) {
       () => toast({ title: "کپی شد", description: "آدرس پنل برای ربات کپی شد" }),
       () => toast({ title: "خطا", description: "کپی ناموفق بود", variant: "destructive" })
     );
+  }
+
+  async function copyBridgeValue(value: string) {
+    try { await navigator.clipboard.writeText(value);toast({ title: 'کپی شد' }); }
+    catch { toast({ title: 'کپی ناموفق بود', variant: 'destructive' }); }
+  }
+
+  async function changeBridgeKey(action: 'rotate' | 'revoke') {
+    setBridgeKeyBusy(true);
+    const result = await api<{ token?: string }>('/api/reseller/mirza/api-token', { method: action === 'rotate' ? 'POST' : 'DELETE', body: action === 'rotate' ? '{}' : undefined });
+    setBridgeKeyBusy(false);setBridgeKeyAction(null);
+    if (!result.ok) { toast({ title: 'خطا', description: result.error, variant: 'destructive' });return; }
+    setBridgeApiToken(result.data?.token || '');setBridgeHasApiToken(action === 'rotate');
+    toast({ title: action === 'rotate' ? 'توکن API ساخته شد' : 'توکن API لغو شد', description: action === 'rotate' ? 'همین حالا آن را کپی و در تنظیمات اتصال پنلِ میرزا وارد کنید.' : undefined });
   }
 
   async function testBridge() {
@@ -2007,9 +2028,13 @@ function AccountSettingsTab({ username }: { username: string }) {
     const r = await api<{ mirza: { enabled: boolean; chatId: string; hasToken: boolean } }>("/api/reseller/mirza");
     if (r.ok && r.data) {
       setMirzaEnabled(r.data.mirza.enabled);
+      setMirzaSavedEnabled(r.data.mirza.enabled);
       setMirzaChatId(r.data.mirza.chatId);
       setMirzaHasToken(r.data.mirza.hasToken);
+      if (!r.data.mirza.enabled) setBridgeApiToken('');
     }
+    const key = await api<{ hasToken: boolean }>('/api/reseller/mirza/api-token');
+    if (key.ok && key.data) setBridgeHasApiToken(key.data.hasToken);
   }, []);
 
   useEffect(() => {
@@ -2284,15 +2309,15 @@ function AccountSettingsTab({ username }: { username: string }) {
           <div className="flex items-center justify-between gap-2">
             <h3 className="font-bold text-sm flex items-center gap-2">
               <Bot className="h-4 w-4 text-[var(--brand-orange)]" />
-              ربات میرزا پنل
+              اتصال فروش به میرزا
               {mirzaEnabled && (
-                <Badge variant="outline" className="tone-ok">متصل</Badge>
+                <Badge variant="outline" className="tone-ok">{mirzaSavedEnabled ? 'فعال' : 'ذخیره نشده'}</Badge>
               )}
             </h3>
             <Switch checked={mirzaEnabled} onCheckedChange={setMirzaEnabled} />
           </div>
           <p className="text-xs text-muted-foreground leading-5">
-            ربات تلگرامی خودتان (مثل ربات فروش سرویس در میرزا پنل) را به این سامانه وصل کنید: هم <b>اعلان‌ها</b> و هم <b>فروش مستقیم روی همین سامانه</b>. با فعال‌کردن سوییچ، ربات از طریق رابط سازگار سامانه به حساب شما وصل می‌شود — با همان لوکیشن‌های مجاز، همان سقف پول ترافیک و همان قوانین داشبورد. برای اعلان‌ها هم توکن بات و شناسه چت را وارد کنید (اختیاری).
+            میرزا با <b>توکن API همین نمایندگی</b> به فروش و تمدید کاربران شما دسترسی می‌گیرد؛ فقط روی لوکیشن‌های مجاز و تا سقف پول ترافیک شما. ابتدا سوییچ را روشن و ذخیره کنید، سپس توکن اتصال را بسازید. اعلان‌های تلگرام در بخش جداگانه اختیاری‌اند.
           </p>
           <a
             href="/guide/mirza-bot"
@@ -2300,14 +2325,14 @@ function AccountSettingsTab({ username }: { username: string }) {
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--brand)]/40 bg-[var(--brand-soft)] px-3 py-1.5 text-xs font-bold text-[var(--brand-deep)] hover:opacity-90 transition-opacity"
           >
-            📖 راهنمای تصویری قدم‌به‌قدم اتصال ربات میرزا
+            📖 راهنمای قدم‌به‌قدم اتصال میرزا
           </a>
 
           {mirzaEnabled && (
             <div className="rounded-xl border border-[var(--brand)]/40 bg-[var(--brand-soft)] p-3.5 space-y-2.5">
               <div className="text-xs font-bold text-[var(--brand-deep)]">تنظیمات اتصال ربات به این پنل (فروش)</div>
               <p className="text-[11px] text-muted-foreground leading-5">
-                در بخش تنظیمات اتصال ربات میرزا، آدرس و مشخصات حساب همین سامانه را وارد کنید:
+                در میرزا نوع پنل «ثنایی / 3x-ui» را انتخاب کنید و این آدرس و توکن API را وارد کنید:
               </p>
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
@@ -2325,22 +2350,42 @@ function AccountSettingsTab({ username }: { username: string }) {
                     <div className="text-xs font-mono" dir="ltr">{username}</div>
                   </div>
                   <div className="rounded-lg border border-border bg-card px-3 py-2">
-                    <div className="text-[10px] text-muted-foreground">رمز عبور</div>
-                    <div className="text-xs">رمز ورود شما به همین داشبورد</div>
+                    <div className="text-[10px] text-muted-foreground">نوع اتصال در میرزا</div>
+                    <div className="text-xs" dir="ltr">3x-ui / x-ui_single</div>
                   </div>
+                </div>
+                <div className="rounded-lg border border-border bg-card p-3 space-y-2">
+                  <Label htmlFor="bridge-api-token">توکن API اتصال فروش</Label>
+                  <div className="flex items-center gap-2">
+                    <Input id="bridge-api-token" aria-label="توکن API اتصال فروش" dir="ltr" type="password" readOnly autoComplete="off" value={bridgeApiToken} placeholder={bridgeHasApiToken ? 'توکن ساخته شده؛ برای جایگزینی، تعویض کنید' : 'ابتدا توکن API را بسازید'} />
+                    <Button type="button" size="icon" variant="outline" title="کپی توکن API فروش" aria-label="کپی توکن API فروش" disabled={!bridgeApiToken} onClick={() => void copyBridgeValue(bridgeApiToken)}><Copy className="h-4 w-4" /></Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-5">این توکن را در فیلد «توکن پنل» میرزا وارد کنید. فقط هنگام ساخت قابل کپی است؛ لغو، تعویض یا تغییر تنظیمات ورود، کلید قبلی را از کار می‌اندازد.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" disabled={bridgeKeyBusy || !mirzaSavedEnabled} onClick={() => bridgeHasApiToken ? setBridgeKeyAction('rotate') : void changeBridgeKey('rotate')}>
+                      {bridgeKeyBusy && <Spinner className="h-4 w-4" />}{bridgeHasApiToken ? 'تعویض توکن API' : 'ساخت توکن API'}
+                    </Button>
+                    {bridgeHasApiToken && <Button type="button" size="sm" variant="outline" disabled={bridgeKeyBusy} onClick={() => setBridgeKeyAction('revoke')}>لغو توکن API</Button>}
+                  </div>
+                  {!mirzaSavedEnabled && <p className="text-[11px] text-muted-foreground">ابتدا سوییچ اتصال را روشن و تنظیمات را ذخیره کنید.</p>}
+                </div>
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2">
+                  <div className="min-w-0"><div className="text-[10px] text-muted-foreground">لینک ساب در میرزا (linksubx)</div><div className="text-xs font-mono break-all" dir="ltr">{bridgeSubBase}</div></div>
+                  <Button type="button" size="icon" variant="ghost" title="کپی آدرس ساب میرزا" aria-label="کپی آدرس ساب میرزا" onClick={() => void copyBridgeValue(bridgeSubBase)}><Copy className="h-3.5 w-3.5" /></Button>
                 </div>
               </div>
               <ol className="text-[11px] text-muted-foreground leading-5 list-decimal ps-4 space-y-0.5">
                 <li>سوییچ بالا روشن باشد و تنظیمات ذخیره شده باشد</li>
-                <li>در ربات میرزا، اتصال جدیدی با حالت سازگار با API سامانه اضافه کنید</li>
-                <li>آدرس، نام کاربری و رمز بالا را وارد کنید</li>
-                <li>«تست اتصال ربات» را بزنید — شناسه اینباند زیر همین‌جا نمایش داده می‌شود؛ همان عدد را در فیلد <b dir="ltr">inboundid</b> ربات وارد کنید</li>
-                <li>«لینک ساب» ربات (<b dir="ltr">linksubx</b>) را روی آدرس سابسکریپشن همین سامانه تنظیم کنید (مثل <b dir="ltr">https://sub.example.com/sub</b>) — لینک خریدار به شکل <b dir="ltr">لینک-ساب/شناسه</b> ساخته می‌شود</li>
+                <li>در میرزا، پنل ثنایی با نوع <b dir="ltr">x-ui_single</b> اضافه کنید</li>
+                <li>آدرس بالا و توکن API فروش را وارد کنید؛ اگر نام کاربری هم خواست، نام همین نمایندگی را بگذارید</li>
+                <li>لوکیشن‌های قابل فروش را بررسی و شناسه‌های دلخواه را در انتخاب اینباندهای پنل/محصول میرزا ثبت کنید</li>
+                <li>فیلد <b dir="ltr">linksubx</b> را روی آدرس ساب همین جعبه بگذارید</li>
+                <li>حجم بسته‌ها را با عدد صحیح گیگابایت و حداقل ۱ گیگ تنظیم کنید</li>
                 <li>ربات را ذخیره کنید — از این به بعد فروش‌ها از همین پنل انجام می‌شود</li>
               </ol>
               <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" variant="outline" onClick={testBridge} disabled={bridgeTestBusy}>
-                  {bridgeTestBusy ? <Spinner className="h-4 w-4" /> : <Plug className="h-4 w-4" />} تست اتصال ربات
+                <Button size="sm" variant="outline" onClick={testBridge} disabled={bridgeTestBusy || !mirzaSavedEnabled}>
+                  {bridgeTestBusy ? <Spinner className="h-4 w-4" /> : <Plug className="h-4 w-4" />} بررسی لوکیشن‌های قابل فروش
                 </Button>
                 {bridgeTestResult && (
                   <span className={`text-[11px] font-medium ${bridgeTestResult.ok ? "tone-ok" : "tone-danger"}`} dir="auto">
@@ -2366,11 +2411,15 @@ function AccountSettingsTab({ username }: { username: string }) {
             </div>
           )}
 
+          <Dialog open={bridgeKeyAction !== null} onOpenChange={open => { if (!open) setBridgeKeyAction(null); }}>
+            <DialogContent className="max-w-sm"><DialogHeader><DialogTitle>{bridgeKeyAction === 'rotate' ? 'تعویض توکن اتصال فروش' : 'لغو توکن اتصال فروش'}</DialogTitle><DialogDescription>توکن فعلی بلافاصله از کار می‌افتد. برای ادامهٔ فروش، توکن جدید را در اتصال میرزا جایگزین کنید.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setBridgeKeyAction(null)}>انصراف</Button><Button disabled={bridgeKeyBusy} onClick={() => bridgeKeyAction && void changeBridgeKey(bridgeKeyAction)}>تأیید {bridgeKeyAction === 'rotate' ? 'تعویض' : 'لغو'}</Button></DialogFooter></DialogContent>
+          </Dialog>
           <div className="text-xs font-bold">اعلان‌های تلگرام (اختیاری)</div>
+          <p className="text-[11px] text-muted-foreground leading-5">برای دریافت اعلان در تلگرام، توکن بات خودتان و شناسهٔ چت را اینجا وارد کنید. اتصال فروش با توکن API بخش بالا کار می‌کند.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>توکن بات میرزا {mirzaHasToken && <span className="text-[10px] tone-ok">(ذخیره شده — برای تغییر پر کنید)</span>}</Label>
-              <Input dir="ltr" className="latin-input" type="password" value={mirzaToken} onChange={(e) => setMirzaToken(e.target.value)} placeholder={mirzaHasToken ? "••••••••••••" : "123456789:AAE..."} autoComplete="off" />
+              <Label htmlFor="mirza-notification-token">توکن تلگرام اعلان‌ها (اختیاری) {mirzaHasToken && <span className="text-[10px] tone-ok">(ذخیره شده — برای تغییر پر کنید)</span>}</Label>
+              <Input id="mirza-notification-token" dir="ltr" className="latin-input" type="password" value={mirzaToken} onChange={(e) => setMirzaToken(e.target.value)} placeholder={mirzaHasToken ? "••••••••••••" : "123456789:AAE..."} autoComplete="off" />
             </div>
             <div className="space-y-1.5">
               <Label>شناسه چت (Chat ID)</Label>

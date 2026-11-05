@@ -322,8 +322,8 @@ export async function getOnlineEmails(auth: PanelAuth): Promise<PanelApiResult<s
 }
 
 /** Read-only POST: native last-seen map; never forwards request-controlled fields. */
-export async function getLastOnline(auth: PanelAuth): Promise<PanelApiResult<Record<string, number>>> {
-  const result = await panelRequest<Record<string, number>>(auth, '/panel/api/clients/lastOnline', { method: 'POST', json: {}, timeoutMs: 8000 });
+export async function getLastOnline(auth: PanelAuth, options: { timeoutMs?: number } = {}): Promise<PanelApiResult<Record<string, number>>> {
+  const result = await panelRequest<Record<string, number>>(auth, '/panel/api/clients/lastOnline', { method: 'POST', json: {}, timeoutMs: options.timeoutMs ?? 8000 });
   if (!result.ok) return result;
   if (!result.data || typeof result.data !== 'object' || Array.isArray(result.data)) return { ok: false, msg: 'Last-online data unavailable' };
   return result;

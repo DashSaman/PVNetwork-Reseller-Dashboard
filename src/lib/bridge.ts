@@ -3,6 +3,8 @@ import { signAccountSession, type SessionAccount } from "./crypto";
 import { validateAccountToken } from "./auth-state";
 import type { NextRequest } from "next/server";
 import type { ResellerWithInbounds } from "./reseller-helpers";
+import { getResellerWithAccess } from './reseller-helpers';
+import { isBridgeApiToken, verifyBridgeApiToken } from './bridge-api-token';
 
 /**
  * پل 3x-ui — اتصال ربات میرزا (یا هر ربات سازگار با 3x-ui) به همین داشبورد برای فروش.
@@ -28,6 +30,12 @@ export async function getBridgeReseller(
   username: string
 ): Promise<{ ok: true; reseller: ResellerWithInbounds } | { ok: false; error: string }> {
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (bearer && isBridgeApiToken(bearer)) {
+    const row = await db.reseller.findUnique({ where: { username } });
+    const reseller = row && await getResellerWithAccess(row.id);
+    if (!reseller || !await verifyBridgeApiToken(bearer, reseller)) return { ok: false, error: 'توکن API معتبر نیست یا دسترسی اتصال خاموش است' };
+    return { ok: true, reseller };
+  }
   const payload = await validateAccountToken(bearer || req.cookies.get(BRIDGE_COOKIE)?.value, "bridge");
   if (!payload || payload.role !== "RESELLER") {
     return { ok: false, error: "نشست معتبر نیست — دوباره وارد شوید" };
@@ -47,7 +55,7 @@ export async function getBridgeReseller(
 
 /** پاسخ استاندارد 3x-ui */
 export function xui(ok: boolean, msg: string, obj?: unknown): Response {
-  return Response.json({ success: ok, msg, ...(obj !== undefined ? { obj } : {}) }, { status: ok ? 200 : 400 });
+  return Response.json({ success: ok, msg, ...(obj !== undefined ? { obj } : {}) }, { status: ok ? 200 : 400, headers: { 'Cache-Control': 'private, no-store, max-age=0' } });
 }
 
 /** تبدیل فرم/urlencoded/JSON بدنه به رکورد */

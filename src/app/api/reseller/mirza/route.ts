@@ -4,6 +4,8 @@ import { requireReseller } from "@/lib/session";
 import { encryptSecret } from "@/lib/crypto";
 import { testMirza } from "@/lib/telegram";
 import { logActivity } from "@/lib/logger";
+import { bridgeApiTokenKey } from '@/lib/bridge-api-token';
+import { withResellerLock } from '@/lib/reseller-helpers';
 
 /** تنظیمات ربات میرزا پنل نماینده — کانال دوم اعلان‌ها با همان امکانات تلگرام */
 export async function GET() {
@@ -45,7 +47,10 @@ export async function PUT(req: NextRequest) {
       data.mirzaBotToken = encryptSecret(clean);
     }
 
-    await db.reseller.update({ where: { id: current.id }, data });
+    await withResellerLock(current.id, () => db.$transaction(async tx => {
+      await tx.reseller.update({ where: { id: current.id }, data });
+      if (!data.mirzaEnabled) await tx.setting.deleteMany({ where: { key: bridgeApiTokenKey(current.id) } });
+    }));
     await logActivity({
       actorType: "RESELLER",
       actorName: current.username,

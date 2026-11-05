@@ -400,7 +400,7 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
 export async function updateUserByJournal(
   resellerId: string,
   email: string,
-  desired: { trafficGB: number; enable?: boolean; note?: string; snapshotStartedAt?: number },
+  desired: { trafficGB: number; enable?: boolean; note?: string; snapshotStartedAt?: number; intent?: string },
   applyRemote: () => Promise<string[] | { errors: string[]; pending: boolean }>,
   commitLocal: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<void>
 ): Promise<{ ok: true; pending?: boolean } | { ok: false; status: number; msg: string; partial?: boolean }> {
@@ -414,6 +414,7 @@ export async function updateUserByJournal(
     const meta = updateMetadata(existingRow?.metadata || null);
     const savedQueue = !!existingRow && isSavedQueuedUpdate({ ...loaded.tracked, resellerId }, existingRow);
     if (existingJournal) {
+      if ((meta.intent || undefined) !== desired.intent) return { ok: false, status: 409, msg: 'عملیات قبلی این حساب باید از همان مسیر و با همان لوکیشن‌ها ادامه پیدا کند' };
       if (meta.localCommitted && desired.snapshotStartedAt !== undefined && existingRow!.updatedAt.getTime() >= desired.snapshotStartedAt) return { ok: false, status: 409, msg: "کاربر هنگام آماده‌سازی درخواست تغییر کرده؛ صفحه را بازخوانی و دوباره ویرایش کنید" };
       if (meta.kind === "SUBSCRIPTION_ROTATION") return { ok: false, status: 409, msg: "تغییر لینک اشتراک در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
       if (meta.kind === "CUSTOMER_STATUS") return { ok: false, status: 409, msg: "تغییر گروهی وضعیت در جریان است؛ ابتدا همان عملیات را ادامه دهید" };
@@ -473,12 +474,12 @@ export async function updateUserByJournal(
           resellerId, userId: loaded.tracked.id, email, type: "UPDATE", status: "RUNNING",
           reservedGB: delta,
           targetPanels: JSON.stringify(req.ok ? req.panelIds : []),
-          metadata: JSON.stringify({ newTrafficGB: desired.trafficGB, note: desired.note }),
+          metadata: JSON.stringify({ newTrafficGB: desired.trafficGB, note: desired.note, intent: desired.intent }),
         },
       });
     } else {
       // همان ژورنال: PARTIAL → RUNNING (ادامهٔ همان عملیات، نه عملیات جدید) — رزرو دلتا حفظ می‌شود
-      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null, reservedGB: Math.max(ownReserved, delta), metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: false, nativePending: false }) } });
+      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null, reservedGB: Math.max(ownReserved, delta), metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: false, nativePending: false, intent: desired.intent }) } });
     }
 
     const remote = await applyRemote();
@@ -512,7 +513,7 @@ export async function updateUserByJournal(
       await commitLocal(tx);
       await tx.operationJournal.update({
         where: { id: jid },
-        data: { status: pending ? "PARTIAL" : "SUCCESS", reservedGB: 0, completedPanels: pending ? "[]" : jTargets, failedPanels: "[]", lastError: pending ? "تغییر در مرجع ثبت شده؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند" : null, metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: true, nativePending: pending }) },
+        data: { status: pending ? "PARTIAL" : "SUCCESS", reservedGB: 0, completedPanels: pending ? "[]" : jTargets, failedPanels: "[]", lastError: pending ? "تغییر در مرجع ثبت شده؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند" : null, metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: true, nativePending: pending, intent: desired.intent }) },
       });
     });
     return { ok: true, pending };

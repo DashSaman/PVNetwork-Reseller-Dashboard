@@ -20,6 +20,7 @@ import {
 import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
+import { attachBridgeClient, readBridgeClient } from '@/lib/bridge-client';
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
 import { logActivity } from "@/lib/logger";
 
@@ -59,6 +60,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (parts.startsWith("panel/api/clients/update/")) return bridgeUpdateClient(req, auth.reseller, emailFromPath);
   if (parts.startsWith("panel/api/clients/del/")) return bridgeDeleteClient(auth.reseller, emailFromPath);
   if (parts.startsWith("panel/api/clients/resetTraffic/")) return bridgeResetTraffic(auth.reseller, emailFromPath);
+  const attach = parts.match(/^panel\/api\/clients\/([^/]+)\/attach$/);
+  if (attach) {
+    let body: { inboundIds?: unknown };
+    try { body = await req.json(); } catch { return xui(false, 'بدنه JSON نامعتبر است'); }
+    const result = await attachBridgeClient(auth.reseller, decodeURIComponent(attach[1]), body.inboundIds);
+    return result.ok ? xui(true, '', result.pending ? { nodePending: true } : undefined) : xui(false, result.error);
+  }
 
   // ---------- سازگاری با ربات میرزا (x-ui_single) ----------
   if (parts === "panel/api/inbounds/addClient") return bridgeMirzaAddClient(req, auth.reseller);
@@ -89,6 +97,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   if (parts === "panel/api/inbounds/list") return bridgeInboundList(auth.reseller);
   if (parts === "panel/api/clients/list") return bridgeClientList(auth.reseller);
+  if (parts.startsWith('panel/api/clients/get/')) {
+    const result = await readBridgeClient(auth.reseller, decodeURIComponent(parts.slice('panel/api/clients/get/'.length)));
+    return result.ok ? xui(true, '', { client: result.client, inboundIds: result.inboundIds, usedTraffic: result.usedTraffic }) : xui(false, result.error);
+  }
+  if (parts.startsWith('panel/api/clients/traffic/')) {
+    const result = await readBridgeClient(auth.reseller, decodeURIComponent(parts.slice('panel/api/clients/traffic/'.length)), true);
+    return result.ok ? xui(true, '', result.traffic) : xui(false, result.error);
+  }
   if (parts.startsWith("panel/api/inbounds/getClientTraffics/")) {
     return bridgeGetClientTraffics(auth.reseller, decodeURIComponent(parts.slice("panel/api/inbounds/getClientTraffics/".length)));
   }
@@ -124,7 +140,7 @@ async function bridgeLogin(req: NextRequest, username: string) {
   clearFailures(unameKey);
 
   const token = issueBridgeToken(row);
-  const res = NextResponse.json({ success: true, msg: "login ok", obj: { token } });
+  const res = NextResponse.json({ success: true, msg: "login ok", obj: { token } }, { headers: { 'Cache-Control': 'private, no-store, max-age=0' } });
   res.cookies.set(BRIDGE_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -253,11 +269,14 @@ async function createOneViaBridge(
 
   // پارامترهای کلاینت — totalGB به بایت، expiryTime به میلی‌ثانیه (قرارداد 3x-ui)
   const rawEmail = String(client.email || "").trim();
-  const name = rawEmail.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^-+|-+$/g, "") || `bot-${Date.now()}`;
-  const totalBytes = Math.max(0, Number(client.totalGB ?? 0) || 0);
+  if (!/^[a-zA-Z0-9._-]{3,32}$/.test(rawEmail)) return xui(false, 'نام کاربر باید ۳ تا ۳۲ حرف انگلیسی، عدد، نقطه، خط تیره یا آندرلاین باشد');
+  const displayName = rawEmail.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+  const name = displayName.length >= 2 ? displayName : 'bot-user';
+  const totalBytes = Number(client.totalGB ?? 0);
+  if (!Number.isSafeInteger(totalBytes) || totalBytes < 0 || totalBytes % GB !== 0) return xui(false, 'حجم سرویس باید بر حسب گیگابایت کامل باشد');
   const trafficGB = totalBytes > 0 ? bytesToGB(totalBytes) : 0;
-  const expiryTime = Math.max(0, Number(client.expiryTime ?? 0) || 0);
-  const ipLimit = Math.max(0, Number(client.limitIp ?? 0) || 0);
+  const expiryTime = Number(client.expiryTime ?? 0);
+  const ipLimit = Number(client.limitIp ?? 0);
   const subIdRaw = String(client.subId ?? "").trim();
 
   const r = await createResellerUserCore(reseller, {
@@ -266,7 +285,7 @@ async function createOneViaBridge(
     expiryTime,
     ipLimit,
     refs,
-    exactEmail: name,
+    exactEmail: rawEmail,
     exactUuid: typeof client.id === "string" ? client.id.trim() : "",
     subId: subIdRaw,
   });
@@ -498,6 +517,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
   // سهمیه — با اعتبارسنجی پول (مصرف قطعی لحاظ می‌شود)
+  if (payload.totalGB !== undefined && (!Number.isSafeInteger(Number(payload.totalGB)) || Number(payload.totalGB) < 0 || Number(payload.totalGB) % GB !== 0)) return xui(false, 'حجم سرویس باید بر حسب گیگابایت کامل باشد');
   const trafficGB =
     payload.totalGB !== undefined
       ? (Math.max(0, Number(payload.totalGB) || 0) > 0 ? bytesToGB(Math.max(0, Number(payload.totalGB) || 0)) : 0)
@@ -507,8 +527,10 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   // سرویس مشترک UPDATE — resumable
   // اعتبارسنجی سهمیه در سرویس مشترک updateUserByJournal
 
-  const expiryTime = payload.expiryTime !== undefined ? Math.max(0, Number(payload.expiryTime) || 0) : undefined;
-  const enable = payload.enable !== undefined ? !!payload.enable : undefined;
+  const expiryTime = payload.expiryTime !== undefined ? Number(payload.expiryTime) : undefined;
+  if (expiryTime !== undefined && !Number.isSafeInteger(expiryTime)) return xui(false, 'زمان اعتبار نامعتبر است');
+  if (payload.enable !== undefined && typeof payload.enable !== 'boolean') return xui(false, 'وضعیت حساب باید فعال یا غیرفعال باشد');
+  const enable = payload.enable as boolean | undefined;
   const ipLimit = payload.limitIp !== undefined ? Math.max(0, Number(payload.limitIp) || 0) : undefined;
   if (ipLimit !== undefined && (!reseller.allowIpLimit || !Number.isSafeInteger(ipLimit) || ipLimit > 10000)) return xui(false, "تغییر محدودیت دستگاه مجاز یا معتبر نیست");
   const newUuid = typeof payload.id === "string" && payload.id.trim() ? payload.id.trim() : undefined;
