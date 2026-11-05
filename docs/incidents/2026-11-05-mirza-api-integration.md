@@ -64,9 +64,47 @@ material are kept outside tracked files under the ignored task evidence director
 
 ## Release record
 
-Deployment, actual-image test results and the pilot's read-only live API checks are
-recorded here after acceptance. Do not treat the local results above as proof of
-deployment or blindly replay provisioning scripts: token rotation breaks the old
-bot credential, and customer operation journals can contain paid reservations.
+- Accepted runtime commit: `823fe004a4e16954eea8b2900668f9789fec8e1f`.
+  Image `pv-reseller-dashboard:mirza-api-20261105`, SHA-256
+  `d8b20b4b59ab47c7e2894e759b2861c15290d6857dfbe56785433dff8fe088f1`.
+- The exact standalone image passed **206/206** checks: customer API 79, lifecycle
+  41, permission/accounting audit 45 and Mirza API 41. Containers used no network,
+  published no host ports and mounted no production data.
+- Dashboard replacement preserved every real database row; activity logging was
+  append-only. The runtime encryption key, network, port binding and data mount
+  were preserved. Post-deployment acceptance read all **65/65** customers, including
+  both active reseller scopes and the archived reseller's admin-managed customers.
+  Main-admin restore remained blocked on this populated installation. Five saved
+  update queues and all other paid journals/reservations were left intact.
+- The pilot was then explicitly provisioned: only its sales-enable flag and first
+  hashed API key were added to the dashboard. Customers, balances, grants, pending
+  journals, other resellers and notification credentials remained unchanged.
+- The installed Mirza PHP HTTP client passed six read-only live checks, including
+  owned client/traffic reads, a **10-location** authorized catalog, cross-owner
+  rejection and a nonempty public subscription with **12** configurations. The
+  same checks passed using the connection values actually saved in its database.
+  No real customer was created, renewed, reset or deleted; no Telegram message
+  was sent.
+- Only the existing pilot connection's `url_panel`, `username_panel`,
+  `password_panel`, `linksubx` and `inbounds` fields changed. Every other connection
+  field, user, invoice, product, price and general/admin setting was verified
+  unchanged. Its original source files, Apache/MariaDB processes and listeners
+  were unchanged. No global Mirza admin API key was created.
+- Final production acceptance again read **65/65** customers. Other container
+  identities, service PIDs, native inbound configuration and ports matched the
+  baseline. Both backup and observation timers remained active. The temporary
+  plaintext issued-key handoff file was removed after encrypted local handoff;
+  only this build's untagged intermediate stages were retired.
+- Final verified dashboard archive: `pvnet-20261105T125928Z-284796e23a4d.zip`,
+  93,151 bytes, SHA-256
+  `8782c5eca80dd17004d8d2ef7a03e472d5fc4bbef38d85cbd1b9bd1d0478807a`.
+  All eight tables and the recovery key were verified. It contains 65 customers,
+  3 owner records, 33 grants, 64 settings and 165 journals. Native panels exported:
+  **0**, as required by the dashboard-only backup scope.
+
+The release's private receipts are under `mirza-api-20261105`; local encrypted
+pilot evidence is under the ignored `mirza-integration-20261105` task directory.
+Do not blindly replay provisioning scripts: rotating a key breaks the old bot
+credential, and customer operation journals can contain paid reservations.
 
 For reseller setup, see [the Persian guide](../guide-mirza-bot.fa.md).
