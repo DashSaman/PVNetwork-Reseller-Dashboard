@@ -1,96 +1,45 @@
-import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { requireReseller } from "@/lib/session";
-import { getPanelById, getPrimaryPanel, buildSubLink } from "@/lib/panel-manager";
+import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { requireReseller } from '@/lib/session';
+import { getPanelById, getPrimaryPanel, buildSubLink } from '@/lib/panel-manager';
 import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
-import { getResellerWithAccess } from "@/lib/reseller-helpers";
-import { buildV2rayLink, type BuiltLink } from "@/lib/links";
-import { PUBLIC_SERVICE_NAME, PUBLIC_SERVICE_ERROR, publicLocationLabel } from "@/lib/reseller-presentation";
+import { getResellerWithAccess, parseInboundRefs, refKey } from '@/lib/reseller-helpers';
+import { readNativeSubscription, nativeLinksForInbounds, type NativeLink } from '@/lib/native-subscription';
+import { PUBLIC_SERVICE_NAME, PUBLIC_SERVICE_ERROR, publicLocationLabel } from '@/lib/reseller-presentation';
 
 type Ctx = { params: Promise<{ email: string }> };
 
-/**
- * لینک‌های یک کاربر برای نماینده:
- * - subLink: لینک سابسکریپشن (با پشتیبانی وایت‌لیبل)
- * - links: لینک‌های مستقیم اتصال (vless/vmess/trojan) به تفکیک اینباند/لوکیشن
- */
-export async function GET(req: NextRequest, ctx: Ctx) {
+export async function GET(_req: NextRequest, ctx: Ctx) {
   const session = await requireReseller();
-  if (!session) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
-  const { email: rawEmail } = await ctx.params;
-  const email = decodeURIComponent(rawEmail);
-
+  if (!session) return NextResponse.json({ error: 'دسترسی غیرمجاز' }, { status: 401 });
+  const { email } = await ctx.params;
   try {
     const reseller = await getResellerWithAccess(session.uid);
-    if (!reseller) return NextResponse.json({ error: "حساب شما فعال نیست" }, { status: 403 });
-
-    const tracked = await db.resellerUser.findUnique({
-      where: { resellerId_email: { resellerId: reseller.id, email } },
-    });
-    if (!tracked) return NextResponse.json({ error: "کاربر پیدا نشد" }, { status: 404 });
-
-    const subLink = await buildSubLink(tracked.subId || "", reseller, tracked.panelId || undefined);
-
-    // آدرس اتصال پیش‌فرض: هاست درخواست کاربر (مثل panel.example.com)
-    const fwdHost = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-    const requestHost = fwdHost.split(",")[0].trim().split(":")[0] || "";
-
-    // هاست هر پنل: دامنه subBase آن پنل، وگرنه هاست درخواست فعلی
-    const panelResult = await getSelectableInboundCatalog();
-    const primary = (await getPrimaryPanel())?.id || '';
-    const allowed = new Set(reseller.inbounds.map(i => `${i.panelId || primary}::${i.inboundId}`));
-    const links: (BuiltLink & { tag: string; panelName: string; remark: string })[] = [];
-    const seen = new Set<string>();
-
-    if (panelResult.panels.length) {
-      for (const bundle of panelResult.panels) {
-        const panel = await getPanelById(bundle.panelId);
-        let host = "";
-        if (panel?.subBase) {
-          try {
-            host = new URL(panel.subBase.trim()).hostname;
-          } catch {
-            host = "";
-          }
-        }
-        if (!host) host = requestHost;
-
-        for (const inb of bundle.inbounds) {
-          const key = `${bundle.panelId}::${inb.id}`;
-          if (!allowed.has(key) || !panelResult.available.has(key)) continue;
-          const hasClient = inb.clients.some((c) => c.email === email) || inb.clientStats.some((c) => c.email === email);
-          if (!hasClient || seen.has(key)) continue;
-          seen.add(key);
-
-          const client = inb.clients.find((c) => c.email === email);
-          if (!host || (!client?.id && !client?.password)) continue;
-
-          const built = buildV2rayLink({
-            protocol: inb.protocol,
-            host,
-            port: inb.port,
-            remark: publicLocationLabel(inb.remark || inb.tag, bundle.panelName),
-            uuid: client.id,
-            password: client.password,
-            email,
-            flow: client.flow || "",
-            stream: (inb.stream || null) as Record<string, unknown> | null,
-          });
-          links.push({ ...built, tag: publicLocationLabel(inb.tag, bundle.panelName), panelName: PUBLIC_SERVICE_NAME, remark: publicLocationLabel(inb.remark || inb.tag, bundle.panelName) });
-        }
+    if (!reseller) return NextResponse.json({ error: 'حساب شما فعال نیست' }, { status: 403 });
+    const tracked = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: reseller.id, email } } });
+    if (!tracked) return NextResponse.json({ error: 'کاربر پیدا نشد' }, { status: 404 });
+    const subLink = await buildSubLink(tracked.subId || '', reseller, tracked.panelId || undefined);
+    const catalog = await getSelectableInboundCatalog(), primary = (await getPrimaryPanel())?.id || '';
+    const allowed = new Set(reseller.inbounds.map(i => refKey({ panelId: i.panelId || primary, inboundId: i.inboundId })));
+    const refs = new Set(parseInboundRefs(tracked.inboundIds, tracked.panelId || primary).map(refKey));
+    const links: (NativeLink & { tag: string; panelName: string })[] = [];
+    for (const bundle of catalog.panels) {
+      const eligible = bundle.inbounds.filter(i => {
+        const key = refKey({ panelId: bundle.panelId, inboundId: i.id });
+        return allowed.has(key) && refs.has(key) && catalog.available.has(key) && i.clients.some(c => c.email === email && c.subId === tracked.subId);
+      });
+      if (!eligible.length) continue;
+      const panel = await getPanelById(bundle.panelId);
+      if (!panel) throw new Error('Missing native panel');
+      const canonical = await readNativeSubscription(panel, tracked.subId || '');
+      for (const link of nativeLinksForInbounds(canonical, eligible, bundle.inbounds)) {
+        const label = publicLocationLabel(link.remark, bundle.panelName);
+        links.push({ ...link, remark: label, tag: label, panelName: PUBLIC_SERVICE_NAME });
       }
     }
-
-    if (!links.length) return NextResponse.json({ error: PUBLIC_SERVICE_ERROR }, { status: 503, headers: { "Cache-Control": "no-store" } });
-    return NextResponse.json({
-      email,
-      subId: tracked.subId || null,
-      subLink,
-      links,
-      panelError: null,
-    });
-  } catch (e) {
-    console.error("user links error:", e);
-    return NextResponse.json({ error: "خطای داخلی در دریافت لینک‌ها" }, { status: 500 });
+    if (!links.length) return NextResponse.json({ error: PUBLIC_SERVICE_ERROR }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ email, subId: tracked.subId, subLink, links, panelError: null }, { headers: { 'Cache-Control': 'private, no-store' } });
+  } catch {
+    return NextResponse.json({ error: 'دریافت کانفیگ اصلی موقتاً ممکن نیست؛ دوباره تلاش کنید' }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
   }
 }

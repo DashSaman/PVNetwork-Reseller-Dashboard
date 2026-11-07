@@ -290,7 +290,9 @@ async function createOneViaBridge(
     subId: subIdRaw,
   });
   if (!r.ok) return xui(false, r.error);
-  if (r.pending) return xui(false, 'حساب ثبت شده؛ همگام‌سازی لوکیشن‌ها خودکار پیگیری می‌شود', { nodePending: true, email: r.email });
+  // The funded account already exists. A false/400 response would make Mirza
+  // refund a paid order and invite another creation while retaining this one.
+  if (r.pending) return xui(true, 'حساب ثبت شده؛ همگام‌سازی لوکیشن‌ها خودکار پیگیری می‌شود', { nodePending: true, email: r.email, subId: r.subId, subLink: r.subLink, trafficGB });
 
   void (async () => {
     try {
@@ -599,6 +601,7 @@ async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string)
 
   const result = await deleteUserByJournal(reseller.id, email);
   if (!result.ok) return xui(false, result.msg);
+  if (result.pending) return xui(false, result.message || 'حذف در انتظار تأیید لوکیشن‌ها است', { nodePending: true });
   return xui(true, "");
 }
 
@@ -610,6 +613,7 @@ async function bridgeResetTraffic(reseller: ResellerWithInbounds, email: string)
 
   const result = await resetUserByJournal(reseller.id, email);
   if (!result.ok) return xui(false, result.msg);
+  if (result.pending) return xui(false, result.message || 'ریست در انتظار تأیید لوکیشن‌ها است', { nodePending: true });
   return xui(true, "");
 }
 

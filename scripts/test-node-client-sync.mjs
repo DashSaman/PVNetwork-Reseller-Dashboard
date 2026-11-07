@@ -10,7 +10,7 @@ const original = () => ({ email: 'user', uuid: 'same-uuid', id: 123, totalGB: 44
 async function fixture(fn) {
   const calls = [];
   async function panel(name) {
-    const p = { client: original(), ids: [1], fail: false, resets: 0, server: null, pending: false, ignorePatch: false };
+    const p = { client: original(), ids: [1], fail: false, resets: 0, server: null, pending: false, ignorePatch: false, used: 12345 };
     p.server = http.createServer(async (req, res) => {
       let raw = ''; for await (const c of req) raw += c;
       const body = raw ? JSON.parse(raw) : null;
@@ -19,12 +19,12 @@ async function fixture(fn) {
       if (p.fail) { success = false; msg = 'unreachable'; }
       else if (req.url.includes('/get/')) {
         if (!p.client) { success = false; msg = 'Obtain (record not found)'; }
-        else obj = { client: p.client, inboundIds: p.ids, usedTraffic: 12345 };
+        else obj = { client: p.client, inboundIds: p.ids, usedTraffic: p.used };
       } else if (req.url.includes('/update/')) {
         if (name === 'node') assert.equal(body.limitIp, 3);
         if (!p.ignorePatch) p.client = { ...p.client, ...body, id: 123 };
         if (p.pending) obj = { nodePending: true };
-      } else if (req.url.includes('/resetTraffic/')) { p.resets++; }
+      } else if (req.url.includes('/resetTraffic/')) { p.resets++; p.used=0; }
       else if (req.url.includes('/del/')) { p.client = null; }
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success, obj, msg }));
     });

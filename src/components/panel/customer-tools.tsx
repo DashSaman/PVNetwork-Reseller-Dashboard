@@ -8,7 +8,7 @@ import { Tags, Bell } from 'lucide-react';
 import { api, faDate, faNum } from './shared';
 import { toast } from '@/hooks/use-toast';
 
-type Metadata = { email: string; labels: string[]; lastOnline: number | null; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean };
+type Metadata = { email: string; labels: string[]; lastOnline: number | null; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null };
 type Customer = { email: string; name?: string | null; usedGB?: number | null };
 type Batch = { emails: string[]; enable: boolean; requestId: string };
 type ItemResult = { email: string; ok: boolean; error?: string };
@@ -33,6 +33,7 @@ export function CustomerRowTools({ user, meta, checked, onCheck, online, onResum
     </div>
     <div className="flex flex-wrap gap-1">{meta?.labels.map(label => <Badge variant="outline" className="text-[10px] border-violet-500/30 text-violet-600 dark:text-violet-300" key={label}>{label}</Badge>)}</div>
     {meta?.pendingCreate && <Badge variant="outline" className="text-[10px] text-muted-foreground">حساب ثبت‌شده؛ برخی لوکیشن‌ها در انتظار آماده‌سازی</Badge>}
+    {meta?.pendingOperation && <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-300">{meta.pendingOperation === 'DELETE' ? 'حذف' : 'ریست'} در انتظار پاسخ لوکیشن؛ سهمیه محفوظ است</Badge>}
     {meta?.pendingUpdate && (!meta.pendingUpdate.localCommitted ? <div className="space-y-1"><Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-300">ویرایش در انتظار تکمیل</Badge>{onResume && <Button size="sm" variant="ghost" disabled={resumeDisabled} className="h-6 px-1 text-[11px]" aria-label={`ادامهٔ ویرایش ${user.email}`} onClick={onResume}>ادامهٔ ویرایش ({faNum(meta.pendingUpdate.trafficGB)} گیگ)</Button>}</div> : !onResume && <Badge variant="outline" className="text-[10px] text-muted-foreground">ذخیره‌شده؛ همگام‌سازی خودکار</Badge>)}
   </div>;
 }

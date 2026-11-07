@@ -8,6 +8,7 @@
 import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
 import https from "node:https";
 import { nodesSynchronized } from './queued-update';
+import { inboundAvailable } from './inbound-availability';
 import type { InboundRuntimeHealth } from './inbound-availability';
 import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifyClientCreationRecord, verifiedClientUsage, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
@@ -407,7 +408,7 @@ export async function resumeClientCreation(auth: PanelAuth, inboundIds: number[]
     const verified = await ensureClientMembership(auth, client.email || '', inboundIds, panelRequest, client);
     if (!verified.ok && !verified.pending) return verified;
     // Re-attaching an already complete membership starts another native fan-out.
-    return await arePanelNodesSynchronized(auth, true) ? { ok: true } : { ok: false, pending: true, msg: 'حساب ثبت شده؛ همگام‌سازی برخی لوکیشن‌ها در جریان است' };
+    return await arePanelNodesSynchronized(auth, true, inboundIds) ? { ok: true } : { ok: false, pending: true, msg: 'حساب ثبت شده؛ همگام‌سازی برخی لوکیشن‌ها در جریان است' };
   }
   if (client.id && /^(?:client )?(?:not found|does not exist)$|^obtain \(record not found\)$/.test((current.msg || "").trim().toLowerCase())) return addClient(auth, inboundIds, protocol, client);
   return { ok: false, msg: "وضعیت ساخت قبلی قابل تأیید نیست" };
@@ -461,7 +462,15 @@ export async function getVerifiedClientUsage(auth: PanelAuth, email: string, exp
 }
 
 /** Read-only confirmation; never retry the customer's mutation here. */
-export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = false): Promise<boolean> {
+export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = false, inboundIds?: number[]): Promise<boolean> {
+  if (inboundIds) {
+    if (!inboundIds.length) return false;
+    const [inbounds, health] = await Promise.all([getInbounds(auth), getInboundRuntimeHealth(auth)]);
+    return inbounds.ok && !!inbounds.data && [...new Set(inboundIds)].every(id => {
+      const matches = inbounds.data!.filter(i => i.id === id);
+      return matches.length === 1 && inboundAvailable({ ...matches[0], enable: true }, health);
+    });
+  }
   const result = await panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 4000 });
   return result.ok && (allowEmpty && Array.isArray(result.data) && result.data.length === 0 || nodesSynchronized(result.data));
 }

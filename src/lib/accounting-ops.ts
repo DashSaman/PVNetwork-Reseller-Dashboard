@@ -1,10 +1,13 @@
 import { db } from "@/lib/db";
 import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
-import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, isQueuedClientSaved, type PanelAuth } from "./panel";
+import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, isQueuedClientSaved, readClientCreation, type PanelAuth } from "./panel";
+import { isSavedQueuedCreation, creationMetadata } from './queued-create';
 import { isSavedQueuedUpdate, updateMetadata } from './queued-update';
 import { logActivity } from "./logger";
 import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync";
+import type { Prisma } from '@prisma/client';
+import { operationInstallation } from './operation-installation';
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -238,7 +241,7 @@ async function executeAcrossPanels(
   return { failed, completed: [...completed] };
 }
 
-export type OpResult = { ok: true; debitedGB: number } | { ok: false; status: number; msg: string; partial?: boolean };
+export type OpResult = { ok: true; debitedGB: number; refundedGB?: number; pending?: boolean; message?: string } | { ok: false; status: number; msg: string; partial?: boolean };
 
 async function prepareUsageLedger(journalId: string, panels: PanelBundle[], email: string): Promise<void> {
   const row = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
@@ -263,16 +266,82 @@ async function loadWithinLock(resellerId: string, email: string): Promise<{ rese
 }
 
 /** مانع تداخل: عملیات تخریبی/ویرایش هم‌زمان روی یک کاربر مجاز نیست */
-async function assertNoConflictingOperation(resellerId: string, email: string, self: "DELETE" | "RESET"): Promise<OpResult | null> {
+async function assertNoConflictingOperation(resellerId: string, email: string, self: "DELETE" | "RESET", superseded: string[] = []): Promise<OpResult | null> {
   const rows = await db.operationJournal.findMany({
     where: { resellerId, email, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } },
-    select: { type: true },
+    select: { id: true, type: true },
   });
-  const conflict = rows.find((r) => r.type !== self);
+  const conflict = rows.find((r) => r.type !== self && !superseded.includes(r.id));
   if (conflict) {
     return { ok: false, status: 409, msg: conflict.type === 'CREATE' ? 'ساخت حساب ثبت شده؛ تا تأیید همگام‌سازی لوکیشن‌ها، تغییر یا آزادسازی سهمیه مجاز نیست' : `عملیات ${conflict.type === "UPDATE" ? "ویرایش" : "تخریبی"} دیگری برای این کاربر در جریان است — ابتدا آن را تمام کنید` };
   }
   return null;
+}
+
+/** A paid, fully saved CREATE/UPDATE can be superseded by the owner's explicit
+ * delete/reset. Uncertain writes, reservations, identity changes and bulk jobs
+ * remain blocked. No quota is released by superseding a journal. */
+async function verifiedSavedPredecessors(resellerId: string, tracked: TrackedUser) {
+  const rows = await db.operationJournal.findMany({ where: { resellerId, email: tracked.email, type: { in: ['CREATE', 'UPDATE'] }, status: { in: ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'] } } });
+  const result: typeof rows = [];
+  const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
+  for (const row of rows) {
+    const user = { ...tracked, subId: tracked.subId || null, resellerId };
+    if (row.type === 'CREATE' ? !isSavedQueuedCreation(user, row) : !isSavedQueuedUpdate(user, row)) continue;
+    let verified = refs.length > 0;
+    for (const id of new Set(refs.map(r => r.panelId))) {
+      const connection = await getPanelConnection(id), ids = refs.filter(r => r.panelId === id).map(r => r.inboundId);
+      if (!connection.ok || !await isQueuedClientSaved(connection.conn, tracked.email, tracked.trafficGB * 1073741824, tracked.subId || '', ids)) { verified = false;break; }
+      const meta = row.type === 'CREATE' ? creationMetadata(row.metadata) : null;
+      if (meta && !(await readClientCreation(connection.conn, ids, { id: meta.uuid, email: tracked.email, subId: meta.subId, totalGB: meta.trafficGB * 1073741824 })).ok) { verified = false;break; }
+    }
+    if (verified) result.push(row);
+  }
+  return result;
+}
+
+async function supersedeSavedPredecessors(tx: Prisma.TransactionClient, predecessors: Awaited<ReturnType<typeof verifiedSavedPredecessors>>, nextId: string) {
+  for (const old of predecessors) {
+    const changed = await tx.operationJournal.updateMany({ where: { id: old.id, status: old.status, updatedAt: old.updatedAt, metadata: old.metadata, reservedGB: 0 }, data: { status: 'SUCCESS', lastError: 'عملیات ذخیره‌شده با درخواست جدید مالک جایگزین شد', metadata: JSON.stringify({ ...updateMetadata(old.metadata), supersededBy: nextId, supersededWhilePending: true }) } });
+    if (changed.count !== 1) throw new Error('Predecessor changed during operation');
+  }
+}
+
+async function requiredTargetsReady(tracked: TrackedUser): Promise<boolean> {
+  const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
+  if (!refs.length) return false;
+  for (const id of new Set(refs.map(r => r.panelId))) {
+    const connection = await getPanelConnection(id);
+    if (!connection.ok || !await arePanelNodesSynchronized(connection.conn, true, refs.filter(r => r.panelId === id).map(r => r.inboundId))) return false;
+  }
+  return true;
+}
+
+const waitingForTargets = (): OpResult => ({ ok: true, pending: true, debitedGB: 0, refundedGB: 0, message: 'درخواست ثبت شد؛ یک لوکیشن مرتبط پاسخ نمی‌دهد. بعد از تأیید همهٔ لوکیشن‌ها تکمیل می‌شود؛ تا آن زمان سهمیه محفوظ است.' });
+
+/** Only explicitly requested new operations are eligible. Durable node steps
+ * prevent replaying a reset whose response was lost. Old repair journals are
+ * never enrolled in automatic recovery. Called by the existing observation job. */
+export async function continuePendingDestructiveOperations(resellerId: string): Promise<void> {
+  const rows = await db.operationJournal.findMany({ where: { resellerId, type: { in: ['DELETE', 'RESET'] }, status: { in: ['RUNNING', 'PARTIAL'] } }, orderBy: { updatedAt: 'asc' }, take: 100 });
+  const deadline = Date.now() + 5000;
+  for (const row of rows) {
+    if (Date.now() > deadline) break;
+    const metadata = updateMetadata(row.metadata);
+    if (metadata.explicitDestructive !== true) continue;
+    const installation = operationInstallation();
+    if (!installation || metadata.operationInstallation !== installation) continue;
+    if (row.type === 'DELETE') await deleteUserByJournal(resellerId, row.email);
+    else await resetUserByJournal(resellerId, row.email);
+  }
+}
+
+async function continuedDestructiveMetadata(journalId: string): Promise<string | null> {
+  const row = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
+  const metadata = updateMetadata(row.metadata);
+  return metadata.explicitDestructive === true
+    ? JSON.stringify({ ...metadata, operationInstallation: operationInstallation(true) })
+    : row.metadata;
 }
 
 /** حذف کاربر — مسیر مشترک داشبورد و پل */
@@ -282,7 +351,8 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
     if ("err" in loaded) return loaded.err;
     const { reseller, tracked } = loaded;
 
-    const conflict = await assertNoConflictingOperation(resellerId, email, "DELETE");
+    const predecessors = await verifiedSavedPredecessors(resellerId, tracked);
+    const conflict = await assertNoConflictingOperation(resellerId, email, "DELETE", predecessors.map(j => j.id));
     if (conflict) return conflict;
 
     const req = await getRequiredUserPanelIds(tracked);
@@ -299,25 +369,29 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
     }
 
     if (!journal) {
-      journal = await db.operationJournal.create({
+      journal = await db.$transaction(async tx => { const next = await tx.operationJournal.create({
         data: {
           idempotencyKey: opKey("delete", tracked.id),
           resellerId, userId: tracked.id, email, type: "DELETE", status: "RUNNING",
           usageSnapshotGB: usageGB,
+          metadata: JSON.stringify({ explicitDestructive: true, operationInstallation: operationInstallation(true) }),
           targetPanels: JSON.stringify(req.panelIds), completedPanels: "[]", failedPanels: "[]",
         },
-      });
+      });await supersedeSavedPredecessors(tx, predecessors, next.id);return next; });
     } else {
-      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null } });
+      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null, metadata: await continuedDestructiveMetadata(journal.id) } });
     }
 
     const targetPanels = parseArr(journal.targetPanels); // تغییرناپذیر
+    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
     await prepareUsageLedger(journal.id, snapshot.panels, email);
     const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "delete", email);
 
     if (failed.length > 0) {
       return { ok: false, status: 502, partial: true, msg: `حذف ناقص بود — ${failed.length} پنل انجام نشد (${failed.map((f) => f.result).join(", ")}). مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
+
+    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
 
     usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
     await commitJournalAccounting(journal.id, resellerId, usageGB);
@@ -328,7 +402,7 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
       await tx.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
     });
     await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "حذف کاربر", detail: `${email}${usageGB > 0 ? ` | مصرف قطعی: ${usageGB} گیگ` : ""}`, resellerId });
-    return { ok: true, debitedGB: usageGB };
+    return { ok: true, debitedGB: usageGB, refundedGB: Math.max(0, tracked.trafficGB - usageGB) };
   });
 }
 
@@ -339,7 +413,8 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     if ("err" in loaded) return loaded.err;
     const { reseller, tracked } = loaded;
 
-    const conflict = await assertNoConflictingOperation(resellerId, email, "RESET");
+    const predecessors = await verifiedSavedPredecessors(resellerId, tracked);
+    const conflict = await assertNoConflictingOperation(resellerId, email, "RESET", predecessors.map(j => j.id));
     if (conflict) return conflict;
 
     const req = await getRequiredUserPanelIds(tracked);
@@ -361,26 +436,30 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     }
 
     if (!journal) {
-      journal = await db.operationJournal.create({
+      journal = await db.$transaction(async tx => { const next = await tx.operationJournal.create({
         data: {
           idempotencyKey: opKey("reset", tracked.id),
           resellerId, userId: tracked.id, email, type: "RESET", status: "RUNNING",
           reservedGB: usageGB,
           usageSnapshotGB: usageGB,
+          metadata: JSON.stringify({ explicitDestructive: true, operationInstallation: operationInstallation(true) }),
           targetPanels: JSON.stringify(req.panelIds), completedPanels: "[]", failedPanels: "[]",
         },
-      });
+      });await supersedeSavedPredecessors(tx, predecessors, next.id);return next; });
     } else {
-      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null } });
+      await db.operationJournal.update({ where: { id: journal.id }, data: { status: "RUNNING", lastError: null, metadata: await continuedDestructiveMetadata(journal.id) } });
     }
 
     const targetPanels = parseArr(journal.targetPanels);
+    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
     await prepareUsageLedger(journal.id, snapshot.panels, email);
     const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "reset", email);
 
     if (failed.length > 0) {
       return { ok: false, status: 502, partial: true, msg: `ریست ناقص بود — ${failed.length} پنل انجام نشد. مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
+
+    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
 
     usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
     await commitJournalAccounting(journal.id, resellerId, usageGB);
@@ -552,10 +631,11 @@ export async function confirmQueuedUserUpdates(resellerId: string, locked = fals
       for (const id of required.panelIds) {
         if (!connections.has(id)) {
           const connection = await getPanelConnection(id);
-          connections.set(id, connection.ok && await arePanelNodesSynchronized(connection.conn) ? connection.conn : null);
+          connections.set(id, connection.ok ? connection.conn : null);
         }
         const auth = connections.get(id);
-        if (!auth || !await isQueuedClientSaved(auth, user.email, user.trafficGB * 1073741824, user.subId || '', refs.filter(r => r.panelId === id).map(r => r.inboundId)) || !await arePanelNodesSynchronized(auth)) { ready = false; break; }
+        const ids = refs.filter(r => r.panelId === id).map(r => r.inboundId);
+        if (!auth || !await isQueuedClientSaved(auth, user.email, user.trafficGB * 1073741824, user.subId || '', ids) || !await arePanelNodesSynchronized(auth, true, ids)) { ready = false; break; }
       }
       if (!ready) continue;
       const result = await db.operationJournal.updateMany({ where: { id: journal.id, status: journal.status, updatedAt: journal.updatedAt, reservedGB: 0, metadata: journal.metadata }, data: { status: 'SUCCESS', completedPanels: journal.targetPanels, failedPanels: '[]', lastError: null, metadata: JSON.stringify({ ...updateMetadata(journal.metadata), nativePending: false }) } });

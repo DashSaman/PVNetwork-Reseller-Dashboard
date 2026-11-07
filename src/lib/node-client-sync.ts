@@ -11,7 +11,7 @@ export type NodePeer = {
 type RecordData = Record<string, unknown>;
 type ClientDetail = { client: RecordData; inboundIds: number[]; usedTraffic?: unknown };
 export type NativeRequest = <T>(auth: PanelAuth, path: string, init?: { method?: string; json?: unknown }) => Promise<PanelApiResult<T>>;
-type Step = { key: string; identity: string; status: "PENDING" | "STARTED" | "DONE"; wasEnabled?: boolean; usageBytes?: number };
+type Step = { key: string; identity: string; status: "PENDING" | "STARTED" | "DONE"; wasEnabled?: boolean; reactivateExhausted?: boolean; usageBytes?: number };
 export type NodeMutationState = { version: 1; email: string; op: "delete" | "reset"; steps: Step[] };
 export type NodeMutationProgress = {
   load(): Promise<NodeMutationState | undefined>;
@@ -200,7 +200,7 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
       const target = step.key === "master" ? auth : auth.nodePeers?.find(p => p.key === step.key);
       if (!target) return failure("نود ثبت‌شده در ژورنال پیکربندی نشده است");
       if (step.status === "DONE") {
-        if (op === "reset" && step.wasEnabled) {
+        if (op === "reset" && (step.wasEnabled || step.reactivateExhausted)) {
           const done = await detail(request, target, email);
           if (!done || identity(done.client) !== step.identity) return failure("تأیید بازگشت حساب پس از ریست ممکن نشد");
           if (!done.client.enable) await setEnabled(request, target, email, done, true);
@@ -218,6 +218,11 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
           if (current.client.enable) await setEnabled(request, target, email, current, false);
           try {
             step.usageBytes = Math.max(step.usageBytes || 0, await readUsage(request, target, email));
+            // Reset explicitly renews the usage allowance. An account stopped by
+            // quota exhaustion can run again; an ordinary manual disable or an
+            // expired account keeps its disabled state.
+            const total = Number(current.client.totalGB), expiry = Number(current.client.expiryTime);
+            step.reactivateExhausted ??= op === 'reset' && !step.wasEnabled && total > 0 && step.usageBytes >= total && (expiry <= 0 || expiry > Date.now());
             await progress.save(state);
             await progress.checkpointUsage(Math.max(...state.steps.map(s => s.usageBytes || 0)));
           } catch (e) {
@@ -233,9 +238,10 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
         const r = await request(target, `/panel/api/clients/${path}/${encodeURIComponent(email)}`, { method: "POST" });
         if (!r.ok) return failure("پاسخ عملیات نود قطعی نیست؛ بررسی و ادامه لازم است");
         if (op === "delete" && await detail(request, target, email)) return failure("حذف حساب روی نود تأیید نشد");
+        if (op === 'reset' && (step.usageBytes || 0) > 0 && await readUsage(request, target, email) >= step.usageBytes!) return failure('صفرشدن مصرف روی نود تأیید نشد؛ درخواست مبهم دوباره اجرا نمی‌شود');
       }
       step.status = "DONE"; await progress?.save(state);
-      if (op === "reset" && step.wasEnabled) {
+      if (op === "reset" && (step.wasEnabled || step.reactivateExhausted)) {
         const after = await detail(request, target, email);
         if (!after || identity(after.client) !== step.identity) return failure("تأیید حساب پس از ریست ممکن نشد");
         await setEnabled(request, target, email, after, true);

@@ -27,7 +27,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     if (!result.ok) {
       return NextResponse.json({ error: result.msg, partial: result.partial === true }, { status: result.status });
     }
-    return NextResponse.json({ ok: true, debitedGB: result.debitedGB });
+    return NextResponse.json({ ok: true, debitedGB: result.debitedGB, pending: result.pending === true, message: result.message }, { status: result.pending ? 202 : 200 });
   } catch (e) {
     console.error("reset traffic error:", e);
     return NextResponse.json({ error: "خطای داخلی در ریست ترافیک" }, { status: 500 });

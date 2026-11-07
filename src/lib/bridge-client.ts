@@ -112,7 +112,7 @@ export async function attachBridgeClient(reseller: ResellerWithInbounds, email: 
         const attached = await attachClient(connection.conn, email, ids);
         if (!attached.ok && !attached.pending) errors.push(attached.msg || unavailable);
         pending ||= attached.pending === true;
-      } else pending ||= !await arePanelNodesSynchronized(connection.conn, true);
+      } else pending ||= !await arePanelNodesSynchronized(connection.conn, true, combined.filter(r => r.panelId === panelId).map(r => r.inboundId));
     }
     return { errors, pending };
   }, async tx => {

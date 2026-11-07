@@ -136,7 +136,7 @@ async function resumeCreateFromJournal(
     if (!saved) {
       const existing = await readClientCreation(conn.conn, inboundIds, expected);
       if (existing.ok) {
-        remoteComplete++;pending ||= !await arePanelNodesSynchronized(conn.conn, true);continue;
+        remoteComplete++;pending ||= !await arePanelNodesSynchronized(conn.conn, true, inboundIds);continue;
       }
       const selectable = await validateAvailableInboundSelection(meta.refs, panelResult);
       if (!selectable.ok) return { ok: false, status: selectable.status, error: selectable.msg };
@@ -145,7 +145,7 @@ async function resumeCreateFromJournal(
     // A saved account may have started first-use validity or become exhausted.
     // Confirm current immutable identity/allocation; never recreate or re-enable it.
     let r = saved ? await readClientCreation(conn.conn, inboundIds, expected) : await resumeClientCreation(conn.conn as TypePanelAuth, inboundIds, protocol, expected);
-    if (saved && r.ok && !await arePanelNodesSynchronized(conn.conn, true)) r = { ok: false, pending: true };
+    if (saved && r.ok && !await arePanelNodesSynchronized(conn.conn, true, inboundIds)) r = { ok: false, pending: true };
     if (r.ok || r.pending) { remoteComplete++; pending ||= r.pending === true; }
   }
   if (remoteComplete < byPanel.size) {
@@ -532,8 +532,10 @@ export async function confirmQueuedCreations(resellerId: string, options: { lock
         const conn = await getPanelConnection(id);if (!conn.ok) { verified = false;break; }
         const checked = await readClientCreation(conn.conn, meta.refs.filter(r => r.panelId === id).map(r => r.inboundId), { id: meta.uuid, email: journal.email, subId: meta.subId, totalGB: meta.trafficGB * 1073741824, limitIp: meta.ipLimit, ...(!tracked ? { expiryTime: meta.expiryTime, enable: true } : {}) });
         if (!checked.ok) { verified = false;break; }
-        if (!readiness.has(id)) readiness.set(id, await arePanelNodesSynchronized(conn.conn, true));
-        const ready = readiness.get(id) && await arePanelNodesSynchronized(conn.conn, true);
+        const ids = meta.refs.filter(r => r.panelId === id).map(r => r.inboundId);
+        const key = id + ':' + [...ids].sort((a, b) => a - b).join(',');
+        if (!readiness.has(key)) readiness.set(key, await arePanelNodesSynchronized(conn.conn, true, ids));
+        const ready = readiness.get(key) && await arePanelNodesSynchronized(conn.conn, true, ids);
         pending ||= !ready;
       }
       if (!verified || tracked && pending) continue;

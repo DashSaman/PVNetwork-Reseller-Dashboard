@@ -282,7 +282,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     if (!result.ok) {
       return NextResponse.json({ error: result.msg, partial: result.partial === true }, { status: result.status });
     }
-    return NextResponse.json({ ok: true, debitedGB: result.debitedGB });
+    return NextResponse.json({ ok: true, debitedGB: result.debitedGB, refundedGB: result.refundedGB, pending: result.pending === true, message: result.message }, { status: result.pending ? 202 : 200 });
   } catch (e) {
     console.error("delete user error:", e);
     return NextResponse.json({ error: "خطای داخلی در حذف کاربر" }, { status: 500 });

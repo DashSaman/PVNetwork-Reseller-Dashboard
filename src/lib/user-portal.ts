@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { getAllPanelInboundsFresh, getPanelById } from "./panel-manager";
-import { buildV2rayLink, type BuiltLink } from "./links";
+import type { BuiltLink } from "./links";
+import { readNativeSubscription } from './native-subscription';
 
 /**
  * پورتال عمومی کاربر (/s/<subId>) — داده‌ها بر اساس subId از همه پنل‌ها
@@ -25,7 +26,7 @@ export type PortalData = {
   locations: string[];
 };
 
-export async function getPortalData(subIdRaw: string, requestHost: string): Promise<PortalData> {
+export async function getPortalData(subIdRaw: string, _requestHost: string): Promise<PortalData> {
   const subId = (subIdRaw || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
   const empty: PortalData = { found: false, subId, brandName: "PvNetWork", totalGB: 0, usedGB: 0, expiryTime: 0, enable: false, links: [], locations: [] };
   if (!subId || subId.length < 8) return empty;
@@ -58,8 +59,6 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
   if (!email) return empty;
 
   // ---- گذر ۲: جمع‌آوری آمار و ساخت لینک‌ها ----
-  let up = 0;
-  let down = 0;
   let total = 0;
   let expiryTime = 0;
   let enable = false;
@@ -69,59 +68,31 @@ export async function getPortalData(subIdRaw: string, requestHost: string): Prom
 
   for (const bundle of panelResult.panels) {
     const panel = await getPanelById(bundle.panelId);
-    let panelUp = 0;
-    let panelDown = 0;
-    let host = "";
-    if (panel?.subBase) {
-      try {
-        host = new URL(panel.subBase.trim()).hostname;
-      } catch {
-        host = "";
-      }
+    const hasOwnedClient = bundle.inbounds.some(i => i.clients.some(c => c.email === email && c.subId === subId));
+    if (hasOwnedClient) {
+      if (!panel) return { ...empty, unavailable: true };
+      try { links.push(...await readNativeSubscription(panel, subId)); }
+      catch { return { ...empty, unavailable: true }; }
     }
-    if (!host) host = requestHost;
 
     for (const inb of bundle.inbounds) {
       const key = `${bundle.panelId}::${inb.id}`;
       if (seenInbound.has(key)) continue;
-      const client = inb.clients.find((c) => c.email === email);
-      const stat = inb.clientStats.find((c) => c.email === email);
-      if (!client && !stat) continue;
+      const client = inb.clients.find((c) => c.email === email && c.subId === subId);
+      if (!client) continue;
       seenInbound.add(key);
 
-      // برندهٔ پنل: کل رکورد با بیشینهٔ up+down (نه max جدا برای up و down)
-      if ((stat?.up || 0) + (stat?.down || 0) > panelUp + panelDown) {
-        panelUp = stat?.up || 0;
-        panelDown = stat?.down || 0;
-      }
       total = Math.max(total, client?.totalGB || 0);
       expiryTime = Math.max(expiryTime, client?.expiryTime || 0);
       enable = enable || (client?.enable ?? true);
       locations.push(inb.remark || inb.tag);
 
-      if (host && (client?.id || client?.password)) {
-        const built = buildV2rayLink({
-          protocol: inb.protocol,
-          host,
-          port: inb.port,
-          remark: inb.remark || inb.tag,
-          uuid: client?.id,
-          password: client?.password,
-          email,
-          flow: client?.flow || "",
-          stream: (inb.stream || null) as Record<string, unknown> | null,
-        });
-        links.push({ ...built, remark: inb.remark || inb.tag });
-      }
     }
-    // تجمیع کانونی: فقط رکورد برنده هر پنل به مجموع کل اضافه می‌شود
-    up += panelUp;
-    down += panelDown;
   }
 
   // ترافیک از تک‌منبع کانونی (برندهٔ هر پنل، جمع بین پنل‌ها) — متادیتا (سهمیه/انقضا/لینک‌ها) از حلقه
   const { canonicalUserUsage } = await import("./reseller-helpers");
-  const canon = canonicalUserUsage(panelResult.panels, email);
+  const canon = canonicalUserUsage(panelResult.panels.filter(b => b.inbounds.some(i => i.clients.some(c => c.email === email && c.subId === subId))), email);
   const usedGB = Math.round((canon.usedBytes / 1073741824) * 100) / 100;
   const totalGB = Math.round((total / 1073741824) * 100) / 100;
   const daysLeft = expiryTime > 0 ? Math.ceil((expiryTime - Date.now()) / 86400000) : undefined;

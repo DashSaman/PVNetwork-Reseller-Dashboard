@@ -24,6 +24,7 @@ import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { CustomerToolsBar, CustomerRowTools, useCustomerMetadata } from "./customer-tools";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 import { MirzaSetupGuide } from './mirza-setup-guide';
+import { getCreateAttempt, finishCreateAttempt } from '@/lib/create-attempt';
 import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
 import {
@@ -878,9 +879,11 @@ function UsersTab({
   }
 
   const createAttempt = useRef<{ payload: string; requestId: string } | null>(null);
+  const createSubmitting = useRef(false);
   const selectableKeys = new Set(inbounds.map(i => refKey({ panelId: i.panelId, inboundId: i.inboundId })));
   const missingSelection = selectedInbounds.some(r => !selectableKeys.has(refKey(r)));
   async function createUser() {
+    if (createSubmitting.current) return;
     if (missingSelection) { toast({ title: 'انتخاب لوکیشن تغییر کرده', description: 'گزینه‌های ناموجود را از انتخاب حذف و دوباره بررسی کنید.', variant: 'destructive' });void refreshInbounds();return; }
     if (!name.trim()) {
       toast({ title: "خطا", description: "نام کاربر را وارد کنید", variant: "destructive" });
@@ -904,7 +907,11 @@ function UsersTab({
     // The server includes this attempt's existing reservation when checking a retry.
     // ---- ساخت گروهی (تعداد > ۱) ----
     const attemptPayload = JSON.stringify({ name, count: nCount, trafficGB: nTraffic, ...validity, ipLimit: nIpLimit, inbounds: selectedInbounds });
-    if (createAttempt.current?.payload !== attemptPayload) createAttempt.current = { payload: attemptPayload, requestId: crypto.randomUUID() };
+    if (createAttempt.current?.payload !== attemptPayload) {
+      let storage: Storage | null = null;try { storage = window.sessionStorage; } catch { /* Private browsers may deny storage. */ }
+      createAttempt.current = getCreateAttempt(storage, session.uid, attemptPayload, () => crypto.randomUUID());
+    }
+    createSubmitting.current = true;
     if (nCount > 1) {
       setBusy(true);
       const rb = await api<{
@@ -918,12 +925,16 @@ function UsersTab({
         body: JSON.stringify({ prefix: name, count: nCount, trafficGB: nTraffic, ...validity, ipLimit: nIpLimit, inbounds: selectedInbounds, requestId: createAttempt.current.requestId }),
       });
       setBusy(false);
+      createSubmitting.current = false;
       if (rb.ok && rb.data) {
         toast({
           title: rb.data.pendingCount ? 'حساب‌ها ثبت شدند' : "ساخت گروهی انجام شد",
           description: `${faNum(rb.data.createdCount)} آماده${rb.data.pendingCount ? ` — ${faNum(rb.data.pendingCount)} در انتظار آماده‌سازی لوکیشن‌ها` : ''}${rb.data.failedCount ? ` — ${faNum(rb.data.failedCount)} ناموفق` : ""}`,
         });
-        if (!rb.data.failedCount) { setCreateOpen(false); createAttempt.current = null; }
+        if (!rb.data.failedCount) {
+          try { finishCreateAttempt(window.sessionStorage, session.uid, createAttempt.current.requestId); } catch { /* Storage is optional. */ }
+          setCreateOpen(false); createAttempt.current = null;
+        }
         setBulkResult({ created: rb.data.created || [], failed: rb.data.failed || [] });
         if (!rb.data.failedCount) { setName(""); setExpiryDate(""); setSelectedInbounds([]); }
         reload();
@@ -939,7 +950,9 @@ function UsersTab({
       body: JSON.stringify({ ...JSON.parse(payload), requestId: createAttempt.current.requestId }),
     });
     setBusy(false);
+    createSubmitting.current = false;
     if (r.ok && r.data) {
+      try { finishCreateAttempt(window.sessionStorage, session.uid, createAttempt.current.requestId); } catch { /* Storage is optional. */ }
       createAttempt.current = null;
       toast({
         title: r.data.pending ? 'حساب ثبت شد' : "کاربر ساخته شد",
@@ -985,9 +998,10 @@ function UsersTab({
 
   async function confirmDelete() {
     if (!deleting) return;
-    const r = await api(`/api/reseller/users/${encodeURIComponent(deleting.email)}`, { method: "DELETE" });
+    const r = await api<{ refundedGB?: number; pending?: boolean; message?: string }>(`/api/reseller/users/${encodeURIComponent(deleting.email)}`, { method: "DELETE" });
     if (r.ok) {
-      toast({ title: "موفق", description: "کاربر حذف شد" });
+      toast({ title: r.data?.pending ? 'درخواست حذف ثبت شد' : "کاربر حذف شد", description: r.data?.pending ? r.data.message : `${faNum(Math.round((r.data?.refundedGB || 0) * 100) / 100)} گیگ حجم مصرف‌نشده به موجودی شما برگشت. مصرف قبلی در حساب محفوظ ماند.` });
+      void tools.reload();
       reload();
     } else {
       toast({ title: "خطا", description: r.error, variant: "destructive" });
@@ -996,9 +1010,10 @@ function UsersTab({
   }
 
   async function resetTraffic(u: ResellerUserRow) {
-    const r = await api(`/api/reseller/users/${encodeURIComponent(u.email)}/reset-traffic`, { method: "POST" });
+    const r = await api<{ pending?: boolean; message?: string }>(`/api/reseller/users/${encodeURIComponent(u.email)}/reset-traffic`, { method: "POST" });
     if (r.ok) {
-      toast({ title: "موفق", description: "ترافیک کاربر ریست شد" });
+      toast({ title: r.data?.pending ? 'درخواست ریست ثبت شد' : "موفق", description: r.data?.pending ? r.data.message : "ترافیک کاربر ریست شد" });
+      void tools.reload();
       reload();
     } else {
       toast({ title: "خطا", description: r.error, variant: "destructive" });
