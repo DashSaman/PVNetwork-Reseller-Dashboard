@@ -8,6 +8,7 @@ import { logActivity } from "./logger";
 import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync";
 import type { Prisma } from '@prisma/client';
 import { operationInstallation } from './operation-installation';
+import { canCancelUnstartedReset, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -331,8 +332,8 @@ export async function continuePendingDestructiveOperations(resellerId: string): 
     if (metadata.explicitDestructive !== true) continue;
     const installation = operationInstallation();
     if (!installation || metadata.operationInstallation !== installation) continue;
-    if (row.type === 'DELETE') await deleteUserByJournal(resellerId, row.email);
-    else await resetUserByJournal(resellerId, row.email);
+    if (row.type === 'DELETE') await deleteUserByJournal(resellerId, row.email, row.id);
+    else await resetUserByJournal(resellerId, row.email, row.id);
   }
 }
 
@@ -345,11 +346,13 @@ async function continuedDestructiveMetadata(journalId: string): Promise<string |
 }
 
 /** حذف کاربر — مسیر مشترک داشبورد و پل */
-export async function deleteUserByJournal(resellerId: string, email: string): Promise<OpResult> {
+export async function deleteUserByJournal(resellerId: string, email: string, expectedJournalId?: string): Promise<OpResult> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
     const { reseller, tracked } = loaded;
+
+    if (expectedJournalId && !await currentContinuation(resellerId, expectedJournalId, tracked, 'DELETE')) return { ok: true, debitedGB: 0 };
 
     const predecessors = await verifiedSavedPredecessors(resellerId, tracked);
     const conflict = await assertNoConflictingOperation(resellerId, email, "DELETE", predecessors.map(j => j.id));
@@ -363,6 +366,7 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
     if (!readable.ok) return { ok: false, status: 502, msg: `حذف انجام نشد: ${readable.msg}` };
 
     let journal = await findResumableJournal(resellerId, email, "DELETE");
+    if (expectedJournalId && journal?.id !== expectedJournalId) return { ok: true, debitedGB: 0 };
     let usageGB = journal?.usageSnapshotGB ?? null;
     if (usageGB === null) {
       usageGB = canonicalUserUsage(snapshot.panels, email).usedBytes / 1073741824;
@@ -407,11 +411,13 @@ export async function deleteUserByJournal(resellerId: string, email: string): Pr
 }
 
 /** ریست ترافیک — مسیر مشترک داشبورد و پل؛ هر چرخه = عملیات جدید با شناسه یکتا */
-export async function resetUserByJournal(resellerId: string, email: string): Promise<OpResult> {
+export async function resetUserByJournal(resellerId: string, email: string, expectedJournalId?: string): Promise<OpResult> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
     const { reseller, tracked } = loaded;
+
+    if (expectedJournalId && !await currentContinuation(resellerId, expectedJournalId, tracked, 'RESET')) return { ok: true, debitedGB: 0 };
 
     const predecessors = await verifiedSavedPredecessors(resellerId, tracked);
     const conflict = await assertNoConflictingOperation(resellerId, email, "RESET", predecessors.map(j => j.id));
@@ -425,6 +431,7 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     if (!readable.ok) return { ok: false, status: 502, msg: `ریست انجام نشد: ${readable.msg}` };
 
     let journal = await findResumableJournal(resellerId, email, "RESET");
+    if (expectedJournalId && journal?.id !== expectedJournalId) return { ok: true, debitedGB: 0 };
     let usageGB =
       journal?.usageSnapshotGB ??
       canonicalUserUsage(snapshot.panels, email).usedBytes / 1073741824;
@@ -466,6 +473,35 @@ export async function resetUserByJournal(resellerId: string, email: string): Pro
     await db.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
     await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "ریست ترافیک کاربر", detail: `${email}${usageGB > 0 ? ` | مصرف قطعی: ${usageGB} گیگ` : ""}`, resellerId });
     return { ok: true, debitedGB: usageGB };
+  });
+}
+
+/** Called inside the same owner lock as cancellation; a stale observer must not
+ * revive a cancelled/completed generation or create a fresh destructive job. */
+async function currentContinuation(resellerId: string, id: string, user: TrackedUser, type: 'RESET' | 'DELETE'): Promise<boolean> {
+  const row = await db.operationJournal.findUnique({ where: { id } });
+  return !!row && row.userId === user.id && row.resellerId === resellerId
+    && row.email === user.email && row.type === type && isCurrentDestructiveRequest(row, operationInstallation());
+}
+
+export async function cancelUnstartedReset(resellerId: string, email: string, operationId: string): Promise<OpResult> {
+  return withResellerLock(resellerId, async () => {
+    const loaded = await loadWithinLock(resellerId, email);
+    if ('err' in loaded) return loaded.err;
+    const { reseller, tracked } = loaded;
+    const row = await db.operationJournal.findUnique({ where: { id: operationId } });
+    if (!row || row.type !== 'RESET' || row.resellerId !== resellerId || row.userId !== tracked.id || row.email !== email) return { ok: false, status: 404, msg: 'درخواست ریست پیدا نشد' };
+    if (wasCancelledBeforeExecution(row)) return { ok: true, debitedGB: 0 };
+    if (!canCancelUnstartedReset(row, operationInstallation())) return { ok: false, status: 409, msg: 'اجرای این ریست آغاز شده یا نتیجهٔ آن نامشخص است؛ لغو امن مجاز نیست. مصرف و سهمیه حفظ شدند.' };
+    await db.$transaction(async tx => {
+      const changed = await tx.operationJournal.updateMany({
+        where: { id: row.id, userId: tracked.id, resellerId, email, type: 'RESET', status: row.status, updatedAt: row.updatedAt, metadata: row.metadata, accountingCommitted: false, reservedGB: row.reservedGB, usageSnapshotGB: row.usageSnapshotGB, completedPanels: row.completedPanels, failedPanels: row.failedPanels },
+        data: { status: 'CANCELLED', reservedGB: 0, lastError: null, metadata: JSON.stringify({ ...JSON.parse(row.metadata!), cancelledBeforeExecution: true, cancelledAt: new Date().toISOString() }) },
+      });
+      if (changed.count !== 1) throw Error('Reset changed during cancellation');
+      await tx.activityLog.create({ data: { actorType: 'RESELLER', actorName: reseller.username, resellerId, action: 'لغو ریست اجرا‌نشده', detail: `${email} | مصرف و سهمیهٔ کاربر حفظ شد` } });
+    });
+    return { ok: true, debitedGB: 0, message: 'ریستِ اجرا‌نشده لغو شد؛ مصرف و سهمیهٔ کاربر تغییری نکرد. اکنون می‌توانید ویرایش کنید.' };
   });
 }
 

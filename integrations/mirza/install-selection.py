@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 
 SOURCE_SHA = 'e750cd42bfc30cd9f8b989c664042f3d5cee72af1bd766d0fa28a7d614f9f587'
+PREVIOUS_SHA = 'b93c38530049c4813c50bebef48f2933390ea4b5c2fd2264fe1af3cd5c9f8017'
+PREVIOUS_HELPER_SHA = '7ffb6ad9df35a2cd5e0cbd54f80876cf06405b2571199020e7ee8bb315bb6c3f'
 ANCHOR = 'function addClient($panel, $usernameac, $Expire, $subId, $Total, $inboundid, $name_product, $note = "")\n{\n'
 INJECTION = '''    if (pvnetwork_is_sales_bridge($panel)) {
         $liveSelection = pvnetwork_current_selection($panel, $inboundid);
@@ -17,12 +19,17 @@ INJECTION = '''    if (pvnetwork_is_sales_bridge($panel)) {
 '''
 
 def candidate(source: bytes) -> bytes:
-    if hashlib.sha256(source).hexdigest() != SOURCE_SHA:
+    digest = hashlib.sha256(source).hexdigest()
+    if digest not in (SOURCE_SHA, PREVIOUS_SHA):
         raise ValueError('Unsupported or changed Mirza driver; inspect it before installing')
     text = source.decode('utf8')
     if text.count(ANCHOR) != 1 or text.count("ini_set('error_log', 'error_log');") != 1:
         raise ValueError('Mirza source anchors changed')
-    return text.replace("ini_set('error_log', 'error_log');", "ini_set('error_log', 'error_log');\nrequire_once __DIR__ . '/pvnetwork-selection.php';", 1).replace(ANCHOR, ANCHOR + INJECTION, 1).encode()
+    if digest == SOURCE_SHA:
+        text = text.replace("ini_set('error_log', 'error_log');", "ini_set('error_log', 'error_log');\nrequire_once __DIR__ . '/pvnetwork-selection.php';", 1).replace(ANCHOR, ANCHOR + INJECTION, 1)
+    if text.count('new CurlRequest($url)') != 8 or text.count('return $response;') != 8 or text.count("return $liveSelection['response'];") != 1:
+        raise ValueError('Mirza request boundaries changed')
+    return text.replace('new CurlRequest($url)', 'pvnetwork_curl_request($panel, $url)').replace('return $response;', 'return pvnetwork_api_response($panel, $response);').replace("return $liveSelection['response'];", "return pvnetwork_api_response($panel, $liveSelection['response']);").encode()
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -39,6 +46,12 @@ def main():
         raise ValueError('Unexpected connector paths')
     original = driver.read_bytes()
     patched = candidate(original)
+    old_helper = helper.read_bytes() if helper.exists() else None
+    if hashlib.sha256(original).hexdigest() == PREVIOUS_SHA:
+        if old_helper is None or hashlib.sha256(old_helper).hexdigest() != PREVIOUS_HELPER_SHA:
+            raise ValueError('Installed helper changed; inspect it before upgrading')
+    elif old_helper is not None:
+        raise ValueError('Unexpected existing connector helper')
     helper_bytes = Path(__file__).with_name('pvnetwork-selection.php').read_bytes()
     with tempfile.TemporaryDirectory(prefix='pvnetwork-mirza-check-') as temp:
         for name, value in [('x-ui_single.php', patched), ('pvnetwork-selection.php', helper_bytes)]:
@@ -53,8 +66,10 @@ def main():
     with saved.open('xb') as file:
         os.fchmod(file.fileno(), 0o600)
         file.write(original)
-    if helper.exists():
-        raise ValueError('Connector helper already exists; refusing overwrite')
+    if old_helper is not None:
+        with (backup / 'pvnetwork-selection.php.before').open('xb') as file:
+            os.fchmod(file.fileno(), 0o600)
+            file.write(old_helper)
     info = driver.stat()
     for target, value in [(helper, helper_bytes), (driver, patched)]:
         temporary = target.with_name(target.name + '.pvnetwork-new')
@@ -64,6 +79,8 @@ def main():
             os.fchown(file.fileno(), info.st_uid, info.st_gid)
         if driver.read_bytes() != original:
             raise ValueError('Driver changed during installation')
+        if target == helper and (helper.read_bytes() if helper.exists() else None) != old_helper:
+            raise ValueError('Helper changed during installation')
         os.replace(temporary, target)
     print('Mirza connector installed; services and database unchanged')
 

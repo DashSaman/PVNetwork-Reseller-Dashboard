@@ -8,6 +8,8 @@ import { confirmQueuedCreations } from './user-create';
 import { getAllPanelInboundsFresh, getPanelConnection, getPrimaryPanel } from './panel-manager';
 import { updateClient, getLastOnline, type PanelClient } from './panel';
 import { logActivity } from './logger';
+import { canCancelUnstartedReset } from './pending-reset';
+import { operationInstallation } from './operation-installation';
 
 export const CUSTOMER_ACTIVE = ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'];
 const identity = (client: PanelClient) => client.id || client.password || '';
@@ -34,8 +36,8 @@ export async function customerMetadata(users: ResellerUser[]) {
     const operation = updates.find(j => j.userId === u.id && j.type === 'UPDATE');
     const pending = parseSetting<{ newTrafficGB?: number; kind?: string; bulkJobId?: string; localCommitted?: boolean } | null>(operation?.metadata, null);
     const pendingUpdate = pending && !pending.kind && !pending.bulkJobId && Number.isSafeInteger(pending.newTrafficGB) && pending.newTrafficGB! >= 0 ? { trafficGB: pending.newTrafficGB!, localCommitted: !!operation && isSavedQueuedUpdate(u, operation) } : null;
-    const destructive = updates.find(j => j.userId === u.id && ['DELETE', 'RESET'].includes(j.type) && parseSetting<{ explicitDestructive?: boolean }>(j.metadata, {}).explicitDestructive === true);
-    return { email: u.email, labels, pendingUpdate, pendingCreate: updates.some(j => j.userId === u.id && j.type === 'CREATE' && j.resellerId === u.resellerId && j.email === u.email), pendingOperation: destructive?.type || null };
+    const destructive = updates.find(j => j.userId === u.id && j.resellerId === u.resellerId && j.email === u.email && ['DELETE', 'RESET'].includes(j.type) && parseSetting<{ explicitDestructive?: boolean }>(j.metadata, {}).explicitDestructive === true);
+    return { email: u.email, labels, pendingUpdate, pendingCreate: updates.some(j => j.userId === u.id && j.type === 'CREATE' && j.resellerId === u.resellerId && j.email === u.email), pendingOperation: destructive?.type || null, pendingOperationId: destructive?.id || null, canCancelReset: !!destructive && canCancelUnstartedReset(destructive, operationInstallation()) };
   });
 }
 

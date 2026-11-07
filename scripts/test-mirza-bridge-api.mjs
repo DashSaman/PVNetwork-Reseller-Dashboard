@@ -123,11 +123,15 @@ try{
    await guidePage.goto(base+'/guide/mirza-bot',{waitUntil:'networkidle'});const publicGuide=guidePage.getByTestId('mirza-setup-guide');
    const stateBeforeGuide=await db.setting.findUnique({where:{key:'bridgeApiToken:'+rep.id}}),writesBeforeGuide=writes.length;
    const navCount=await publicGuide.getByRole('navigation',{name:'انتخاب مرحله آموزش'}).getByRole('button').count();check('public illustrated guide is accessible with ten step controls',()=>assert.equal(navCount,10));
+   await publicGuide.getByRole('button',{name:'اتصال دارم؛ ادامه از کاربر نمونه',exact:true}).click();
+   await publicGuide.getByRole('heading',{name:'یک کاربر نمونه از پنل خودت بردار',exact:true}).waitFor();
+   const namingHelp=await publicGuide.getByLabel('تفاوت نام‌ها').innerText();
+   check('existing connections skip key issuance and explain the three distinct names',()=>{assert.ok(namingHelp.includes('نام پنل در میرزا'));assert.ok(namingHelp.includes('نام حساب نمایندگی'));assert.ok(namingHelp.includes('نام کاربری کانفیگ نمونه'));assert.equal(guideRequests.length,0)});
    for(const [index,label] of [[2,'key'],[6,'locations'],[7,'subscription'],[8,'plans']]){
     await publicGuide.getByRole('button',{name:'رفتن به مرحله '+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]),exact:true}).click();
     await publicGuide.screenshot({path:path.join(dir,'mirza-guide-'+label+'-desktop.png')});
    }
-   const sampleInstructions=await publicGuide.getByTestId('mirza-guide-step').innerText();check('tutorial explains 1024 MB trial size explicitly',()=>assert.ok(sampleInstructions.includes('۱۰۲۴')));
+   const sampleInstructions=await publicGuide.getByTestId('mirza-guide-step').innerText();check('tutorial explains 1024 MB and hourly trial duration explicitly',()=>{assert.ok(sampleInstructions.includes('۱۰۲۴'));assert.ok(sampleInstructions.includes('ساعت'));assert.ok(sampleInstructions.includes('۲۴'))});
    const sizes=[];for(const width of [390,320]){await guidePage.setViewportSize({width,height:844});for(let index=0;index<10;index++){
     await publicGuide.getByRole('button',{name:'رفتن به مرحله '+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]),exact:true}).click();sizes.push(await guidePage.evaluate(()=>({width:innerWidth,content:document.documentElement.scrollWidth})));
    }}check('every illustrated step fits both 320px and 390px mobile widths',()=>assert.ok(sizes.every(size=>size.content<=size.width+1),JSON.stringify(sizes)));
@@ -139,6 +143,17 @@ try{
    await guidePage.close();
    await page.getByRole('button',{name:'تنظیمات حساب',exact:true}).click();await keyInput.waitFor({state:'visible'});
    await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(dir,'mirza-api-key-mobile.png'),fullPage:true});const width=await page.evaluate(()=>({content:document.documentElement.scrollWidth,viewport:innerWidth}));check('Mirza settings fit mobile without page overflow or script errors',()=>{assert.ok(width.content<=width.viewport+1,JSON.stringify(width));assert.deepEqual(errors,[])});
+   const cancelNative=await seed(rep,'cancel_ui');cancelNative.ids=new Set([2]);
+   await db.resellerUser.update({where:{resellerId_email:{resellerId:rep.id,email:'cancel_ui'}},data:{inboundIds:JSON.stringify([{panelId:panel.id,inboundId:2}])}});
+   mode.remoteTwo=true;mode.offline=true;
+   result=await own('/api/reseller/users/cancel_ui/reset-traffic','POST',{});assert.equal(result.status,202);
+   await page.goto(base,{waitUntil:'networkidle'});
+   const cancelButton=page.getByRole('button',{name:'لغو ریست اجرا‌نشدهٔ cancel_ui',exact:true});await cancelButton.waitFor();
+   await page.screenshot({path:path.join(dir,'cancel-unstarted-reset-mobile.png'),fullPage:true});
+   const cancelledResponse=page.waitForResponse(r=>r.request().method()==='DELETE'&&r.url().includes('/cancel_ui/reset-traffic'));await cancelButton.click();assert.equal((await cancelledResponse).status(),200);
+   await cancelButton.waitFor({state:'hidden'});
+   const closedReset=await db.operationJournal.findFirst({where:{resellerId:rep.id,email:'cancel_ui',type:'RESET'}});
+   check('owner can cancel an unstarted reset from the actual mobile row without clearing traffic',()=>{assert.equal(closedReset.status,'CANCELLED');assert.equal(closedReset.reservedGB,0);assert.equal(cancelNative.used,2*GB)});
   }finally{await browser.close()}
  }
  console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;

@@ -760,6 +760,7 @@ function UsersTab({
   const [extensionOpen, setExtensionOpen] = useState(false);
   const [editing, setEditing] = useState<ResellerUserRow | null>(null);
   const [deleting, setDeleting] = useState<ResellerUserRow | null>(null);
+  const [cancellingReset, setCancellingReset] = useState<string | null>(null);
   const [linksUser, setLinksUser] = useState<{ email: string; name: string | null } | null>(null);
   const [regenLoading, setRegenLoading] = useState(false);
   const [linkData, setLinkData] = useState<UserLinkData | null>(null);
@@ -1020,6 +1021,17 @@ function UsersTab({
     }
   }
 
+  async function cancelReset(u: ResellerUserRow) {
+    const operationId = tools.data.get(u.email)?.pendingOperationId;
+    if (!operationId || cancellingReset) return;
+    setCancellingReset(u.email);
+    try {
+      const r = await api<{ message?: string }>(`/api/reseller/users/${encodeURIComponent(u.email)}/reset-traffic`, { method: 'DELETE', body: JSON.stringify({ operationId }) });
+      toast(r.ok ? { title: 'ریست اجرا‌نشده لغو شد', description: r.data?.message } : { title: 'لغو ریست انجام نشد', description: r.error, variant: 'destructive' });
+      await tools.reload();reload();
+    } finally { setCancellingReset(null); }
+  }
+
   async function toggleEnable(u: ResellerUserRow) {
     if (u.liveFresh === false || u.enable === null) return;
     const r = await api<{ pending?: boolean }>(`/api/reseller/users/${encodeURIComponent(u.email)}`, {
@@ -1265,7 +1277,7 @@ function UsersTab({
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} online={onlineSet.has(u.email)} onResume={() => openEdit(u)} resumeDisabled={u.liveFresh === false || u.expiryTime === null || u.enable === null} checked={selectedCustomers.has(u.email)} onCheck={() => setSelectedCustomers(previous => { const next = new Set(previous);if (next.has(u.email)) next.delete(u.email);else if (next.size < 50) next.add(u.email);return next; })} /></TableCell>
+                      <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} online={onlineSet.has(u.email)} onResume={() => openEdit(u)} resumeDisabled={u.liveFresh === false || u.expiryTime === null || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} onCancelReset={() => cancelReset(u)} cancellingReset={cancellingReset === u.email} checked={selectedCustomers.has(u.email)} onCheck={() => setSelectedCustomers(previous => { const next = new Set(previous);if (next.has(u.email)) next.delete(u.email);else if (next.size < 50) next.add(u.email);return next; })} /></TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1 max-w-40">
                           {u.inboundTags.slice(0, 3).map((t, idx) => (
@@ -1305,13 +1317,13 @@ function UsersTab({
                               <Copy className="h-4 w-4" />
                             </Button>
                           )}
-                          <Button size="icon" variant="ghost" title="ریست ترافیک" onClick={() => resetTraffic(u)}>
+                          <Button size="icon" variant="ghost" title="ریست ترافیک" disabled={!!tools.data.get(u.email)?.pendingOperation} onClick={() => resetTraffic(u)}>
                             <RotateCcw className="h-4 w-4" />
                           </Button>
-                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.enable === null} title={u.enable === null ? "در انتظار وضعیت زنده" : u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
+                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} title={u.enable === null ? "در انتظار وضعیت زنده" : u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
                             <UserX className={`h-4 w-4 ${u.enable ? "" : "text-[var(--brand)]"}`} />
                           </Button>
-                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.expiryTime === null || u.enable === null} title="ویرایش" aria-label={`ویرایش ${u.email}`} onClick={() => openEdit(u)}>
+                          <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.expiryTime === null || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} title="ویرایش" aria-label={`ویرایش ${u.email}`} onClick={() => openEdit(u)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button size="icon" variant="ghost" title="حذف" onClick={() => setDeleting(u)}>

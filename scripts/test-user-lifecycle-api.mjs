@@ -124,6 +124,35 @@ try{
  const b=await db.panelConfig.create({data:{name:'mock-b',baseUrl:native+'/b',username:'mock',password:encryptSecret('mock'),apiToken:encryptSecret('mock')}});await seed(deletion,'partial-delete',1,b);mode.set('partial-delete',{failB:true});await api(deletion,'/api/reseller/users/partial-delete','DELETE');clients.get(key('b','partial-delete')).used=5*GB;mode.set('partial-delete',{});result=await api(deletion,'/api/reseller/users/partial-delete','DELETE');const d=await db.operationJournal.findFirst({where:{email:'partial-delete',type:'DELETE'}});check('partial delete retry accounts growing pending-panel usage once',()=>{assert.equal(result.status,200);assert.equal(d.usageSnapshotGB,6);assert.equal(d.accountingCommitted,true)});
  const cold=await owner('cold');const v=await seed(cold,'cold-ready',0);v.ids=new Set([1,2,3]);await db.resellerUser.update({where:{resellerId_email:{resellerId:cold.id,email:'cold-ready'}},data:{inboundIds:JSON.stringify([1,2,3].map(inboundId=>({panelId:panel.id,inboundId})))}});await db.panelConfig.update({where:{id:panel.id},data:{name:'cold-mock'}});mode.set('delay',true);const response=await fetch(base+'/api/s/'+v.subId+'?format=json');const sub=await response.json();check('cold subscription never returns missing/empty success for a ready user',()=>{assert.equal(response.status,200);assert.equal(sub.links.length,3)});
  mode.delete('delay');const revoked=await owner('revoked-create');const revokePayload={name:'Revoked',trafficGB:10,expiryDays:30,inbounds:[{panelId:panel.id,inboundId:1}],requestId:'revoked-create-fixture'};mode.set('node-pending',true);await api(revoked,'/api/reseller/users','POST',revokePayload);mode.delete('node-pending');await db.resellerInbound.deleteMany({where:{resellerId:revoked.id}});result=await api(revoked,'/api/reseller/users','POST',revokePayload);check('pending creation cannot resume into a location after permission was revoked',()=>assert.equal(result.status,403));
+ const cancelOwner=await owner('cancel-unstarted-reset',100);const cancelClient=await seed(cancelOwner,'cancel-unstarted',3);
+ mode.set('all-remote',true);mode.set('node-pending',true);
+ result=await api(cancelOwner,'/api/reseller/users/cancel-unstarted/reset-traffic','POST',{});
+ const cancelJournal=await db.operationJournal.findFirst({where:{resellerId:cancelOwner.id,email:'cancel-unstarted',type:'RESET'},orderBy:{createdAt:'desc'}});
+ check('unstarted reset retains its prospective debit while a required target is unavailable',()=>{assert.equal(result.status,202);assert.equal(cancelJournal.reservedGB,3);assert.equal(cancelClient.used,3*GB)});
+ let cancelMeta=await api(cancelOwner,'/api/reseller/customer-tools');
+ check('pending reset exposes its exact cancellable operation to its owner',()=>{const m=cancelMeta.data.users.find(u=>u.email==='cancel-unstarted');assert.equal(m.pendingOperationId,cancelJournal.id);assert.equal(m.canCancelReset,true)});
+ result=await api(r,'/api/reseller/users/cancel-unstarted/reset-traffic','DELETE',{operationId:cancelJournal.id});
+ check('another owner cannot cancel the pending reset',()=>assert.equal(result.status,404));
+ result=await api(cancelOwner,'/api/reseller/users/cancel-unstarted/reset-traffic','DELETE',{});
+ check('cancellation requires the exact operation rather than a stale row button',()=>assert.equal(result.status,400));
+ const cancellations=await Promise.all([1,2].map(()=>api(cancelOwner,'/api/reseller/users/cancel-unstarted/reset-traffic','DELETE',{operationId:cancelJournal.id})));
+ const cancelled=await db.operationJournal.findUnique({where:{id:cancelJournal.id}}),cancelOwnerAfter=await db.reseller.findUnique({where:{id:cancelOwner.id}});
+ check('double cancellation closes one unexecuted reset without clearing usage or granting quota',()=>{assert.ok(cancellations.every(x=>x.status===200));assert.equal(cancelled.status,'CANCELLED');assert.equal(cancelled.reservedGB,0);assert.equal(cancelOwnerAfter.consumedGB,0);assert.equal(cancelOwnerAfter.trafficPoolGB,100);assert.equal(cancelClient.used,3*GB);assert.equal(cancelClient.enable,true)});
+ mode.delete('node-pending');mode.delete('all-remote');
+ result=await api(cancelOwner,'/api/reseller/users/cancel-unstarted','PUT',{name:'Editable again'});
+ check('editing is available again after safe cancellation with usage retained',()=>{assert.equal(result.status,200);assert.equal(cancelClient.used,3*GB)});
+ mode.set('all-remote',true);mode.set('node-pending',true);await api(cancelOwner,'/api/reseller/users/cancel-unstarted/reset-traffic','POST',{});
+ const nextReset=await db.operationJournal.findFirst({where:{resellerId:cancelOwner.id,email:'cancel-unstarted',type:'RESET',status:'RUNNING'},orderBy:{createdAt:'desc'}});
+ await api(cancelOwner,'/api/reseller/users/cancel-unstarted/reset-traffic','DELETE',{operationId:cancelJournal.id});
+ const nextAfterOld=nextReset&&await db.operationJournal.findUnique({where:{id:nextReset.id}});
+ check('a delayed cancellation of the old request never cancels a new reset cycle',()=>{assert.notEqual(nextReset?.id,cancelJournal.id);assert.equal(nextAfterOld?.status,'RUNNING')});
+ mode.delete('node-pending');mode.delete('all-remote');result=await api(cancelOwner,'/api/reseller/users/cancel-unstarted/reset-traffic','POST',{});
+ check('a fresh reset after cancellation runs once and retains the real consumed debit',()=>{assert.equal(result.status,200);assert.equal(cancelClient.used,0)});
+ const finalCancelOwner=await db.reseller.findUnique({where:{id:cancelOwner.id}});check('only the actual completed reset charges the consumed volume',()=>assert.equal(finalCancelOwner.consumedGB,3));
+ const beforeUnknown=clients.get(key('a','ambiguous-reset')).used;
+ const uncertainResetForCancel=await db.operationJournal.findFirst({where:{resellerId:deletion.id,email:'ambiguous-reset',type:'RESET'},orderBy:{createdAt:'desc'}});
+ result=await api(deletion,'/api/reseller/users/ambiguous-reset/reset-traffic','DELETE',{operationId:uncertainResetForCancel.id});
+ check('a reset with an unknown write result cannot be cancelled or release newly accrued usage',()=>{assert.equal(result.status,409);assert.equal(clients.get(key('a','ambiguous-reset')).used,beforeUnknown)});
  console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;
 }catch(e){console.error(e);console.error('Fixture:',dir);process.exitCode=1}
 finally{if(app){if(process.platform==='win32')await new Promise(resolve=>{const p=spawn('taskkill.exe',['/PID',String(app.pid),'/T','/F'],{windowsHide:true});p.on('exit',resolve)});else app.kill('SIGTERM')}if(server){server.closeAllConnections();server.close()}if(db)await db.$disconnect()}
