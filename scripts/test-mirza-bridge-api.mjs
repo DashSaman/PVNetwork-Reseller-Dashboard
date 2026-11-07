@@ -149,6 +149,7 @@ try{
    result=await own('/api/reseller/users/cancel_ui/reset-traffic','POST',{});assert.equal(result.status,202);
    await page.goto(base,{waitUntil:'networkidle'});
    const cancelButton=page.getByRole('button',{name:'لغو ریست اجرا‌نشدهٔ cancel_ui',exact:true});await cancelButton.waitFor();
+   const continueResetEnabled=await page.getByTitle('ادامهٔ ریست ثبت‌شده',{exact:true}).isEnabled();check('a pending reset keeps an explicit continuation action for its owner',()=>assert.equal(continueResetEnabled,true));
    await page.screenshot({path:path.join(dir,'cancel-unstarted-reset-mobile.png'),fullPage:true});
    const cancelledResponse=page.waitForResponse(r=>r.request().method()==='DELETE'&&r.url().includes('/cancel_ui/reset-traffic'));await cancelButton.click();assert.equal((await cancelledResponse).status(),200);
    await cancelButton.waitFor({state:'hidden'});

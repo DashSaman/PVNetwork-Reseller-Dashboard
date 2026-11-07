@@ -1317,7 +1317,7 @@ function UsersTab({
                               <Copy className="h-4 w-4" />
                             </Button>
                           )}
-                          <Button size="icon" variant="ghost" title="ریست ترافیک" disabled={!!tools.data.get(u.email)?.pendingOperation} onClick={() => resetTraffic(u)}>
+                          <Button size="icon" variant="ghost" title={tools.data.get(u.email)?.pendingOperation === 'RESET' ? 'ادامهٔ ریست ثبت‌شده' : 'ریست ترافیک'} disabled={tools.data.get(u.email)?.pendingOperation === 'DELETE'} onClick={() => resetTraffic(u)}>
                             <RotateCcw className="h-4 w-4" />
                           </Button>
                           <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} title={u.enable === null ? "در انتظار وضعیت زنده" : u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
