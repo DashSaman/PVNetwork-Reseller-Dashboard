@@ -110,6 +110,63 @@ rejection and other-panel preservation checks in a private isolated fixture.
 Slow native sample reads were also exercised; no additional reader change was
 needed. TypeScript, targeted ESLint, and whitespace validation passed.
 
-Production release identifiers and exact image/host acceptance are recorded here
-after acceptance. Private evidence, connection credentials, client identifiers
-and database copies remain outside Git.
+Accepted production application revision:
+`37de2be1a4a7afaf2c2629c050ff5fd66e0754e6`, including the earlier functional
+fixes in `ab3496d5de63445198ed9c5cc6bca66ec3c913e5` and LF archive protection in
+`7a336a3ea23baf79eae181f6c0c089285b6b22fc`.
+
+The exact Linux image passed226 isolated API checks (87customer,50lifecycle,
+45audit,44Mirza), with external networking disabled, no published host ports and
+no production database mounted. The default entrypoint also initialized and ran
+against a fresh temporary database. Acceptance against a private fresh copy of
+the production database passed before the final live replacement.
+
+Accepted runtime tag: `pv-reseller-dashboard:customer-reliability-20261107-r3`.
+Its amd64 manifest is
+`sha256:e3c00cf7e6d24cf95432cb65307c8445311b5f3d15df06de7a99e7306c72a129`.
+The live dashboard retained its existing environment, signing key, data volume,
+network and loopback binding `127.0.0.1:31080`. The previous accepted image remains
+available for rollback. A bounded server build had stopped at its own memory cap;
+the accepted image was built locally from public source and official base images.
+Earlier rejected deployment attempts automatically restored the previous runtime
+without restoring a database over live changes.
+
+Live acceptance checked all69 tracked customers, administrator views, both active
+reseller scopes,11 distinct assigned available locations, and canonical copied
+links in both scopes. Existing offline-target queues remained protected. The
+subsequent final comparison confirmed that administrator accounts, reseller
+profiles/balances, permissions, all69 customer records and native panel settings
+were unchanged by the tests. Native inbound configuration, unrelated service PIDs,
+running containers and listeners matched the deployment baseline. Existing backup
+and observation timers remained active; no service or port was added.
+
+The configured Mirza connection was updated using a new owner-scoped sales key
+and the dashboard subscription base. Only its five connection fields and the two
+verified connector files changed; bot customers, wallets, orders, products,
+pricing, trial size/duration and other settings were preserved. Saved-connection
+status, owned customer/traffic, permitted catalog, subscription and wrong-owner
+denial all passed through the installed PHP driver.
+
+The installed driver also performed two real1GB creations, one paid-mode and one
+trial-mode, under a temporary reseller with an independent pool and no notification
+tokens. Both became usable, with nonempty subscriptions and memberships matching
+their actual submitted selection. Live selection changed between calls: the paid
+request used10 available locations and the trial used7; unavailable locations were
+excluded before each request. An initial test incorrectly compared both with one
+earlier catalog; journal and native records confirmed complete membership for each
+actual request. Creation was not replayed to resolve that test mismatch.
+
+Copied configurations for those synthetic customers were also compared with the
+native subscription. The two customers were deleted through the normal dashboard
+path, their full unused allocations were returned, and the temporary reseller and
+test journals were removed. No real invoice, wallet charge or Telegram message was
+generated. Normal concurrent owner intent and session-revocation cleanup were
+preserved during final verification, rather than overwritten from a snapshot.
+
+A final complete dashboard archive was verified against all eight live tables and
+its recovery key after test cleanup. It contains69 customers,3 reseller records
+(including the archived reseller), permissions, settings and operation journals;
+no native infrastructure database was exported. Private evidence, connection
+credentials, client identifiers, archive names and database copies remain outside
+Git. Future operators must verify the current state and must not replay completed
+test, repair or provisioning scripts.
