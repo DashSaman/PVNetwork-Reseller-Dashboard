@@ -13,6 +13,11 @@ causes, rather than a single protocol configuration failure:
   unrelated offline node prevented confirmation of healthy selected targets.
   Some existing queues genuinely include the offline target and must remain
   guarded until its response can be verified.
+- Confirming many saved queues repeatedly downloaded the entire native inbound
+  catalog. Production acceptance caught a metadata timeout. A13-account fixture
+  reproduced20,257ms; sharing a short-lived snapshot within each confirmation
+  batch reduced the same read to1,579ms. Metadata confirmation now has a shared
+  cancellation deadline; unknown results stay guarded when that budget expires.
 - A creation request ID lived only in React memory. A lost response followed by
   a full page reload discarded it, allowing a second funded account on retry.
   The Mirza adapter also reported an already-saved queued creation as a failed
@@ -86,13 +91,18 @@ sales API token. Products and trials continue to use whole GB for limited pools.
 
 ## Validation and deployment
 
-Local validation covers109customer/API/browser checks,50lifecycle checks,
+Local validation covers111customer/API/browser checks,50lifecycle checks,
 59Mirza/API/browser checks,45audit checks and27unit checks. The browser test aborts
 only the response after a successful fixture creation, reloads the entire page,
 and verifies the same request ID, one customer and one allocation. Native
 configuration parameters are checked through the actual copy-all button. Offline
 target recovery, intervening consumption, restored-queue consent, ordinary manual
-disable, expiration, and a false reset acknowledgement are included.
+disable, expiration, a false reset acknowledgement, many queued accounts and a
+slow confirmation exceeding its metadata budget are included.
+
+Linux image validation also includes the default container entrypoint and a fresh
+temporary database. Shell scripts are exported with LF endings through
+`.gitattributes`, including when Git creates the build archive on Windows.
 
 The installed PHP driver plus connector passed paid/trial request construction,
 per-create live selection, unavailable/deleted/unassigned exclusion, no-target

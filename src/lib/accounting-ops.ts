@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
-import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, isQueuedClientSaved, readClientCreation, type PanelAuth } from "./panel";
+import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, isQueuedClientSaved, readClientCreation, type PanelAuth, type PanelNodeSyncSnapshot } from "./panel";
 import { isSavedQueuedCreation, creationMetadata } from './queued-create';
 import { isSavedQueuedUpdate, updateMetadata } from './queued-update';
 import { logActivity } from "./logger";
@@ -613,14 +613,17 @@ export async function pendingUpdateQuota(resellerId: string, email: string, fall
 /** Settle only already-paid queues after read-only native confirmation.
  * The collector passes locked=true because it already owns this reseller lock.
  */
-export async function confirmQueuedUserUpdates(resellerId: string, locked = false): Promise<number> {
+export async function confirmQueuedUserUpdates(resellerId: string, locked = false, budgetMs?: number): Promise<number> {
   const confirm = async () => {
+    const signal = budgetMs ? AbortSignal.timeout(budgetMs) : undefined;
     const journals = await db.operationJournal.findMany({ where: { resellerId, type: 'UPDATE', status: 'PARTIAL', reservedGB: 0 }, take: 2000 });
     if (!journals.length) return 0;
     const users = await db.resellerUser.findMany({ where: { resellerId, id: { in: journals.flatMap(j => j.userId ? [j.userId] : []) } } });
     const connections = new Map<string, PanelAuth | null>();
+    const snapshots = new Map<string, PanelNodeSyncSnapshot>();
     let confirmed = 0;
     for (const journal of journals) {
+      if (signal?.aborted) break;
       const user = users.find(u => u.id === journal.userId);
       if (!user || !isSavedQueuedUpdate(user, journal)) continue;
       if (await db.operationJournal.count({ where: { resellerId, email: user.email, id: { not: journal.id }, status: { in: ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'] } } })) continue;
@@ -635,7 +638,10 @@ export async function confirmQueuedUserUpdates(resellerId: string, locked = fals
         }
         const auth = connections.get(id);
         const ids = refs.filter(r => r.panelId === id).map(r => r.inboundId);
-        if (!auth || !await isQueuedClientSaved(auth, user.email, user.trafficGB * 1073741824, user.subId || '', ids) || !await arePanelNodesSynchronized(auth, true, ids)) { ready = false; break; }
+        if (!auth) { ready = false; break; }
+        let snapshot = snapshots.get(id);
+        if (!snapshot || Date.now() - snapshot.health.observedAt > 5000) { snapshot = await getPanelNodeSyncSnapshot(auth, signal);snapshots.set(id, snapshot); }
+        if (signal?.aborted || !await arePanelNodesSynchronized(auth, true, ids, snapshot) || !await isQueuedClientSaved(auth, user.email, user.trafficGB * 1073741824, user.subId || '', ids, signal)) { ready = false; break; }
       }
       if (!ready) continue;
       const result = await db.operationJournal.updateMany({ where: { id: journal.id, status: journal.status, updatedAt: journal.updatedAt, reservedGB: 0, metadata: journal.metadata }, data: { status: 'SUCCESS', completedPanels: journal.targetPanels, failedPanels: '[]', lastError: null, metadata: JSON.stringify({ ...updateMetadata(journal.metadata), nativePending: false }) } });

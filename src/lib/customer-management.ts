@@ -23,7 +23,7 @@ export async function ownedCustomers(resellerId: string, input: unknown) {
 }
 
 export async function customerMetadata(users: ResellerUser[]) {
-  await Promise.all([...new Set(users.map(u => u.resellerId))].map(async id => { await confirmQueuedUserUpdates(id);await confirmQueuedCreations(id); }));
+  await Promise.all([...new Set(users.map(u => u.resellerId))].map(async id => { await confirmQueuedUserUpdates(id, false, 4000);await confirmQueuedCreations(id, { budgetMs: 4000 }); }));
   const entries = await db.setting.findMany({ where: { key: { in: users.map(u => customerMetaKey(u.id)) } } });
   const values = new Map(entries.map(s => [s.key, s.value]));
   const updates = await db.operationJournal.findMany({ where: { userId: { in: users.map(u => u.id) }, type: { in: ['UPDATE', 'CREATE', 'DELETE', 'RESET'] }, status: { in: ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'] } }, orderBy: { createdAt: 'desc' } });

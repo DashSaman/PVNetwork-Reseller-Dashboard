@@ -462,37 +462,43 @@ export async function getVerifiedClientUsage(auth: PanelAuth, email: string, exp
 }
 
 /** Read-only confirmation; never retry the customer's mutation here. */
-export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = false, inboundIds?: number[]): Promise<boolean> {
+// Shared only within one confirmation batch; stale health still fails closed.
+export type PanelNodeSyncSnapshot = { inbounds: Pick<PanelInbound, 'id' | 'nodeId'>[] | null; health: InboundRuntimeHealth };
+export async function getPanelNodeSyncSnapshot(auth: PanelAuth, signal?: AbortSignal): Promise<PanelNodeSyncSnapshot> {
+  const [inbounds, health] = await Promise.all([getInbounds(auth, { timeoutMs: 4000, signal }), getInboundRuntimeHealth(auth, signal)]);
+  return { inbounds: inbounds.ok && inbounds.data ? inbounds.data.map(({ id, nodeId }) => ({ id, nodeId })) : null, health };
+}
+export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = false, inboundIds?: number[], snapshot?: PanelNodeSyncSnapshot): Promise<boolean> {
   if (inboundIds) {
     if (!inboundIds.length) return false;
-    const [inbounds, health] = await Promise.all([getInbounds(auth), getInboundRuntimeHealth(auth)]);
-    return inbounds.ok && !!inbounds.data && [...new Set(inboundIds)].every(id => {
-      const matches = inbounds.data!.filter(i => i.id === id);
-      return matches.length === 1 && inboundAvailable({ ...matches[0], enable: true }, health);
+    const current = snapshot || await getPanelNodeSyncSnapshot(auth);
+    return !!current.inbounds && [...new Set(inboundIds)].every(id => {
+      const matches = current.inbounds!.filter(i => i.id === id);
+      return matches.length === 1 && inboundAvailable({ ...matches[0], enable: true }, current.health);
     });
   }
   const result = await panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 4000 });
   return result.ok && (allowEmpty && Array.isArray(result.data) && result.data.length === 0 || nodesSynchronized(result.data));
 }
 
-export async function getInboundRuntimeHealth(auth: PanelAuth): Promise<InboundRuntimeHealth> {
+export async function getInboundRuntimeHealth(auth: PanelAuth, signal?: AbortSignal): Promise<InboundRuntimeHealth> {
   const [nodes, local] = await Promise.all([
-    panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 3500 }),
-    panelRequest<{ xray?: { state?: unknown }; panelGuid?: unknown }>(auth, '/panel/api/server/status', { timeoutMs: 3500 }),
+    panelRequest<unknown>(auth, '/panel/api/nodes/list', { timeoutMs: 3500, signal }),
+    panelRequest<{ xray?: { state?: unknown }; panelGuid?: unknown }>(auth, '/panel/api/server/status', { timeoutMs: 3500, signal }),
   ]);
   return { observedAt: Date.now(), localRunning: local.ok && local.data?.xray?.state === 'running', controllerGuid: local.ok && typeof local.data?.panelGuid === 'string' ? local.data.panelGuid : undefined, nodes: nodes.ok ? nodes.data : null };
 }
 
-export async function readClientCreation(auth: PanelAuth, inboundIds: number[], expected: Partial<PanelClient>): Promise<PanelApiResult> {
-  return verifyClientCreationRecord(auth, expected.email || '', inboundIds, expected, (a, p, init) => panelRequest(a, p, { ...init, timeoutMs: 4000 }));
+export async function readClientCreation(auth: PanelAuth, inboundIds: number[], expected: Partial<PanelClient>, signal?: AbortSignal): Promise<PanelApiResult> {
+  return verifyClientCreationRecord(auth, expected.email || '', inboundIds, expected, (a, p, init) => panelRequest(a, p, { ...init, timeoutMs: 4000, signal }));
 }
 
-export async function isQueuedClientSaved(auth: PanelAuth, email: string, quotaBytes: number, subId: string, inboundIds: number[]): Promise<boolean> {
+export async function isQueuedClientSaved(auth: PanelAuth, email: string, quotaBytes: number, subId: string, inboundIds: number[], signal?: AbortSignal): Promise<boolean> {
   if (!subId || !inboundIds.length) return false;
-  const result = await panelRequest<{ client: { email?: string; uuid?: string; id?: string; subId?: string; totalGB?: number }; inboundIds?: number[] }>(auth, `/panel/api/clients/get/${encodeURIComponent(email)}`, { timeoutMs: 4000 });
+  const result = await panelRequest<{ client: { email?: string; uuid?: string; id?: string; subId?: string; totalGB?: number }; inboundIds?: number[] }>(auth, `/panel/api/clients/get/${encodeURIComponent(email)}`, { timeoutMs: 4000, signal });
   const client = result.data?.client, ids = result.data?.inboundIds;
   if (!result.ok || !client || client.email !== email || !(client.uuid || client.id) || client.subId !== subId || client.totalGB !== quotaBytes || !Array.isArray(ids) || !inboundIds.every(id => ids.includes(id))) return false;
-  const usage = await getVerifiedClientUsage(auth, email, quotaBytes);
+  const usage = await verifiedClientUsage(auth, email, (a, path, init) => panelRequest(a, path, { ...init, timeoutMs: 4000, signal }), quotaBytes);
   return usage.ok && usage.data !== undefined;
 }
 

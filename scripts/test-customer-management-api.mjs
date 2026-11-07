@@ -27,7 +27,7 @@ try{
   else if(url==='/panel/api/clients/list')obj=[...clients.entries()].filter(([k])=>k.startsWith(p+':')).map(([,c])=>c);
   else if(url==='/panel/api/nodes/list'){if(mode.get('nodes-unavailable')){success=false;msg='temporarily unavailable'}else obj=[{id:1,enable:true,status:mode.get('nodes-offline')?'offline':'online',configDirty:!mode.get('defer-native-dirty')&&(!!mode.get('node-pending')||[...mode.values()].some(m=>m?.pendingUpdate===true)),xrayState:'running',parentGuid:'fixture-controller',lastHeartbeat:Math.floor(Date.now()/1000)-(mode.get('stale-node')?600:0)}];}
   else if(url==='/panel/api/server/status')obj={panelGuid:'fixture-controller',xray:{state:mode.get('local-stopped')?'stopped':'running'}};
-  else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
+  else if(url.startsWith('/panel/api/clients/get/')){if(mode.get('slow-confirmation')&&email==='sync_customer')await new Promise(r=>setTimeout(r,6000));if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
   else if(url==='/panel/api/clients/add'){mode.delete('defer-native-dirty');const v=body.client;clients.set(key(p,v.email),{...v,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.startsWith('/panel/api/clients/update/')){if(m.failUpdate){success=false;msg='temporary failure'}else if(c){Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true}}else{success=false;msg='client not found'}}
@@ -163,6 +163,17 @@ try{
  check('offline nodes keep paid queue guarded',()=>assert.equal(syncStatus.status,'PARTIAL'));
  mode.delete('nodes-offline');mode.set('nodes-unavailable',true);await api(syncOwner,'/api/reseller/customer-tools');syncStatus=await syncJournal();
  check('unsupported or unreachable node API never means completion',()=>assert.equal(syncStatus.status,'PARTIAL'));
+ mode.delete('nodes-unavailable');mode.set('nodes-offline',true);mode.set('delay',true);
+ const queuedFixture=[];
+ for(let index=0;index<12;index++){const email='observation_queue_'+index;await seed(syncOwner,email);const user=await db.resellerUser.findUnique({where:{resellerId_email:{resellerId:syncOwner.id,email}}});const journal=await db.operationJournal.create({data:{idempotencyKey:'observation-queue-'+index,resellerId:syncOwner.id,userId:user.id,email,type:'UPDATE',status:'PARTIAL',targetPanels:JSON.stringify([panel.id]),metadata:JSON.stringify({newTrafficGB:10,localCommitted:true,nativePending:true})}});queuedFixture.push({email,userId:user.id,journalId:journal.id});}
+ const queueWrites=nativeWrites.length,queueStarted=Date.now();result=await api(syncOwner,'/api/reseller/customer-tools');const queueElapsed=Date.now()-queueStarted;
+ console.log(JSON.stringify({offlineQueueMetadataMs:queueElapsed,queuedAccounts:13}));
+ check('many offline saved queues keep metadata responsive without releasing or rewriting accounts',()=>{assert.equal(result.status,200);assert.ok(queueElapsed<6000,'metadata took '+queueElapsed+'ms');assert.equal(result.data.users.length,13);assert.ok(result.data.users.every(u=>u.pendingUpdate?.localCommitted));assert.equal(nativeWrites.length,queueWrites)});
+ await db.operationJournal.deleteMany({where:{id:{in:queuedFixture.map(u=>u.journalId)}}});await db.resellerUser.deleteMany({where:{id:{in:queuedFixture.map(u=>u.userId)}}});for(const user of queuedFixture)clients.delete(key('a',user.email));
+ mode.delete('delay');mode.delete('nodes-offline');
+ mode.set('slow-confirmation',true);const budgetStarted=Date.now();result=await api(syncOwner,'/api/reseller/customer-tools');const budgetElapsed=Date.now()-budgetStarted,budgetJournal=await syncJournal();
+ check('slow confirmation stops within metadata budget and keeps unresolved funding guarded',()=>{assert.equal(result.status,200);assert.ok(budgetElapsed<6000,'metadata budget took '+budgetElapsed+'ms');assert.equal(budgetJournal.status,'PARTIAL');assert.equal(result.data.users[0].pendingUpdate.localCommitted,true);assert.equal(syncing.totalGB,20*GB);assert.equal(nativeWrites.length,queueWrites)});
+ mode.delete('slow-confirmation');
  mode.delete('nodes-unavailable');const syncSub=syncing.subId;syncing.subId='wrong-identity';await api(syncOwner,'/api/reseller/customer-tools');syncStatus=await syncJournal();
  check('healthy nodes cannot settle a replaced client identity',()=>assert.equal(syncStatus.status,'PARTIAL'));
  syncing.subId=syncSub;const syncRows=JSON.stringify(await db.resellerUser.findMany({where:{resellerId:syncOwner.id}}));result=await api(syncOwner,'/api/reseller/customer-tools');syncStatus=await syncJournal();

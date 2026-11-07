@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { getPanelConnection, getAllPanelInboundsFresh, buildSubLink, type AllPanelsResult } from "./panel-manager";
-import { addClient, resumeClientCreation, readClientCreation, arePanelNodesSynchronized, type PanelAuth, type PanelClient } from "./panel";
+import { addClient, resumeClientCreation, readClientCreation, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, type PanelAuth, type PanelClient, type PanelNodeSyncSnapshot } from "./panel";
 import { creationMetadata, isSavedQueuedCreation, type CreationMetadata } from './queued-create';
 import { validateAvailableInboundSelection } from './inbound-catalog';
 import { randomHex, randomUuid } from "./crypto";
@@ -506,16 +506,18 @@ async function createResellerUserCoreInner(
 }
 
 /** Recover only verified saved records. Never replay native writes in a job/GET. */
-export async function confirmQueuedCreations(resellerId: string, options: { locked?: boolean; recoverUntracked?: boolean } = {}) {
+export async function confirmQueuedCreations(resellerId: string, options: { locked?: boolean; recoverUntracked?: boolean; budgetMs?: number } = {}) {
   const confirm = async () => {
+    const signal = options.budgetMs ? AbortSignal.timeout(options.budgetMs) : undefined;
     const reseller = await getResellerWithAccess(resellerId);
     if (!reseller) return { registered: 0, confirmed: 0 };
     const { getQuotaState, validateRequestedUserQuota } = await import('./accounting-ops');
     const quota = await getQuotaState(resellerId);
     const journals = await db.operationJournal.findMany({ where: { resellerId, type: 'CREATE', status: { in: ['PARTIAL', 'NEEDS_REPAIR'] } }, take: 2000 });
-    const readiness = new Map<string, boolean>();
+    const snapshots = new Map<string, PanelNodeSyncSnapshot>();
     let registered = 0, confirmed = 0;
     for (const journal of journals) {
+      if (signal?.aborted) break;
       const meta = creationMetadata(journal.metadata);
       if (!meta || meta.email && meta.email !== journal.email) continue;
       if (!validateRequestedUserQuota(quota, meta.trafficGB).ok) continue;
@@ -530,13 +532,14 @@ export async function confirmQueuedCreations(resellerId: string, options: { lock
       let verified = true, pending = false;
       for (const id of panelIds) {
         const conn = await getPanelConnection(id);if (!conn.ok) { verified = false;break; }
-        const checked = await readClientCreation(conn.conn, meta.refs.filter(r => r.panelId === id).map(r => r.inboundId), { id: meta.uuid, email: journal.email, subId: meta.subId, totalGB: meta.trafficGB * 1073741824, limitIp: meta.ipLimit, ...(!tracked ? { expiryTime: meta.expiryTime, enable: true } : {}) });
-        if (!checked.ok) { verified = false;break; }
         const ids = meta.refs.filter(r => r.panelId === id).map(r => r.inboundId);
-        const key = id + ':' + [...ids].sort((a, b) => a - b).join(',');
-        if (!readiness.has(key)) readiness.set(key, await arePanelNodesSynchronized(conn.conn, true, ids));
-        const ready = readiness.get(key) && await arePanelNodesSynchronized(conn.conn, true, ids);
+        let snapshot = snapshots.get(id);
+        if (!snapshot || Date.now() - snapshot.health.observedAt > 5000) { snapshot = await getPanelNodeSyncSnapshot(conn.conn, signal);snapshots.set(id, snapshot); }
+        const ready = !signal?.aborted && await arePanelNodesSynchronized(conn.conn, true, ids, snapshot);
         pending ||= !ready;
+        if (tracked && !ready) break;
+        const checked = await readClientCreation(conn.conn, ids, { id: meta.uuid, email: journal.email, subId: meta.subId, totalGB: meta.trafficGB * 1073741824, limitIp: meta.ipLimit, ...(!tracked ? { expiryTime: meta.expiryTime, enable: true } : {}) }, signal);
+        if (!checked.ok) { verified = false;break; }
       }
       if (!verified || tracked && pending) continue;
       if (await finishCreateAtomically(journal.id, reseller, { email: journal.email, subId: meta.subId, refs: meta.refs, trafficGB: meta.trafficGB, name: meta.name }, pending, journal.updatedAt)) { if (!tracked) registered++;if (!pending) confirmed++; }
