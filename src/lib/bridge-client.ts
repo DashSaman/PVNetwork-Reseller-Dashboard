@@ -23,13 +23,13 @@ async function lastSeen(panelId: string): Promise<Record<string, number>> {
 }
 
 /** New native API shape, scoped by tracked ownership; never invent zero usage. */
-export async function readBridgeClient(reseller: ResellerWithInbounds, email: string, includeLastOnline = false) {
+export async function readBridgeClient(reseller: ResellerWithInbounds, email: string, includeLastOnline = false, fresh = false) {
   const tracked = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: reseller.id, email } } });
   if (!tracked) return { ok: false as const, error: 'کاربر یافت نشد' };
   const primary = tracked.panelId || (await getPrimaryPanel())?.id || '';
   const refs = parseInboundRefs(tracked.inboundIds, primary);
   const required = [...new Set(refs.map(r => r.panelId))];
-  const snapshot = await getAllPanelInbounds();
+  const snapshot = await (fresh ? getAllPanelInboundsFresh() : getAllPanelInbounds());
   if (!required.length || !snapshot.ok || snapshot.pending || snapshot.stale) return { ok: false as const, error: unavailable };
   const bundles = snapshot.panels.filter(p => required.includes(p.panelId));
   if (bundles.length !== required.length) return { ok: false as const, error: unavailable };

@@ -26,8 +26,29 @@ import {
 import { randomUuid } from "@/lib/crypto";
 import { deleteUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota } from "@/lib/accounting-ops";
 import { logActivity } from "@/lib/logger";
+import { readBridgeClient } from '@/lib/bridge-client';
 
 type Ctx = { params: Promise<{ email: string }> };
+
+/** Explicit edit preparation must not inherit a pre-cancellation UI snapshot. */
+export async function GET(_req: NextRequest, ctx: Ctx) {
+  const session = await requireReseller();
+  if (!session) return NextResponse.json({ error: 'دسترسی غیرمجاز' }, { status: 401 });
+  try {
+    const reseller = await getResellerWithAccess(session.uid);
+    if (!reseller) return NextResponse.json({ error: 'حساب شما فعال نیست' }, { status: 403 });
+    const { email: raw } = await ctx.params, email = decodeURIComponent(raw);
+    const user = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: reseller.id, email } } });
+    if (!user) return NextResponse.json({ error: 'کاربر پیدا نشد' }, { status: 404 });
+    const live = await readBridgeClient(reseller, email, false, true);
+    if (!live.ok) return NextResponse.json({ error: live.error }, { status: 502 });
+    const primary = user.panelId || (await db.panelConfig.findFirst({ orderBy: [{ sortOrder: 'asc' }, { updatedAt: 'asc' }] }))?.id || '';
+    return NextResponse.json({ user: { email, trafficGB: user.trafficGB, usedGB: live.usedTraffic / 1073741824, totalGB: live.client.totalGB / 1073741824, expiryTime: live.client.expiryTime, enable: live.client.enable, inboundRefs: parseInboundRefs(user.inboundIds, primary), liveFresh: true } }, { headers: { 'Cache-Control': 'private, no-store, max-age=0' } });
+  } catch (error) {
+    console.error('prepare customer edit:', error);
+    return NextResponse.json({ error: 'دریافت اطلاعات زنده برای ویرایش تأیید نشد' }, { status: 502 });
+  }
+}
 
 /** ویرایش کاربر: نام، سهمیه (از پول)، انقضا، دستگاه، لوکیشن‌ها (حتی بین پنل‌ها) */
 export async function PUT(req: NextRequest, ctx: Ctx) {

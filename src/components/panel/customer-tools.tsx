@@ -8,7 +8,7 @@ import { Tags, Bell } from 'lucide-react';
 import { api, faDate, faNum } from './shared';
 import { toast } from '@/hooks/use-toast';
 
-type Metadata = { email: string; labels: string[]; lastOnline: number | null; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null; pendingOperationId?: string | null; canCancelReset?: boolean };
+type Metadata = { email: string; labels: string[]; lastOnline: number | null; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null; pendingOperationId?: string | null; canCancelReset?: boolean; canCancelOperation?: boolean };
 type Customer = { email: string; name?: string | null; usedGB?: number | null };
 type Batch = { emails: string[]; enable: boolean; requestId: string };
 type ItemResult = { email: string; ok: boolean; error?: string };
@@ -25,7 +25,8 @@ export function useCustomerMetadata(scope: 'admin' | 'reseller', users: Customer
   return { data, reload, error };
 }
 
-export function CustomerRowTools({ user, meta, checked, onCheck, online, onResume, resumeDisabled, onCancelReset, cancellingReset }: { user: Customer; meta?: Metadata; checked?: boolean; onCheck?: () => void; online?: boolean; onResume?: () => void; resumeDisabled?: boolean; onCancelReset?: () => void; cancellingReset?: boolean }) {
+export function CustomerRowTools({ user, meta, checked, onCheck, online, onResume, resumeDisabled, onCancelReset, cancellingReset, onCancelAndEdit }: { user: Customer; meta?: Metadata; checked?: boolean; onCheck?: () => void; online?: boolean; onResume?: () => void; resumeDisabled?: boolean; onCancelReset?: () => void; cancellingReset?: boolean; onCancelAndEdit?: () => void }) {
+  const pendingName = meta?.pendingOperation === 'DELETE' ? 'حذف' : 'ریست';
   return <div className="space-y-1.5 min-w-36 max-w-56">
     <div className="flex items-center gap-2">
       {onCheck && <input type="checkbox" aria-label={`انتخاب ${user.email}`} checked={checked || false} onChange={onCheck} className="h-4 w-4 accent-teal-500" />}
@@ -34,7 +35,7 @@ export function CustomerRowTools({ user, meta, checked, onCheck, online, onResum
     <div className="flex flex-wrap gap-1">{meta?.labels.map(label => <Badge variant="outline" className="text-[10px] border-violet-500/30 text-violet-600 dark:text-violet-300" key={label}>{label}</Badge>)}</div>
     {meta?.pendingCreate && <Badge variant="outline" className="text-[10px] text-muted-foreground">حساب ثبت‌شده؛ برخی لوکیشن‌ها در انتظار آماده‌سازی</Badge>}
     {meta?.pendingOperation && <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-300">{meta.pendingOperation === 'DELETE' ? 'حذف' : 'ریست'} در انتظار پاسخ لوکیشن؛ سهمیه محفوظ است</Badge>}
-    {meta?.canCancelReset && onCancelReset && <div className="space-y-1"><p className="text-[10px] text-muted-foreground">ریست هنوز اجرا نشده؛ برای ویرایش می‌توانید لغوش کنید. مصرف فعلی حفظ می‌شود.</p><Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={cancellingReset} onClick={onCancelReset} aria-label={`لغو ریست اجرا‌نشدهٔ ${user.email}`}>{cancellingReset ? 'در حال لغو…' : 'لغو ریست اجرا‌نشده'}</Button></div>}
+    {(meta?.canCancelOperation || meta?.canCancelReset) && onCancelReset && <div className="space-y-1"><p className="text-[10px] text-muted-foreground">{pendingName} هنوز اجرا نشده؛ می‌توانید لغوش کنید و تمدید را انجام دهید. مصرف و سهمیهٔ فعلی حفظ می‌شوند.</p><Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={cancellingReset} onClick={onCancelReset} aria-label={`لغو ${pendingName} اجرا‌نشدهٔ ${user.email}`}>{cancellingReset ? 'در حال لغو…' : `لغو ${pendingName} اجرا‌نشده`}</Button>{onCancelAndEdit && <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={cancellingReset} onClick={onCancelAndEdit} aria-label={`لغو درخواست و ویرایش ${user.email}`}>لغو درخواست و ویرایش</Button>}</div>}
     {meta?.pendingUpdate && (!meta.pendingUpdate.localCommitted ? <div className="space-y-1"><Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-300">ویرایش در انتظار تکمیل</Badge>{onResume && <Button size="sm" variant="ghost" disabled={resumeDisabled} className="h-6 px-1 text-[11px]" aria-label={`ادامهٔ ویرایش ${user.email}`} onClick={onResume}>ادامهٔ ویرایش ({faNum(meta.pendingUpdate.trafficGB)} گیگ)</Button>}</div> : !onResume && <Badge variant="outline" className="text-[10px] text-muted-foreground">ذخیره‌شده؛ همگام‌سازی خودکار</Badge>)}
   </div>;
 }

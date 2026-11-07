@@ -25,6 +25,13 @@ test('only a demonstrably unexecuted reset can be cancelled', () => {
   assert.equal(policy.canCancelUnstartedReset(fixture(), 'another-installation'), false);
 });
 
+test('unstarted delete cancellation preserves its allocation and denies any native work evidence', () => {
+  const deletion = fixture({ type: 'DELETE', reservedGB: 0 });
+  assert.equal(policy.canCancelUnstartedOperation(deletion, installation), true);
+  assert.equal(policy.canCancelUnstartedReset(deletion, installation), false);
+  for (const patch of [{ reservedGB: 1 }, { accountingCommitted: true }, { metadata: JSON.stringify({ explicitDestructive: true, operationInstallation: installation, usageByPanel: {} }) }, { completedPanels: '["panel"]' }, { status: 'NEEDS_REPAIR' }]) assert.equal(policy.canCancelUnstartedOperation({ ...deletion, ...patch }, installation), false);
+});
+
 const source = process.argv.includes('--baseline')
   ? execFileSync('git', ['show', 'HEAD:src/lib/accounting-ops.ts'], { encoding: 'utf8' })
   : fs.readFileSync(new URL('../src/lib/accounting-ops.ts', import.meta.url), 'utf8');

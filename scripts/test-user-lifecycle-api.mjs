@@ -153,6 +153,30 @@ try{
  const uncertainResetForCancel=await db.operationJournal.findFirst({where:{resellerId:deletion.id,email:'ambiguous-reset',type:'RESET'},orderBy:{createdAt:'desc'}});
  result=await api(deletion,'/api/reseller/users/ambiguous-reset/reset-traffic','DELETE',{operationId:uncertainResetForCancel.id});
  check('a reset with an unknown write result cannot be cancelled or release newly accrued usage',()=>{assert.equal(result.status,409);assert.equal(clients.get(key('a','ambiguous-reset')).used,beforeUnknown)});
+ const cancelDeleteOwner=await owner('cancel-delete-renew',100);const deleteRenewClient=await seed(cancelDeleteOwner,'cancel-delete-renew',3);
+ mode.set('all-remote',true);mode.set('node-pending',true);
+ result=await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew','DELETE');
+ const deleteIntent=await db.operationJournal.findFirst({where:{resellerId:cancelDeleteOwner.id,type:'DELETE'}});
+ check('offline delete intent has not changed live identity or traffic',()=>{assert.equal(result.status,202);assert.equal(deleteRenewClient.used,3*GB);assert.equal(deleteIntent.completedPanels,'[]')});
+ const deleteMetadata=await api(cancelDeleteOwner,'/api/reseller/customer-tools');
+ check('unexecuted deletion exposes an owner action instead of permanently blocking renewal',()=>{const m=deleteMetadata.data.users.find(u=>u.email==='cancel-delete-renew');assert.equal(m.canCancelOperation,true);assert.equal(m.pendingOperationId,deleteIntent.id)});
+ result=await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew','PUT',{trafficGB:20});check('renewal conflict explains the exact safe recovery action without changing the account',()=>{assert.equal(result.status,409);assert.ok(result.data.error.includes('لغو درخواست و ویرایش'));assert.equal(deleteRenewClient.totalGB,10*GB)});
+ result=await api(r,'/api/reseller/users/cancel-delete-renew/pending-operation','DELETE',{operationId:deleteIntent.id});check('generic cancellation cannot escape customer ownership',()=>assert.equal(result.status,404));
+ result=await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew/pending-operation','DELETE',{});check('generic cancellation requires the exact operation identity',()=>assert.equal(result.status,400));
+ result=await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew/pending-operation','DELETE',{operationId:deleteIntent.id});
+ check('owner can cancel an unstarted deletion without refunding allocated or used traffic',()=>{assert.equal(result.status,200);assert.equal(deleteRenewClient.used,3*GB);assert.equal(deleteRenewClient.totalGB,10*GB)});
+ mode.delete('all-remote');mode.delete('node-pending');
+ result=await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew','PUT',{trafficGB:20,expiryDays:40});
+ const renewedOwner=await db.reseller.findUnique({where:{id:cancelDeleteOwner.id}}),oldDelete=await db.operationJournal.findUnique({where:{id:deleteIntent.id}});
+ check('renewal after cancellation preserves usage and closes the exact delete request',()=>{assert.equal(result.status,200);assert.equal(deleteRenewClient.used,3*GB);assert.equal(deleteRenewClient.totalGB,20*GB);assert.equal(oldDelete.status,'CANCELLED');assert.equal(renewedOwner.trafficPoolGB,100);assert.equal(renewedOwner.consumedGB,0)});
+ result=await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew');check('edit preparation returns verified fresh values and references instead of a stale bootstrap row',()=>{assert.equal(result.status,200);assert.equal(result.data.user.liveFresh,true);assert.equal(result.data.user.totalGB,20);assert.equal(result.data.user.usedGB,3);assert.deepEqual(result.data.user.inboundRefs,[{panelId:panel.id,inboundId:1}]);assert.ok(!JSON.stringify(result.data).includes('uuid-cancel-delete-renew'))});
+ result=await api(r,'/api/reseller/users/cancel-delete-renew');check('fresh edit preparation cannot expose another owners customer',()=>assert.equal(result.status,404));
+ result=await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew/pending-operation','DELETE',{operationId:deleteIntent.id});check('repeated cancelled delete neither refunds nor changes the renewed account',()=>{assert.equal(result.status,200);assert.equal(deleteRenewClient.totalGB,20*GB);assert.equal(deleteRenewClient.used,3*GB)});
+ mode.set('all-remote',true);mode.set('node-pending',true);await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew','DELETE');const freshDelete=await db.operationJournal.findFirst({where:{resellerId:cancelDeleteOwner.id,type:'DELETE',status:'RUNNING'}});await api(cancelDeleteOwner,'/api/reseller/users/cancel-delete-renew/pending-operation','DELETE',{operationId:deleteIntent.id});const freshDeleteAfterOld=await db.operationJournal.findUnique({where:{id:freshDelete.id}});check('old delete cancellation does not cancel a newly requested deletion',()=>assert.equal(freshDeleteAfterOld.status,'RUNNING'));mode.delete('all-remote');mode.delete('node-pending');
+ await seed(cancelDeleteOwner,'executed-delete',1);mode.set('executed-delete',{deleteAckOnly:true});await api(cancelDeleteOwner,'/api/reseller/users/executed-delete','DELETE');
+ const startedDelete=await db.operationJournal.findFirst({where:{resellerId:cancelDeleteOwner.id,email:'executed-delete',type:'DELETE'}});
+ result=await api(cancelDeleteOwner,'/api/reseller/users/executed-delete/pending-operation','DELETE',{operationId:startedDelete.id});
+ check('a deletion with attempted native work cannot be cancelled for a refund',()=>{assert.equal(result.status,409);assert.ok(clients.has(key('a','executed-delete')))});
  console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;
 }catch(e){console.error(e);console.error('Fixture:',dir);process.exitCode=1}
 finally{if(app){if(process.platform==='win32')await new Promise(resolve=>{const p=spawn('taskkill.exe',['/PID',String(app.pid),'/T','/F'],{windowsHide:true});p.on('exit',resolve)});else app.kill('SIGTERM')}if(server){server.closeAllConnections();server.close()}if(db)await db.$disconnect()}

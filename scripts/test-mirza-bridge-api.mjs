@@ -151,10 +151,18 @@ try{
    const cancelButton=page.getByRole('button',{name:'لغو ریست اجرا‌نشدهٔ cancel_ui',exact:true});await cancelButton.waitFor();
    const continueResetEnabled=await page.getByTitle('ادامهٔ ریست ثبت‌شده',{exact:true}).isEnabled();check('a pending reset keeps an explicit continuation action for its owner',()=>assert.equal(continueResetEnabled,true));
    await page.screenshot({path:path.join(dir,'cancel-unstarted-reset-mobile.png'),fullPage:true});
-   const cancelledResponse=page.waitForResponse(r=>r.request().method()==='DELETE'&&r.url().includes('/cancel_ui/reset-traffic'));await cancelButton.click();assert.equal((await cancelledResponse).status(),200);
+   const cancelledResponse=page.waitForResponse(r=>r.request().method()==='DELETE'&&r.url().includes('/cancel_ui/pending-operation'));await cancelButton.click();assert.equal((await cancelledResponse).status(),200);
    await cancelButton.waitFor({state:'hidden'});
    const closedReset=await db.operationJournal.findFirst({where:{resellerId:rep.id,email:'cancel_ui',type:'RESET'}});
    check('owner can cancel an unstarted reset from the actual mobile row without clearing traffic',()=>{assert.equal(closedReset.status,'CANCELLED');assert.equal(closedReset.reservedGB,0);assert.equal(cancelNative.used,2*GB)});
+   result=await own('/api/reseller/users/cancel_ui','DELETE');assert.equal(result.status,202);await page.reload({waitUntil:'networkidle'});
+   await page.getByRole('button',{name:'لغو درخواست و ویرایش cancel_ui',exact:true}).click();
+   const editDialog=page.getByRole('dialog');await editDialog.getByRole('heading',{name:/ویرایش کاربر/}).waitFor();
+   const cancelledDelete=await db.operationJournal.findFirst({where:{resellerId:rep.id,email:'cancel_ui',type:'DELETE'}});
+   check('owner can move from an offline unstarted deletion directly into the edit form',()=>{assert.equal(cancelledDelete.status,'CANCELLED');assert.equal(cancelNative.used,2*GB)});
+   await editDialog.getByLabel('سهمیهٔ کاربر در ویرایش',{exact:true}).fill('20');await editDialog.getByRole('button',{name:'۱ ماه',exact:true}).click();
+   const renewalReply=page.waitForResponse(r=>r.request().method()==='PUT'&&r.url().endsWith('/api/reseller/users/cancel_ui'));await editDialog.getByRole('button',{name:'ذخیره',exact:true}).click();
+   const renewalResponse=await renewalReply;check('the actual renewal form saves after pending-delete cancellation without clearing usage',()=>{assert.ok([200,202].includes(renewalResponse.status()));assert.equal(cancelNative.totalGB,20*GB);assert.equal(cancelNative.used,2*GB)});
   }finally{await browser.close()}
  }
  console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;

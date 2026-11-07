@@ -1021,14 +1021,19 @@ function UsersTab({
     }
   }
 
-  async function cancelReset(u: ResellerUserRow) {
+  async function cancelReset(u: ResellerUserRow, editAfter = false) {
     const operationId = tools.data.get(u.email)?.pendingOperationId;
     if (!operationId || cancellingReset) return;
     setCancellingReset(u.email);
     try {
-      const r = await api<{ message?: string }>(`/api/reseller/users/${encodeURIComponent(u.email)}/reset-traffic`, { method: 'DELETE', body: JSON.stringify({ operationId }) });
-      toast(r.ok ? { title: 'ریست اجرا‌نشده لغو شد', description: r.data?.message } : { title: 'لغو ریست انجام نشد', description: r.error, variant: 'destructive' });
+      const r = await api<{ message?: string }>(`/api/reseller/users/${encodeURIComponent(u.email)}/pending-operation`, { method: 'DELETE', body: JSON.stringify({ operationId }) });
+      toast(r.ok ? { title: 'درخواست اجرا‌نشده لغو شد', description: r.data?.message } : { title: 'لغو درخواست انجام نشد', description: r.error, variant: 'destructive' });
       await tools.reload();reload();
+      if (r.ok && editAfter) {
+        const fresh = await api<{ user: Partial<ResellerUserRow> }>(`/api/reseller/users/${encodeURIComponent(u.email)}`, { signal: AbortSignal.timeout(20000) });
+        if (fresh.ok && fresh.data?.user.liveFresh) openEdit({ ...u, ...fresh.data.user });
+        else toast({ title: 'درخواست قبلی لغو شد', description: 'اطلاعات زنده هنوز تأیید نشد؛ پس از دریافت آمار، ویرایش را باز کنید.' });
+      }
     } finally { setCancellingReset(null); }
   }
 
@@ -1277,7 +1282,7 @@ function UsersTab({
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} online={onlineSet.has(u.email)} onResume={() => openEdit(u)} resumeDisabled={u.liveFresh === false || u.expiryTime === null || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} onCancelReset={() => cancelReset(u)} cancellingReset={cancellingReset === u.email} checked={selectedCustomers.has(u.email)} onCheck={() => setSelectedCustomers(previous => { const next = new Set(previous);if (next.has(u.email)) next.delete(u.email);else if (next.size < 50) next.add(u.email);return next; })} /></TableCell>
+                      <TableCell><CustomerRowTools user={u} meta={tools.data.get(u.email)} online={onlineSet.has(u.email)} onResume={() => openEdit(u)} resumeDisabled={u.liveFresh === false || u.expiryTime === null || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} onCancelReset={() => cancelReset(u)} cancellingReset={cancellingReset === u.email} onCancelAndEdit={() => cancelReset(u, true)} checked={selectedCustomers.has(u.email)} onCheck={() => setSelectedCustomers(previous => { const next = new Set(previous);if (next.has(u.email)) next.delete(u.email);else if (next.size < 50) next.add(u.email);return next; })} /></TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1 max-w-40">
                           {u.inboundTags.slice(0, 3).map((t, idx) => (

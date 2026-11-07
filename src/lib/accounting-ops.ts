@@ -8,7 +8,7 @@ import { logActivity } from "./logger";
 import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync";
 import type { Prisma } from '@prisma/client';
 import { operationInstallation } from './operation-installation';
-import { canCancelUnstartedReset, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
+import { canCancelUnstartedOperation, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -267,13 +267,18 @@ async function loadWithinLock(resellerId: string, email: string): Promise<{ rese
 }
 
 /** مانع تداخل: عملیات تخریبی/ویرایش هم‌زمان روی یک کاربر مجاز نیست */
-async function assertNoConflictingOperation(resellerId: string, email: string, self: "DELETE" | "RESET", superseded: string[] = []): Promise<OpResult | null> {
+async function assertNoConflictingOperation(resellerId: string, email: string, self: "DELETE" | "RESET" | "UPDATE", superseded: string[] = []): Promise<OpResult | null> {
   const rows = await db.operationJournal.findMany({
     where: { resellerId, email, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } },
-    select: { id: true, type: true },
   });
   const conflict = rows.find((r) => r.type !== self && !superseded.includes(r.id));
   if (conflict) {
+    if (['DELETE', 'RESET'].includes(conflict.type)) {
+      const name = conflict.type === 'DELETE' ? 'حذف' : 'ریست';
+      return { ok: false, status: 409, msg: canCancelUnstartedOperation(conflict, operationInstallation())
+        ? `درخواست ${name} هنوز اجرا نشده است؛ برای تمدید، «لغو درخواست و ویرایش» را در ردیف همین کاربر بزنید. مصرف و سهمیه حفظ می‌شوند.`
+        : `${name} این حساب شروع شده یا نتیجهٔ آن نامشخص است؛ ابتدا همان درخواست باید تکمیل شود. مصرف و سهمیه محفوظ است.` };
+    }
     return { ok: false, status: 409, msg: conflict.type === 'CREATE' ? 'ساخت حساب ثبت شده؛ تا تأیید همگام‌سازی لوکیشن‌ها، تغییر یا آزادسازی سهمیه مجاز نیست' : `عملیات ${conflict.type === "UPDATE" ? "ویرایش" : "تخریبی"} دیگری برای این کاربر در جریان است — ابتدا آن را تمام کنید` };
   }
   return null;
@@ -485,23 +490,28 @@ async function currentContinuation(resellerId: string, id: string, user: Tracked
 }
 
 export async function cancelUnstartedReset(resellerId: string, email: string, operationId: string): Promise<OpResult> {
+  return cancelUnstartedOperation(resellerId, email, operationId, 'RESET');
+}
+
+export async function cancelUnstartedOperation(resellerId: string, email: string, operationId: string, expectedType?: 'RESET'): Promise<OpResult> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ('err' in loaded) return loaded.err;
     const { reseller, tracked } = loaded;
     const row = await db.operationJournal.findUnique({ where: { id: operationId } });
-    if (!row || row.type !== 'RESET' || row.resellerId !== resellerId || row.userId !== tracked.id || row.email !== email) return { ok: false, status: 404, msg: 'درخواست ریست پیدا نشد' };
+    if (!row || !['RESET', 'DELETE'].includes(row.type) || expectedType && row.type !== expectedType || row.resellerId !== resellerId || row.userId !== tracked.id || row.email !== email) return { ok: false, status: 404, msg: 'درخواست پیدا نشد' };
+    const name = row.type === 'DELETE' ? 'حذف' : 'ریست';
     if (wasCancelledBeforeExecution(row)) return { ok: true, debitedGB: 0 };
-    if (!canCancelUnstartedReset(row, operationInstallation())) return { ok: false, status: 409, msg: 'اجرای این ریست آغاز شده یا نتیجهٔ آن نامشخص است؛ لغو امن مجاز نیست. مصرف و سهمیه حفظ شدند.' };
+    if (!canCancelUnstartedOperation(row, operationInstallation())) return { ok: false, status: 409, msg: `اجرای ${name} آغاز شده یا نتیجهٔ آن نامشخص است؛ لغو امن مجاز نیست. مصرف و سهمیه حفظ شدند.` };
     await db.$transaction(async tx => {
       const changed = await tx.operationJournal.updateMany({
-        where: { id: row.id, userId: tracked.id, resellerId, email, type: 'RESET', status: row.status, updatedAt: row.updatedAt, metadata: row.metadata, accountingCommitted: false, reservedGB: row.reservedGB, usageSnapshotGB: row.usageSnapshotGB, completedPanels: row.completedPanels, failedPanels: row.failedPanels },
+        where: { id: row.id, userId: tracked.id, resellerId, email, type: row.type, status: row.status, updatedAt: row.updatedAt, metadata: row.metadata, accountingCommitted: false, reservedGB: row.reservedGB, usageSnapshotGB: row.usageSnapshotGB, completedPanels: row.completedPanels, failedPanels: row.failedPanels },
         data: { status: 'CANCELLED', reservedGB: 0, lastError: null, metadata: JSON.stringify({ ...JSON.parse(row.metadata!), cancelledBeforeExecution: true, cancelledAt: new Date().toISOString() }) },
       });
       if (changed.count !== 1) throw Error('Reset changed during cancellation');
-      await tx.activityLog.create({ data: { actorType: 'RESELLER', actorName: reseller.username, resellerId, action: 'لغو ریست اجرا‌نشده', detail: `${email} | مصرف و سهمیهٔ کاربر حفظ شد` } });
+      await tx.activityLog.create({ data: { actorType: 'RESELLER', actorName: reseller.username, resellerId, action: `لغو ${name} اجرا‌نشده`, detail: `${email} | مصرف و سهمیهٔ کاربر حفظ شد` } });
     });
-    return { ok: true, debitedGB: 0, message: 'ریستِ اجرا‌نشده لغو شد؛ مصرف و سهمیهٔ کاربر تغییری نکرد. اکنون می‌توانید ویرایش کنید.' };
+    return { ok: true, debitedGB: 0, message: `درخواست ${name} اجرا‌نشده لغو شد؛ مصرف و سهمیهٔ کاربر تغییری نکرد. اکنون می‌توانید ویرایش کنید.` };
   });
 }
 
@@ -522,6 +532,9 @@ export async function updateUserByJournal(
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
+
+    const conflict = await assertNoConflictingOperation(resellerId, email, 'UPDATE');
+    if (conflict) return conflict;
 
     // Resolve an unfinished target before validating a stale inherited quota.
     const existingJournal = await findResumableJournal(resellerId, email, "UPDATE");
@@ -574,10 +587,6 @@ export async function updateUserByJournal(
         return { ok: false, status: 403, msg: `پول ترافیک برای این افزایش کافی نیست — باقیماندهٔ مؤثر: ${Math.round(available * 100) / 100} گیگ` };
       }
     }
-
-    // مانع تداخل با DELETE/RESET فعال (UPDATE فعالِ خودش = resume)
-    const conflict = await assertNoConflictingOperation(resellerId, email, "UPDATE" as never);
-    if (conflict) return conflict;
 
     // resume همان ژورنال یا ایجاد یکتا
     let journal = existingJournal;

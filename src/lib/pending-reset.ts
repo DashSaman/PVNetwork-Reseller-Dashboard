@@ -21,16 +21,21 @@ export function isCurrentDestructiveRequest(row: OperationJournal, installation:
 
 /** No native mutation can have begun: even an empty nodeSync/usage ledger means
  * execution crossed the readiness gate, so unknown/started writes stay locked. */
-export function canCancelUnstartedReset(row: OperationJournal, installation: string | null): boolean {
+export function canCancelUnstartedOperation(row: OperationJournal, installation: string | null): boolean {
   const meta = metadata(row.metadata);
-  return row.type === 'RESET' && isCurrentDestructiveRequest(row, installation)
+  return isCurrentDestructiveRequest(row, installation)
     && !row.accountingCommitted && Number.isFinite(row.reservedGB) && row.reservedGB >= 0
     && row.usageSnapshotGB !== null && Number.isFinite(row.usageSnapshotGB) && row.usageSnapshotGB >= 0
     && emptyList(row.completedPanels) && emptyList(row.failedPanels)
+    && (row.type !== 'DELETE' || row.reservedGB === 0)
     && !!meta && !Object.hasOwn(meta, 'nodeSync') && !Object.hasOwn(meta, 'usageByPanel');
 }
 
+export function canCancelUnstartedReset(row: OperationJournal, installation: string | null): boolean {
+  return row.type === 'RESET' && canCancelUnstartedOperation(row, installation);
+}
+
 export function wasCancelledBeforeExecution(row: OperationJournal): boolean {
-  return row.type === 'RESET' && row.status === 'CANCELLED' && !row.accountingCommitted
+  return ['RESET', 'DELETE'].includes(row.type) && row.status === 'CANCELLED' && !row.accountingCommitted
     && row.reservedGB === 0 && metadata(row.metadata)?.cancelledBeforeExecution === true;
 }
