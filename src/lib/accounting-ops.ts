@@ -335,6 +335,22 @@ export async function confirmAcknowledgedDeletions(resellerId: string, budgetMs 
   }
 }
 
+/** A synchronous bot must not mistake a briefly dirty, already-deleted native
+ * customer for a failed deletion. Only finish this exact acknowledged request. */
+export async function confirmAcknowledgedDeletion(resellerId: string, userId: string, email: string): Promise<boolean> {
+  const row = await db.operationJournal.findFirst({ where: { resellerId, userId, email, type: 'DELETE', status: { in: ['RUNNING', 'PARTIAL'] } }, orderBy: { createdAt: 'desc' } });
+  if (!row || !canFinalizeAcknowledgedDeletion(row, operationInstallation())) return false;
+  const deadline = Date.now() + 6000;
+  do {
+    const result = await deleteUserByJournal(resellerId, email, row.id, true);
+    const [current, customer] = await Promise.all([db.operationJournal.findUnique({ where: { id: row.id } }), db.resellerUser.findUnique({ where: { id: userId } })]);
+    if (current?.status === 'SUCCESS' && current.accountingCommitted && current.resellerId === resellerId && current.userId === userId && current.email === email && !customer) return true;
+    if (!result.ok || !current || !canFinalizeAcknowledgedDeletion(current, operationInstallation()) || Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  } while (Date.now() < deadline);
+  return false;
+}
+
 /** Only explicitly requested new operations are eligible. Durable node steps
  * prevent replaying a reset whose response was lost. Old repair journals are
  * never enrolled in automatic recovery. Called by the existing observation job. */

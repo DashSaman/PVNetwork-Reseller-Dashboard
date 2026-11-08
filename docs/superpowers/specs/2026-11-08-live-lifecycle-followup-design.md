@@ -43,6 +43,13 @@ more frequently and refresh the authoritative customer list after a completed
 deletion, so an old bootstrap row does not linger in the browser. Keep ordinary
 polling at its existing interval.
 
+The installed bot connector reproduced a third symptom: it treats that pending
+deletion response as HTTP 400. Its synchronous delete route therefore waits
+briefly for the exact acknowledged journal to settle, using the same completion
+proof and lock guards. It returns success only after that journal is SUCCESS,
+accounting is committed and the original tracked customer is absent. It never
+repeats native deletion, dispatches unknown work or changes the bot server.
+
 ## Verification and operational constraints
 
 Use failing unit and real-handler regression cases before implementation. Cover

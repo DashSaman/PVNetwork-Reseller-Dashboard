@@ -17,7 +17,7 @@ import {
   type InboundRef,
   type ResellerWithInbounds,
 } from "@/lib/reseller-helpers";
-import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota } from "@/lib/accounting-ops";
+import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota, confirmAcknowledgedDeletion } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
 import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
 import { attachBridgeClient, readBridgeClient } from '@/lib/bridge-client';
@@ -601,7 +601,7 @@ async function bridgeDeleteClient(reseller: ResellerWithInbounds, email: string)
 
   const result = await deleteUserByJournal(reseller.id, email);
   if (!result.ok) return xui(false, result.msg);
-  if (result.pending) return xui(false, result.message || 'حذف در انتظار تأیید لوکیشن‌ها است', { nodePending: true });
+  if (result.pending && !await confirmAcknowledgedDeletion(reseller.id, tracked.id, email)) return xui(false, result.message || 'حذف در انتظار تأیید لوکیشن‌ها است', { nodePending: true });
   return xui(true, "");
 }
 
