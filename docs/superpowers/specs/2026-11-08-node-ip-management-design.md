@@ -11,6 +11,13 @@ node's TLS public-key fingerprint. The fifth node's key is verified through its
 existing pinned administrative SSH connection. No new service, tunnel, listener,
 DNS record, routing rule or representative permission is required.
 
+The initial four private-path checks passed. During longer observation the
+existing Turkish tunnel timed out while the physical IP remained reachable with
+the same independently provisioned key and native GUID. The final static routes
+therefore use three existing private paths and two authenticated physical IPs.
+Only that management proxy was restarted again; no tunnel or global route was
+changed. This is a verified configuration change, not automatic retry/fallback.
+
 Compared with repairing public DNS, this removes name resolution and CDN routing
 from the management connection. Replacing HTTPS with unauthenticated TLS or HTTP
 would not preserve node identity and is rejected. Public-key pinning authenticates
