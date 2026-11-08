@@ -338,13 +338,19 @@ export async function confirmAcknowledgedDeletions(resellerId: string, budgetMs 
 /** A synchronous bot must not mistake a briefly dirty, already-deleted native
  * customer for a failed deletion. Only finish this exact acknowledged request. */
 export async function confirmAcknowledgedDeletion(resellerId: string, userId: string, email: string): Promise<boolean> {
-  const row = await db.operationJournal.findFirst({ where: { resellerId, userId, email, type: 'DELETE', status: { in: ['RUNNING', 'PARTIAL'] } }, orderBy: { createdAt: 'desc' } });
-  if (!row || !canFinalizeAcknowledgedDeletion(row, operationInstallation())) return false;
+  const row = await db.operationJournal.findFirst({ where: { resellerId, userId, email, type: 'DELETE', status: { in: ['RUNNING', 'PARTIAL', 'SUCCESS'] } }, orderBy: { createdAt: 'desc' } });
+  const complete = (value: typeof row, missing: boolean) => !!value && value.status === 'SUCCESS' && value.accountingCommitted && value.resellerId === resellerId && value.userId === userId && value.email === email && missing
+    && canFinalizeAcknowledgedDeletion({ ...value, status: 'RUNNING' }, operationInstallation());
+  if (!row) return false;
+  // A metadata poll may have completed this same request after the pending
+  // response was produced. Recognize it without acting on a replacement user.
+  if (row.status === 'SUCCESS') return complete(row, !await db.resellerUser.findUnique({ where: { id: userId } }));
+  if (!canFinalizeAcknowledgedDeletion(row, operationInstallation())) return false;
   const deadline = Date.now() + 6000;
   do {
     const result = await deleteUserByJournal(resellerId, email, row.id, true);
     const [current, customer] = await Promise.all([db.operationJournal.findUnique({ where: { id: row.id } }), db.resellerUser.findUnique({ where: { id: userId } })]);
-    if (current?.status === 'SUCCESS' && current.accountingCommitted && current.resellerId === resellerId && current.userId === userId && current.email === email && !customer) return true;
+    if (complete(current, !customer)) return true;
     if (!result.ok || !current || !canFinalizeAcknowledgedDeletion(current, operationInstallation()) || Date.now() >= deadline) return false;
     await new Promise(resolve => setTimeout(resolve, 500));
   } while (Date.now() < deadline);

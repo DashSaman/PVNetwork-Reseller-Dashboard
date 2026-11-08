@@ -99,3 +99,17 @@ for (const changed of ['CANCELLED','SUCCESS','identity','owner','installation','
   await exports.confirmAcknowledgedDeletions?.('owner');assert.equal(lockCalls,1);assert.equal(nativeCalls,0);assert.equal(writes,0);
  });
 }
+
+test('synchronous bot confirmation recognizes an already-completed exact deletion race',async()=>{
+ const row=acknowledgedDelete({status:'SUCCESS',accountingCommitted:true}),exports={};
+ const db={operationJournal:{findFirst:async()=>row},resellerUser:{findUnique:async()=>null}};
+ vm.runInNewContext(compiled,{exports,require(name){if(name==='./db'||name==='@/lib/db')return{db};if(name==='./pending-reset')return policy;if(name==='./operation-installation')return{operationInstallation:()=>installation};return{};}});
+ assert.equal(await exports.confirmAcknowledgedDeletion('owner','customer','customer_email'),true);
+});
+test('already-completed bot confirmation still requires the exact proof and original customer absence',async()=>{
+ for(const [patch,present] of [[{accountingCommitted:false},false],[{metadata:'{}'},false],[{resellerId:'other'},false],[{userId:'replacement'},false],[{email:'other'},false],[{},true]]){
+  const row=acknowledgedDelete({status:'SUCCESS',accountingCommitted:true,...patch}),exports={},db={operationJournal:{findFirst:async()=>row},resellerUser:{findUnique:async()=>present?{id:'customer'}:null}};
+  vm.runInNewContext(compiled,{exports,require(name){if(name==='./db'||name==='@/lib/db')return{db};if(name==='./pending-reset')return policy;if(name==='./operation-installation')return{operationInstallation:()=>installation};return{};}});
+  assert.equal(await exports.confirmAcknowledgedDeletion('owner','customer','customer_email'),false);
+ }
+});
