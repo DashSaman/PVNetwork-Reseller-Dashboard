@@ -12,6 +12,8 @@ const dir = path.join(root, '.local-dev', `node-sync-${Date.now()}`);
 mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'test.db'), '');
 process.env.DATABASE_URL = `file:../.local-dev/${path.basename(dir)}/test.db`;
 process.env.APP_SECRET = 'isolated-node-sync-test-key';
+// Unattended isolated fixture, matching the other real-handler test runners.
+process.env.CI = '1';process.env.__NEXT_AGENT_UPGRADE = 'security';
 const { PrismaClient } = await import('@prisma/client');
 const { encryptSecret, hashPassword, signAccountSession } = await import('../src/lib/crypto.ts');
 let db, app, checks = 0; const servers = [];
@@ -38,7 +40,9 @@ async function mock(isNode) {
     let body = {}; try { body = JSON.parse(raw || '{}'); } catch {}
     let success = true, obj, msg = '';
     if (m.fail) { success = false; msg = 'offline'; }
-    else if (req.url === '/panel/api/inbounds/list') obj = [{ id: 1, tag: 'mock', port: 443, protocol: 'vless', settings: JSON.stringify({ clients: [...clients.values()] }), clientStats: [...clients.values()].map(c => ({ email: c.email, up: m.used, down: 0, total: c.totalGB, expiryTime: c.expiryTime, enable: c.enable })) }];
+    else if (req.url === '/panel/api/server/status') obj = {panelGuid:'fixture-controller',xray:{state:'running'}};
+    else if (req.url === '/panel/api/nodes/list') obj = [];
+    else if (req.url === '/panel/api/inbounds/list') obj = [{ id: 1, enable:true,nodeId:null,tag: 'mock', port: 443, protocol: 'vless', settings: JSON.stringify({ clients: [...clients.values()] }), clientStats: [...clients.values()].map(c => ({ email: c.email, up: m.used, down: 0, total: c.totalGB, expiryTime: c.expiryTime, enable: c.enable })) }];
     else if (req.url.startsWith('/panel/api/clients/get/')) {
       const c = clients.get(decodeURIComponent(req.url.split('/').at(-1)));
       if (c) obj = { client: c, inboundIds: [1], usedTraffic: m.used }; else { success = false; msg = 'Obtain (record not found)'; }

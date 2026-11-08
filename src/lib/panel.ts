@@ -6,11 +6,11 @@
  */
 
 import { clearDisplayCache, sharedDisplayCache } from "./display-cache";
-import https from "node:https";
+import { privateNodeRequest, type NodeTls } from './private-node-http';
 import { nodesSynchronized } from './queued-update';
 import { inboundAvailable } from './inbound-availability';
 import type { InboundRuntimeHealth } from './inbound-availability';
-import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifyClientCreationRecord, verifiedClientUsage, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
+import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifyClientCreationRecord, verifiedClientUsage, verifyClientDeletion, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
 export type PanelInbound = {
   id: number;
@@ -68,7 +68,7 @@ export type PanelAuth = {
   cookie?: string; // کوکی نشست (ورود با نام کاربری)
   csrf?: string; // توکن CSRF برای درخواست‌های POST در حالت کوکی (3.7+)
   nodePeers?: NodePeer[];
-  tls?: { connectHost: string; ca: string };
+  tls?: NodeTls;
 };
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PvNetWork/1.0";
@@ -206,24 +206,6 @@ async function panelRequest<T>(
   } catch (e) {
     return { ok: false, msg: `خطای ارتباط با پنل: ${(e as Error).message}` };
   }
-}
-
-function privateNodeRequest(url: string, tls: NonNullable<PanelAuth["tls"]>, init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal }): Promise<Response> {
-  const target = new URL(url);
-  if (target.protocol !== "https:") throw new Error("Private node requires HTTPS");
-  return new Promise((resolve, reject) => {
-    const req = https.request(target, {
-      method: init.method, headers: init.headers, signal: init.signal,
-      hostname: tls.connectHost, servername: target.hostname, ca: tls.ca,
-      rejectUnauthorized: true,
-    }, res => {
-      const chunks: Buffer[] = []; let bytes = 0;
-      res.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) req.destroy(new Error("Node response too large")); else chunks.push(chunk); });
-      res.on("error", reject);
-      res.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode || 502 })));
-    });
-    req.on("error", reject); req.end(init.body);
-  });
 }
 
 export type RawInbound = {
@@ -504,6 +486,10 @@ export async function isQueuedClientSaved(auth: PanelAuth, email: string, quotaB
 
 export async function deleteClient(auth: PanelAuth, email: string, progress?: NodeMutationProgress): Promise<PanelApiResult> {
   return mutateWithNodePeers(auth, email, "delete", panelRequest, progress);
+}
+
+export async function readClientDeletion(auth: PanelAuth, email: string): Promise<PanelApiResult> {
+  return verifyClientDeletion(auth, email, (target, path, init) => panelRequest(target, path, { ...init, timeoutMs: 4000 }));
 }
 
 /** ریست ترافیک کلاینت بر اساس ایمیل */

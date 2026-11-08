@@ -57,6 +57,10 @@ export function canFinalizeAcknowledgedDeletion(row: OperationJournal, installat
       const value = state as Record<string, unknown>;
       if (value.version !== 1 || value.email !== row.email || value.op !== 'delete' || !Array.isArray(value.steps) || !value.steps.length
         || !value.steps.every(step => step && typeof step === 'object' && step.status === 'DONE' && typeof step.key === 'string' && !!step.key && typeof step.identity === 'string' && !!step.identity)) return false;
+      const deleteTargets = value.deleteTargets;
+      if (value.deleteVerified !== true || !Array.isArray(deleteTargets) || !deleteTargets.includes('master')
+        || deleteTargets.some(key => typeof key !== 'string' || !key) || new Set(deleteTargets).size !== deleteTargets.length
+        || !value.steps.every(step => deleteTargets.includes(step.key))) return false;
     }
     return Math.abs(usage - row.usageSnapshotGB) < 1e-9;
   } catch { return false; }

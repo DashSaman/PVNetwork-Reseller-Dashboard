@@ -41,6 +41,13 @@ whose response was lost is marked STARTED and requires administrator repair;
 retry must never silently reset newly accrued traffic. A completed peer is skipped
 on resume. Deliberately disabled accounts are not automatically re-enabled.
 
+DELETE now directly checks every provisioned peer, including linked nodes. The
+master is frozen before peer deletion, then all copies are verified absent again
+after master deletion and before accounting. Delayed recreation of the same
+identity can continue only the original journal; a foreign UUID/subId blocks all
+writes. DONE steps and legacy master-only progress are not absence evidence.
+RESET keeps its existing ambiguous-response protection and is never replayed.
+
 Provision through the root-only CLI:
 
 ```sh
@@ -56,6 +63,23 @@ hostname verification. No listener or new port is created. Never use a token has
 as a bearer token, disable TLS verification, print credentials, or add the peer as
 another billing panel. The entire peer document is AES-GCM encrypted in Setting
 `nodeSyncPeers:PANEL_ID` with APP_SECRET and included in dashboard backups.
+
+For a managed cluster, provision every native node and include its positive
+`nativeNodeId`. Deletion checks fresh inbound-to-node attribution; an unprovisioned
+new node cannot silently be omitted. Keep any existing independent repair peers.
+No additional listener or port is needed. This is an administrative configuration,
+never a reseller-editable route or protocol setting.
+
+Where the node's independent trust anchor is an authenticated public key, use a
+literal-IP `baseUrl` and `tls: { mode: "pin", connectHost: "LITERAL_IP",
+spkiSha256: "64_HEX_SHA256_OF_DER_SPKI" }`. Provision that key through existing
+authenticated administrative access or a registered private peer. The adapter
+checks the TLS peer key before sending any API credential or body; it does not
+resolve a domain, fall back to another address, or retry writes. In this explicit
+public-key trust model, certificate hostname/expiry does not replace key identity;
+same-key certificate renewal works, a changed key fails closed. Ordinary CA mode
+continues to verify the CA chain and hostname. Never derive a new trusted pin
+solely from the public connection you are about to trust.
 
 On server migration restore APP_SECRET and the encrypted settings together, then
 verify the peer address, private gateway and CA on the destination. On certificate

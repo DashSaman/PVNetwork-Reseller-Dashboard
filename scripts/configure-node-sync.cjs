@@ -7,12 +7,16 @@ const secret = require('./runtime-secret.cjs').runtimeSecret();
   const panelId = process.argv[2];
   if (!panelId || !secret) throw Error('panel-id and APP_SECRET required');
   let raw = ''; for await (const chunk of process.stdin) { raw += chunk; if (raw.length > 200000) throw Error('Configuration too large'); }
-  const peers = JSON.parse(raw), keys = new Set();
+  const peers = JSON.parse(raw), keys = new Set(), nodeIds = new Set(), { isIP } = require('node:net');
   if (!Array.isArray(peers) || peers.length > 10) throw Error('Invalid peers');
   for (const p of peers) {
     const url = new URL(p.baseUrl);
     if (!p.key || p.key === 'master' || keys.has(p.key) || !p.token || url.protocol !== 'https:' || url.username || url.password || !p.masterInboundIds?.length || !p.masterInboundIds.every(Number.isSafeInteger)) throw Error('Invalid peer');
-    if (p.tls && (!p.tls.connectHost || !p.tls.ca?.includes('-----BEGIN CERTIFICATE-----'))) throw Error('Invalid TLS configuration');
+    if (p.tls) {
+      if (p.tls.mode === 'pin') { if (!isIP(p.tls.connectHost) || !isIP(url.hostname.replace(/^\[|\]$/g, '')) || !/^[a-fA-F0-9]{64}$/.test(p.tls.spkiSha256)) throw Error('Invalid pinned node identity'); }
+      else if (p.tls.mode && p.tls.mode !== 'ca' || !p.tls.connectHost || !p.tls.ca?.includes('-----BEGIN CERTIFICATE-----')) throw Error('Invalid TLS configuration');
+    }
+    if (p.nativeNodeId !== undefined) { if (!Number.isSafeInteger(p.nativeNodeId) || p.nativeNodeId <= 0 || nodeIds.has(p.nativeNodeId)) throw Error('Invalid native node coverage');nodeIds.add(p.nativeNodeId); }
     keys.add(p.key);
   }
   const db = new PrismaClient();

@@ -32,7 +32,7 @@ test('unstarted delete cancellation preserves its allocation and denies any nati
   for (const patch of [{ reservedGB: 1 }, { accountingCommitted: true }, { metadata: JSON.stringify({ explicitDestructive: true, operationInstallation: installation, usageByPanel: {} }) }, { completedPanels: '["panel"]' }, { status: 'NEEDS_REPAIR' }]) assert.equal(policy.canCancelUnstartedOperation({ ...deletion, ...patch }, installation), false);
 });
 
-const acknowledgedDelete = (patch={}) => fixture({ type:'DELETE',reservedGB:0,targetPanels:'["panel"]',completedPanels:'["panel"]',metadata:JSON.stringify({explicitDestructive:true,operationInstallation:installation,usageByPanel:{panel:3},nodeSync:{panel:{version:1,email:'customer_email',op:'delete',steps:[{key:'master',identity:'customer-id',status:'DONE'}]}}}),...patch });
+const acknowledgedDelete = (patch={}) => fixture({ type:'DELETE',reservedGB:0,targetPanels:'["panel"]',completedPanels:'["panel"]',metadata:JSON.stringify({explicitDestructive:true,operationInstallation:installation,usageByPanel:{panel:3},nodeSync:{panel:{version:1,email:'customer_email',op:'delete',deleteVerified:true,deleteTargets:['master'],steps:[{key:'master',identity:'customer-id',status:'DONE'}]}}}),...patch });
 test('an acknowledged delete can finalize after synchronization without dispatching a new operation',()=>{
  assert.equal(policy.canFinalizeAcknowledgedDeletion?.(acknowledgedDelete(),installation)??false,true);
  assert.equal(policy.canFinalizeAcknowledgedDeletion?.(acknowledgedDelete({accountingCommitted:true}),installation)??false,true);

@@ -1,4 +1,5 @@
 import type { PanelAuth, PanelApiResult, PanelClient } from "./panel";
+import type { NodeTls } from './private-node-http';
 
 /** Explicit repair peers, never additional billing/statistics panels. */
 export type NodePeer = {
@@ -6,13 +7,14 @@ export type NodePeer = {
   baseUrl: string;
   token: string;
   masterInboundIds: number[];
-  tls?: { connectHost: string; ca: string };
+  tls?: NodeTls;
+  nativeNodeId?: number;
 };
 type RecordData = Record<string, unknown>;
 type ClientDetail = { client: RecordData; inboundIds: number[]; usedTraffic?: unknown };
 export type NativeRequest = <T>(auth: PanelAuth, path: string, init?: { method?: string; json?: unknown }) => Promise<PanelApiResult<T>>;
 type Step = { key: string; identity: string; status: "PENDING" | "STARTED" | "DONE"; wasEnabled?: boolean; reactivateExhausted?: boolean; usageBytes?: number };
-export type NodeMutationState = { version: 1; email: string; op: "delete" | "reset"; steps: Step[] };
+export type NodeMutationState = { version: 1; email: string; op: "delete" | "reset"; steps: Step[]; deleteTargets?: string[]; deleteVerified?: boolean };
 export type NodeMutationProgress = {
   load(): Promise<NodeMutationState | undefined>;
   save(state: NodeMutationState): Promise<void>;
@@ -174,7 +176,7 @@ export async function verifyMasterClientUpdate(auth: PanelAuth, email: string, c
 
 /** Durable reset/delete progress. STARTED resets are ambiguous after a crash or
  * lost response and must never be replayed automatically against live counters. */
-export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "delete" | "reset", request: NativeRequest, progress?: NodeMutationProgress): Promise<PanelApiResult> {
+export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "delete" | "reset", request: NativeRequest, progress?: NodeMutationProgress, reconcilePass = 0): Promise<PanelApiResult> {
   try {
     if (op === "reset" && !progress) return failure("ریست روی نود به ژورنال ماندگار نیاز دارد");
     let state = await progress?.load();
@@ -183,10 +185,10 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
       if (master && progress?.expectedSubId && master.client.subId !== progress.expectedSubId) return failure("هویت حساب مرجع با اشتراک ثبت‌شده مطابقت ندارد");
       if (!master && (op !== "delete" || !progress?.expectedSubId)) return failure("هویت حساب مرجع برای عملیات قابل تأیید نیست");
       const steps: Step[] = [];
-      for (const peer of master ? peersFor(auth, master) : auth.nodePeers || []) {
+      for (const peer of op === 'delete' ? auth.nodePeers || [] : master ? peersFor(auth, master) : auth.nodePeers || []) {
         const current = await detail(request, peer, email);
         if (!current) continue;
-        if (master) assertSame(master.client, current.client);
+        if (master) { assertSame(master.client, current.client);if (op === 'delete' && current.client.subId !== master.client.subId) return failure('شناسهٔ اشتراک نود متفاوت است'); }
         else if (current.client.subId !== progress?.expectedSubId) return failure("هویت نسخهٔ باقی‌ماندهٔ حساب قابل تأیید نیست");
         steps.push({ key: peer.key, identity: identity(current.client), status: "PENDING" });
       }
@@ -195,6 +197,40 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
       await progress?.save(state);
     }
     if (state.version !== 1 || state.email !== email || state.op !== op) return failure("ژورنال نود با عملیات مطابقت ندارد");
+    if (op === 'delete') {
+      const targets = [{ key: 'master', auth }, ...(auth.nodePeers || []).map(peer => ({ key: peer.key, auth: peer }))];
+      const keys = new Set(targets.map(t => t.key));
+      if (state.deleteTargets?.some(key => !keys.has(key)) || state.steps.some(step => !keys.has(step.key))) return failure('یک هدف ثبت‌شدهٔ حذف از پیکربندی نودها حذف شده است');
+      const copies = await Promise.all(targets.map(async target => ({ ...target, current: await detail(request, target.auth, email) })));
+      const expected = state.steps.find(s => s.key === 'master')?.identity || state.steps[0]?.identity;
+      if (state.steps.some(step => !expected || step.identity !== expected)) return failure('هویت‌های ثبت‌شدهٔ حذف با هم مطابقت ندارند');
+      for (const copy of copies) if (copy.current && (!expected || identity(copy.current.client) !== expected || progress?.expectedSubId && copy.current.client.subId !== progress.expectedSubId)) return failure('هویت نسخهٔ نود با درخواست حذف مطابقت ندارد');
+      const master = copies.find(c => c.key === 'master')?.current;
+      if (master && auth.nodePeers?.some(p => p.nativeNodeId !== undefined)) {
+        const catalog = await request<{ id: number; nodeId?: number | null }[]>(auth, '/panel/api/inbounds/list');
+        if (!catalog.ok || !Array.isArray(catalog.data) || !master.inboundIds.every(id => {
+          const found = catalog.data!.filter(i => i.id === id);
+          return found.length === 1 && (found[0].nodeId === null || Number.isSafeInteger(found[0].nodeId) && found[0].nodeId! > 0 && auth.nodePeers!.some(p => p.nativeNodeId === found[0].nodeId));
+        })) return failure('اتصال مستقیم همهٔ نودهای حساب برای تأیید حذف پیکربندی نشده است');
+      }
+      // Extend only the same explicitly requested deletion after proving every
+      // identity. A DONE copy may have been recreated by delayed native fan-out.
+      for (const copy of copies) if (copy.current) {
+        let step = state.steps.find(s => s.key === copy.key);
+        if (!step) { step = { key: copy.key, identity: identity(copy.current.client), status: 'PENDING' };state.steps.splice(copy.key === 'master' ? state.steps.length : Math.max(0, state.steps.findIndex(s => s.key === 'master')), 0, step); }
+        if (step.status === 'DONE') step.status = 'PENDING';
+      }
+      state.deleteTargets = targets.map(t => t.key);state.deleteVerified = false;await progress?.save(state);
+      // Freeze the master before deleting peers. Freezing it later can fan an
+      // update back out to a peer which was already removed.
+      const masterStep = state.steps.find(s => s.key === 'master');
+      if (master?.client.enable === true && masterStep && progress?.checkpointUsage) {
+        masterStep.wasEnabled ??= true;await progress.save(state);
+        await setEnabled(request, auth, email, master, false);
+        masterStep.usageBytes = Math.max(masterStep.usageBytes || 0, await readUsage(request, auth, email));
+        await progress.save(state);await progress.checkpointUsage(Math.max(...state.steps.map(s => s.usageBytes || 0)));
+      }
+    }
     for (const step of state.steps) {
       if (step.status === "STARTED" && op === "reset") return failure("پاسخ ریست قبلی قطعی نیست؛ برای جلوگیری از صفر شدن دوبارهٔ مصرف، بررسی مدیر لازم است");
       const target = step.key === "master" ? auth : auth.nodePeers?.find(p => p.key === step.key);
@@ -209,7 +245,7 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
       }
       const current = await detail(request, target, email);
       if (!current && op !== "delete") return failure("حساب نود هنگام ریست در دسترس نیست");
-      if (current && identity(current.client) !== step.identity) return failure("هویت حساب پس از ثبت عملیات عوض شده است");
+      if (current && (identity(current.client) !== step.identity || op === 'delete' && progress?.expectedSubId && current.client.subId !== progress.expectedSubId)) return failure("هویت حساب پس از ثبت عملیات عوض شده است");
       if (current) {
         if (progress?.checkpointUsage) {
           // Persist the original enable state before freezing, so retries preserve it.
@@ -236,7 +272,7 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
         step.status = "STARTED"; await progress?.save(state);
         const path = op === "delete" ? "del" : "resetTraffic";
         const r = await request(target, `/panel/api/clients/${path}/${encodeURIComponent(email)}`, { method: "POST" });
-        if (!r.ok) return failure("پاسخ عملیات نود قطعی نیست؛ بررسی و ادامه لازم است");
+        if (!r.ok && (op !== 'delete' || await detail(request, target, email))) return failure("پاسخ عملیات نود قطعی نیست؛ بررسی و ادامه لازم است");
         if (op === "delete" && await detail(request, target, email)) return failure("حذف حساب روی نود تأیید نشد");
         if (op === 'reset' && (step.usageBytes || 0) > 0 && await readUsage(request, target, email) >= step.usageBytes!) return failure('صفرشدن مصرف روی نود تأیید نشد؛ درخواست مبهم دوباره اجرا نمی‌شود');
       }
@@ -247,6 +283,17 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
         await setEnabled(request, target, email, after, true);
       }
     }
+    if (op === 'delete') {
+      const verified = await verifyClientDeletion(auth, email, request);
+      if (!verified.ok) return progress && reconcilePass === 0 ? mutateWithNodePeers(auth, email, op, request, progress, 1) : verified;
+      state.deleteVerified = true;await progress?.save(state);
+    }
     return { ok: true };
   } catch { return failure("ارتباط یا ثبت پیشرفت عملیات نود موفق نبود"); }
+}
+
+/** No native writes. Used again at the accounting boundary after synchronization. */
+export async function verifyClientDeletion(auth: PanelAuth, email: string, request: NativeRequest): Promise<PanelApiResult> {
+  try { const copies = await Promise.all([auth, ...(auth.nodePeers || [])].map(target => detail(request, target, email)));return copies.every(c => c === null) ? { ok: true } : failure('نسخهٔ حساب هنوز روی یک نود وجود دارد'); }
+  catch { return failure('نبودن نسخهٔ حساب روی همهٔ نودها تأیید نشد'); }
 }

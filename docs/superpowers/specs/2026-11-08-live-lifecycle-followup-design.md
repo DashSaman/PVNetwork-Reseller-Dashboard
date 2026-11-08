@@ -50,6 +50,18 @@ proof and lock guards. It returns success only after that journal is SUCCESS,
 accounting is committed and the original tracked customer is absent. It never
 repeats native deletion, dispatches unknown work or changes the bot server.
 
+Further live verification found that native master deletion can leave disabled
+linked copies behind. Only one independent repair peer had been provisioned.
+Provision all five existing native APIs using independently authenticated SPKI
+keys and literal addresses, without adding a listener or changing a node service.
+Preflight every configured copy; freeze the master before removing peers; retain
+the durable identity/subscription and usage guards. Recheck all copies after
+master deletion and again at the accounting boundary. A delayed same-identity
+copy can continue the original DELETE with a bounded guarded reconciliation;
+foreign replacements and ambiguous RESETs cannot. Read-triggered completion
+remains read-only against native APIs. Metadata requires the new full-target
+verification proof, rather than trusting old master-only DONE progress.
+
 ## Verification and operational constraints
 
 Use failing unit and real-handler regression cases before implementation. Cover

@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
-import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, isQueuedClientSaved, readClientCreation, type PanelAuth, type PanelNodeSyncSnapshot } from "./panel";
+import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, isQueuedClientSaved, readClientCreation, readClientDeletion, type PanelAuth, type PanelNodeSyncSnapshot } from "./panel";
 import { isSavedQueuedCreation, creationMetadata } from './queued-create';
 import { isSavedQueuedUpdate, updateMetadata } from './queued-update';
 import { logActivity } from "./logger";
@@ -215,12 +215,13 @@ async function executeAcrossPanels(
   targetPanels: string[],
   alreadyCompleted: string[],
   op: "delete" | "reset",
-  email: string
+  email: string,
+  completionOnly = false
 ): Promise<{ failed: { panelId: string; result: PanelOpResult }[]; completed: string[] }> {
   const completed = new Set(alreadyCompleted);
   const failed: { panelId: string; result: PanelOpResult }[] = [];
   for (const panelId of targetPanels) {
-    if (completed.has(panelId)) continue;
+    if (completed.has(panelId) && (op !== 'delete' || completionOnly)) continue;
     const r = await runPanelOp(journalId, panelId, op, email);
     if (r.result === "SUCCESS" || r.result === "ALREADY_MISSING") {
       completed.add(panelId);
@@ -430,13 +431,21 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
     const targetPanels = parseArr(journal.targetPanels); // تغییرناپذیر
     if (!await requiredTargetsReady(tracked)) return waitingForTargets();
     await prepareUsageLedger(journal.id, snapshot.panels, email);
-    const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "delete", email);
+    const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "delete", email, completionOnly);
 
     if (failed.length > 0) {
       return { ok: false, status: 502, partial: true, msg: `حذف ناقص بود — ${failed.length} پنل انجام نشد (${failed.map((f) => f.result).join(", ")}). مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
 
     if (!await requiredTargetsReady(tracked)) return waitingForTargets();
+
+    // Native health and a vanished master are not proof that its remote copies
+    // vanished. Recheck every configured peer without writes before any refund.
+    const absent = await Promise.all(targetPanels.map(async id => {
+      const connection = await getPanelConnection(id);
+      return connection.ok && (await readClientDeletion(connection.conn, email)).ok;
+    }));
+    if (!absent.every(Boolean)) return waitingForTargets();
 
     usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
     await commitJournalAccounting(journal.id, resellerId, usageGB);
