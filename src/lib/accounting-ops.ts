@@ -239,6 +239,11 @@ async function executeAcrossPanels(
         lastError: failed.map((f) => `${f.panelId}=${f.result}`).join(", "),
       },
     });
+  } else if (targetPanels.every(panelId => completed.has(panelId))) {
+    // A previous attempt may have failed before these targets later acknowledged
+    // the same operation. Do not let that stale failure block read-only final
+    // accounting while the native synchronization marker briefly settles.
+    await db.operationJournal.update({ where: { id: journalId }, data: { failedPanels: "[]", lastError: null } });
   }
   return { failed, completed: [...completed] };
 }
