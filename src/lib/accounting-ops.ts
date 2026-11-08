@@ -329,6 +329,18 @@ async function requiredTargetsReady(tracked: TrackedUser): Promise<boolean> {
   return true;
 }
 
+/** A short native config push must not strand an explicit DELETE until the next
+ * observer tick. Read-triggered completion still performs one read only. */
+async function deletionTargetsReady(tracked: TrackedUser, completionOnly: boolean): Promise<boolean> {
+  const deadline = Date.now() + (completionOnly ? 0 : 8000);
+  do {
+    if (await requiredTargetsReady(tracked)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  } while (Date.now() < deadline);
+  return false;
+}
+
 const waitingForTargets = (): OpResult => ({ ok: true, pending: true, debitedGB: 0, refundedGB: 0, message: 'درخواست ثبت شد؛ یک لوکیشن مرتبط پاسخ نمی‌دهد. بعد از تأیید همهٔ لوکیشن‌ها تکمیل می‌شود؛ تا آن زمان سهمیه محفوظ است.' });
 
 /** Fast confirmation on normal metadata reads, without dispatching native work. */
@@ -434,7 +446,7 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
     }
 
     const targetPanels = parseArr(journal.targetPanels); // تغییرناپذیر
-    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
+    if (!await deletionTargetsReady(tracked, completionOnly)) return waitingForTargets();
     await prepareUsageLedger(journal.id, snapshot.panels, email);
     const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "delete", email, completionOnly);
 
@@ -442,14 +454,25 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
       return { ok: false, status: 502, partial: true, msg: `حذف ناقص بود — ${failed.length} پنل انجام نشد (${failed.map((f) => f.result).join(", ")}). مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
 
-    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
+    if (!await deletionTargetsReady(tracked, completionOnly)) return waitingForTargets();
 
     // Native health and a vanished master are not proof that its remote copies
     // vanished. Recheck every configured peer without writes before any refund.
-    const absent = await Promise.all(targetPanels.map(async id => {
+    const readAbsence = () => Promise.all(targetPanels.map(async id => {
       const connection = await getPanelConnection(id);
       return connection.ok && (await readClientDeletion(connection.conn, email)).ok;
     }));
+    let absent = await readAbsence();
+    if (!absent.every(Boolean) && !completionOnly) {
+      // Native fan-out may land after the adapter's first absence proof, while
+      // the controller is settling its dirty marker. Reconcile the SAME journal
+      // once after that gate; persisted identities and usage checkpoints still
+      // guard every write. Never dispatch this reconciliation from a GET.
+      const retry = await executeAcrossPanels(journal.id, targetPanels, completed, "delete", email);
+      if (retry.failed.length) return { ok: false, status: 502, partial: true, msg: "تأیید نهایی حذف کامل نشد؛ سهمیه و مصرف ثبت‌شده محفوظ است" };
+      if (!await deletionTargetsReady(tracked, false)) return waitingForTargets();
+      absent = await readAbsence();
+    }
     if (!absent.every(Boolean)) return waitingForTargets();
 
     usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
