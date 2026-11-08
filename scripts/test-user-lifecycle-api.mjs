@@ -187,6 +187,30 @@ try{
  const startedDelete=await db.operationJournal.findFirst({where:{resellerId:cancelDeleteOwner.id,email:'executed-delete',type:'DELETE'}});
  result=await api(cancelDeleteOwner,'/api/reseller/users/executed-delete/pending-operation','DELETE',{operationId:startedDelete.id});
  check('a deletion with attempted native work cannot be cancelled for a refund',()=>{assert.equal(result.status,409);assert.ok(clients.has(key('a','executed-delete')))});
+ // Paid traffic survives deletion, account recreation and funded reset cycles.
+ // Native statistics repeat the same email counter on all three inbounds.
+ const paid=await owner('paid-delete-ledger',100),paidPayload={name:'Paid',trafficGB:20,expiryDays:30,inbounds:[1,2,3].map(inboundId=>({panelId:panel.id,inboundId})),requestId:'paid-first-create'};
+ result=await api(paid,'/api/reseller/users','POST',paidPayload);assert.equal(result.status,200);const paidEmail=result.data.email;clients.get(key('a',paidEmail)).used=7*GB;
+ const paidDeletes=await Promise.all([1,2].map(()=>api(paid,'/api/reseller/users/'+paidEmail,'DELETE'))),paidAfter=await db.reseller.findUnique({where:{id:paid.id}});
+ result=await api(paid,'/api/reseller/bootstrap');
+ check('concurrent deletion of 20 GB with 7 GB used refunds only 13 GB, with one permanent debit',()=>{assert.ok(paidDeletes.some(x=>x.status===200));assert.ok(paidDeletes.every(x=>[200,404].includes(x.status)));assert.equal(paidAfter.consumedGB,7);assert.equal(result.data.permissions.allocatedGB,0);assert.equal(result.data.permissions.remainingGB,93)});
+ const paidNativeAdds=nativeAdds;result=await api(paid,'/api/reseller/users','POST',paidPayload);
+ check('replaying a deleted successful create request cannot create a free replacement',()=>{assert.equal(result.status,409);assert.equal(nativeAdds,paidNativeAdds)});
+ result=await api(paid,'/api/reseller/users','POST',{...paidPayload,name:'TooMuch',trafficGB:94,requestId:'paid-too-much'});
+ check('recreation cannot spend the 7 GB already consumed by a deleted account',()=>{assert.equal(result.status,403);assert.equal(nativeAdds,paidNativeAdds)});
+ result=await api(paid,'/api/reseller/users','POST',{...paidPayload,requestId:'paid-second-create'});assert.equal(result.status,200);const recreatedEmail=result.data.email;clients.get(key('a',recreatedEmail)).used=2*GB;
+ result=await api(paid,'/api/reseller/users/'+recreatedEmail+'/reset-traffic','POST',{});assert.equal(result.status,200);const paidReset=await db.reseller.findUnique({where:{id:paid.id}});result=await api(paid,'/api/reseller/bootstrap');
+ check('reset after recreation retains earlier spending and funds the cleared counter',()=>{assert.equal(paidReset.consumedGB,9);assert.equal(clients.get(key('a',recreatedEmail)).used,0);assert.equal(result.data.permissions.remainingGB,71)});
+ clients.get(key('a',recreatedEmail)).used=3*GB;result=await api(paid,'/api/reseller/users/'+recreatedEmail,'DELETE');assert.equal(result.status,200);const paidFinal=await db.reseller.findUnique({where:{id:paid.id}});result=await api(paid,'/api/reseller/bootstrap');
+ check('delete after reset preserves all three usage periods without replica double billing',()=>{assert.equal(paidFinal.consumedGB,12);assert.equal(result.data.permissions.remainingGB,88);assert.equal(result.data.permissions.allocatedGB,0)});
+ await api(paid,'/api/reseller/users/'+recreatedEmail,'DELETE');await api(paid,'/api/reseller/customer-tools');const paidRepeat=await db.reseller.findUnique({where:{id:paid.id}});result=await api(paid,'/api/reseller/bootstrap');
+ check('repeated delete and metadata completion cannot refund or debit settled traffic again',()=>{assert.equal(paidRepeat.consumedGB,12);assert.equal(result.data.permissions.remainingGB,88)});
+ const paidOver=await owner('paid-delete-overshoot',100);await seed(paidOver,'paid-overshoot',11.25);result=await api(paidOver,'/api/reseller/users/paid-overshoot','DELETE');assert.equal(result.status,200);const paidOverAfter=await db.reseller.findUnique({where:{id:paidOver.id}});result=await api(paidOver,'/api/reseller/bootstrap');
+ check('deletion charges the full 11.25 GB overshoot instead of capping debit at the 10 GB allocation',()=>{assert.equal(paidOverAfter.consumedGB,11.25);assert.equal(result.data.permissions.remainingGB,88.75)});
+ const paidPartial=await owner('paid-partial-delete',100);await seed(paidPartial,'paid-partial',3,b);mode.set('paid-partial',{failB:true});result=await api(paidPartial,'/api/reseller/users/paid-partial','DELETE');assert.equal(result.status,502);const paidPartialPending=await db.reseller.findUnique({where:{id:paidPartial.id}});result=await api(paidPartial,'/api/reseller/bootstrap');
+ check('partial deletion refunds no allocation while a native copy remains usable',()=>{assert.equal(result.data.permissions.allocatedGB,10);assert.equal(result.data.permissions.remainingGB,90);assert.equal(paidPartialPending.consumedGB,0)});
+ clients.get(key('b','paid-partial')).used=5*GB;mode.delete('paid-partial');result=await api(paidPartial,'/api/reseller/users/paid-partial','DELETE');assert.equal(result.status,200);const paidPartialAfter=await db.reseller.findUnique({where:{id:paidPartial.id}});result=await api(paidPartial,'/api/reseller/bootstrap');
+ check('partial deletion reconciliation charges final independent-panel traffic once',()=>{assert.equal(paidPartialAfter.consumedGB,8);assert.equal(result.data.permissions.remainingGB,92);assert.equal(result.data.permissions.allocatedGB,0)});
  console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;
 }catch(e){console.error(e);console.error('Fixture:',dir);process.exitCode=1}
 finally{if(app){if(process.platform==='win32')await new Promise(resolve=>{const p=spawn('taskkill.exe',['/PID',String(app.pid),'/T','/F'],{windowsHide:true});p.on('exit',resolve)});else app.kill('SIGTERM')}if(server){server.closeAllConnections();server.close()}if(db)await db.$disconnect()}

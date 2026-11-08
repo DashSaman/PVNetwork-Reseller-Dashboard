@@ -210,7 +210,9 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
         const catalog = await request<{ id: number; nodeId?: number | null }[]>(auth, '/panel/api/inbounds/list');
         if (!catalog.ok || !Array.isArray(catalog.data) || !master.inboundIds.every(id => {
           const found = catalog.data!.filter(i => i.id === id);
-          return found.length === 1 && (found[0].nodeId === null || Number.isSafeInteger(found[0].nodeId) && found[0].nodeId! > 0 && auth.nodePeers!.some(p => p.nativeNodeId === found[0].nodeId));
+          // Native omitempty serialization leaves nodeId absent for local
+          // inbounds. A present invalid/unknown remote ID must still fail closed.
+          return found.length === 1 && (found[0].nodeId === undefined || found[0].nodeId === null || Number.isSafeInteger(found[0].nodeId) && found[0].nodeId! > 0 && auth.nodePeers!.some(p => p.nativeNodeId === found[0].nodeId));
         })) return failure('اتصال مستقیم همهٔ نودهای حساب برای تأیید حذف پیکربندی نشده است');
       }
       // Extend only the same explicitly requested deletion after proving every

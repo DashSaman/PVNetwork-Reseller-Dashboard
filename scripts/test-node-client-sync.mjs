@@ -25,7 +25,7 @@ async function fixture(fn) {
         if (!p.ignorePatch) p.client = { ...p.client, ...body, id: 123 };
         if (p.pending) obj = { nodePending: true };
       } else if (req.url.includes('/resetTraffic/')) { p.resets++; p.used=0; }
-      else if (req.url === '/panel/api/inbounds/list') obj=p.ids.map(id=>({id,nodeId:p.catalogNodeId??null}));
+      else if (req.url === '/panel/api/inbounds/list') obj=p.ids.map(id=>p.catalogOmitLocalNode?{id}:{id,nodeId:p.catalogNodeId??null});
       else if (req.url.includes('/del/')) { p.client = null;if(p.afterDelete)p.afterDelete(); }
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success, obj, msg }));
     });
@@ -149,4 +149,14 @@ test('a newly introduced native node needs an authenticated peer before deletion
 }));
 test('an initially absent peer stays in the durable deletion target set',()=>fixture(async({node,auth,calls})=>{
  node.client=null;let state;const progress={expectedSubId:'same-sub',load:async()=>structuredClone(state),save:async v=>{state=structuredClone(v)}};assert.equal((await deleteClient(auth,'user',progress)).ok,true);assert.ok(state.deleteTargets.includes('de'));auth.nodePeers=[];const writes=calls.filter(c=>c.includes(':POST:')).length;assert.equal((await deleteClient(auth,'user',progress)).ok,false);assert.equal(calls.filter(c=>c.includes(':POST:')).length,writes);
+}));
+
+test('native omitempty local node attribution permits deletion with every remote peer still verified',()=>fixture(async({master,node,auth})=>{
+ master.catalogOmitLocalNode=true;auth.nodePeers[0].nativeNodeId=1;let state;const progress={expectedSubId:'same-sub',checkpointUsage:async()=>{},load:async()=>structuredClone(state),save:async v=>{state=structuredClone(v)}};
+ assert.equal((await deleteClient(auth,'user',progress)).ok,true);assert.equal(master.client,null);assert.equal(node.client,null);assert.equal(state.deleteVerified,true);
+}));
+
+test('invalid native node attribution cannot be treated as local',()=>fixture(async({master,auth,calls})=>{
+ auth.nodePeers[0].nativeNodeId=1;
+ for(const nodeId of [0,-1,'1',true,{}]){master.catalogNodeId=nodeId;calls.length=0;let state;const progress={expectedSubId:'same-sub',load:async()=>structuredClone(state),save:async v=>{state=structuredClone(v)}};assert.equal((await deleteClient(auth,'user',progress)).ok,false);assert.ok(!calls.some(c=>c.includes(':POST:')));}
 }));
