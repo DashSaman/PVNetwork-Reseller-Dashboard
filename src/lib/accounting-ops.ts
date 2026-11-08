@@ -8,7 +8,7 @@ import { logActivity } from "./logger";
 import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync";
 import type { Prisma } from '@prisma/client';
 import { operationInstallation } from './operation-installation';
-import { canCancelUnstartedOperation, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
+import { canCancelUnstartedOperation, canFinalizeAcknowledgedDeletion, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -325,6 +325,16 @@ async function requiredTargetsReady(tracked: TrackedUser): Promise<boolean> {
 
 const waitingForTargets = (): OpResult => ({ ok: true, pending: true, debitedGB: 0, refundedGB: 0, message: 'درخواست ثبت شد؛ یک لوکیشن مرتبط پاسخ نمی‌دهد. بعد از تأیید همهٔ لوکیشن‌ها تکمیل می‌شود؛ تا آن زمان سهمیه محفوظ است.' });
 
+/** Fast confirmation on normal metadata reads, without dispatching native work. */
+export async function confirmAcknowledgedDeletions(resellerId: string, budgetMs = 4000): Promise<void> {
+  const rows = await db.operationJournal.findMany({ where: { resellerId, type: 'DELETE', status: { in: ['RUNNING', 'PARTIAL'] } }, orderBy: { updatedAt: 'asc' }, take: 100 });
+  const deadline = Date.now() + budgetMs;
+  for (const row of rows) {
+    if (Date.now() > deadline) break;
+    if (canFinalizeAcknowledgedDeletion(row, operationInstallation())) await deleteUserByJournal(resellerId, row.email, row.id, true);
+  }
+}
+
 /** Only explicitly requested new operations are eligible. Durable node steps
  * prevent replaying a reset whose response was lost. Old repair journals are
  * never enrolled in automatic recovery. Called by the existing observation job. */
@@ -351,13 +361,17 @@ async function continuedDestructiveMetadata(journalId: string): Promise<string |
 }
 
 /** حذف کاربر — مسیر مشترک داشبورد و پل */
-export async function deleteUserByJournal(resellerId: string, email: string, expectedJournalId?: string): Promise<OpResult> {
+export async function deleteUserByJournal(resellerId: string, email: string, expectedJournalId?: string, completionOnly = false): Promise<OpResult> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
     const { reseller, tracked } = loaded;
 
     if (expectedJournalId && !await currentContinuation(resellerId, expectedJournalId, tracked, 'DELETE')) return { ok: true, debitedGB: 0 };
+    if (completionOnly) {
+      const current = expectedJournalId ? await db.operationJournal.findUnique({ where: { id: expectedJournalId } }) : null;
+      if (!current || !canFinalizeAcknowledgedDeletion(current, operationInstallation())) return { ok: true, debitedGB: 0 };
+    }
 
     const predecessors = await verifiedSavedPredecessors(resellerId, tracked);
     const conflict = await assertNoConflictingOperation(resellerId, email, "DELETE", predecessors.map(j => j.id));

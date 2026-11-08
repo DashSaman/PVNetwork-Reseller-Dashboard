@@ -32,6 +32,18 @@ test('unstarted delete cancellation preserves its allocation and denies any nati
   for (const patch of [{ reservedGB: 1 }, { accountingCommitted: true }, { metadata: JSON.stringify({ explicitDestructive: true, operationInstallation: installation, usageByPanel: {} }) }, { completedPanels: '["panel"]' }, { status: 'NEEDS_REPAIR' }]) assert.equal(policy.canCancelUnstartedOperation({ ...deletion, ...patch }, installation), false);
 });
 
+const acknowledgedDelete = (patch={}) => fixture({ type:'DELETE',reservedGB:0,targetPanels:'["panel"]',completedPanels:'["panel"]',metadata:JSON.stringify({explicitDestructive:true,operationInstallation:installation,usageByPanel:{panel:3},nodeSync:{panel:{version:1,email:'customer_email',op:'delete',steps:[{key:'master',identity:'customer-id',status:'DONE'}]}}}),...patch });
+test('an acknowledged delete can finalize after synchronization without dispatching a new operation',()=>{
+ assert.equal(policy.canFinalizeAcknowledgedDeletion?.(acknowledgedDelete(),installation)??false,true);
+ assert.equal(policy.canFinalizeAcknowledgedDeletion?.(acknowledgedDelete({accountingCommitted:true}),installation)??false,true);
+});
+test('read-triggered deletion finalization never accepts incomplete, ambiguous or foreign progress',()=>{
+ const bad=[{type:'RESET'},{status:'SUCCESS'},{reservedGB:1},{usageSnapshotGB:null},{usageSnapshotGB:-1},{completedPanels:'[]'},{completedPanels:'["panel","unknown"]'},{targetPanels:'[]'},{failedPanels:'["panel:UNREACHABLE"]'},{metadata:'{}'},...['STARTED','PENDING'].map(status=>({metadata:JSON.stringify({explicitDestructive:true,operationInstallation:installation,usageByPanel:{panel:3},nodeSync:{panel:{version:1,email:'customer_email',op:'delete',steps:[{key:'master',identity:'customer-id',status}]}}})}))];
+ for(const patch of bad)assert.equal(policy.canFinalizeAcknowledgedDeletion?.(acknowledgedDelete(patch),installation)??false,false,JSON.stringify(patch));
+ assert.equal(policy.canFinalizeAcknowledgedDeletion?.(acknowledgedDelete(),null)??false,false);
+ assert.equal(policy.canFinalizeAcknowledgedDeletion?.(acknowledgedDelete(),'other-installation')??false,false);
+});
+
 const source = process.argv.includes('--baseline')
   ? execFileSync('git', ['show', 'HEAD:src/lib/accounting-ops.ts'], { encoding: 'utf8' })
   : fs.readFileSync(new URL('../src/lib/accounting-ops.ts', import.meta.url), 'utf8');
@@ -73,4 +85,17 @@ for (const type of ['RESET', 'DELETE']) for (const changed of ['CANCELLED', 'SUC
     await exports.continuePendingDestructiveOperations('owner');
     assert.equal(lockCalls, 1, 'the observation must reach the lock gap');assert.equal(nativeCalls, 0);assert.equal(writes, 0);
   });
+}
+
+for (const changed of ['CANCELLED','SUCCESS','identity','owner','installation','progress']) {
+ test(`acknowledged deletion confirmation rechecks ${changed} after acquiring its lock`,async()=>{
+  const row=acknowledgedDelete();let writes=0,nativeCalls=0,lockCalls=0;
+  const db={operationJournal:{findMany:async()=>[structuredClone(row)],findUnique:async()=>row,create:async()=>{writes++;throw Error('Unexpected journal creation')},update:async()=>{writes++;throw Error('Unexpected journal update')}},reseller:{findUnique:async()=>({id:'owner',active:true})},resellerUser:{findUnique:async()=>({id:'customer',email:'customer_email',resellerId:'owner',panelId:'panel',inboundIds:'[{"panelId":"panel","inboundId":1}]'})},panelConfig:{findMany:async()=>[{id:'panel'}]}};
+  const exports={};vm.runInNewContext(compiled,{exports,require(name){
+   if(name==='./db'||name==='@/lib/db')return{db};if(name==='./pending-reset')return policy;if(name==='./operation-installation')return{operationInstallation:()=>installation};if(name==='./queued-update')return{updateMetadata:v=>JSON.parse(v||'{}')};
+   if(name==='./reseller-helpers')return{parseInboundRefs:v=>JSON.parse(v),withResellerLock:async(_id,fn)=>{lockCalls++;if(changed==='identity')row.userId='replacement';else if(changed==='owner')row.resellerId='other';else if(changed==='installation')row.metadata=JSON.stringify({...JSON.parse(row.metadata),operationInstallation:'other'});else if(changed==='progress')row.completedPanels='[]';else row.status=changed;return fn()}};
+   if(name==='./panel-manager')return{getPrimaryPanel:async()=>({id:'panel'}),getAllPanelInboundsFresh:async()=>{nativeCalls++;throw Error('Unexpected native action')}};return{};
+  }},{filename:'acknowledged-accounting.cjs'});
+  await exports.confirmAcknowledgedDeletions?.('owner');assert.equal(lockCalls,1);assert.equal(nativeCalls,0);assert.equal(writes,0);
+ });
 }

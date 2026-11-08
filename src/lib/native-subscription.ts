@@ -49,8 +49,35 @@ export async function readNativeSubscription(panel: { subBase: string | null; su
 
 /** Match a canonical URI to an authorized, available inbound without changing
  * the URI. A unique native name also covers external address/port overrides. */
-type LinkInbound = { protocol: string; port: number; remark?: string; tag: string };
-export function nativeLinksForInbounds(links: NativeLink[], inbounds: LinkInbound[], allInbounds: LinkInbound[] = inbounds): NativeLink[] {
+type LinkClient = { email: string; subId?: string; id?: string; password?: string };
+type LinkInbound = { protocol: string; port: number; remark?: string; tag: string; clients?: LinkClient[] };
+type LinkCustomer = { email: string; subId: string };
+export function nativeLinksForInbounds(links: NativeLink[], inbounds: LinkInbound[], allInbounds: LinkInbound[] = inbounds, customer?: LinkCustomer): NativeLink[] {
+  if (customer) {
+    if (!customer.email || !customer.subId) return [];
+    const owns = (c: LinkClient) => c.email === customer.email && c.subId === customer.subId;
+    // A shared subscription key cannot prove that all returned credentials are
+    // this customer's. Fail closed instead of hiding the conflicting member.
+    if (allInbounds.some(i => i.clients?.some(c => c.subId === customer.subId && c.email !== customer.email))) return [];
+    const memberships = allInbounds.filter(i => i.clients?.some(owns));
+    const allowedMemberships = inbounds.filter(i => i.clients?.some(owns));
+    return links.filter(link => {
+      if (!['vless', 'vmess', 'trojan'].includes(link.protocol)) {
+        // Keep existing conservative matching for other credential formats.
+        return nativeLinksForInbounds([link], allowedMemberships, allInbounds).length > 0;
+      }
+      let credential: unknown;
+      try {
+        credential = link.protocol === 'vmess'
+          ? JSON.parse(Buffer.from(link.uri.slice(8), 'base64').toString('utf8')).id
+          : decodeURIComponent(new URL(link.uri).username);
+      } catch { return false; }
+      if (typeof credential !== 'string' || !credential || !allowedMemberships.some(i => i.protocol === link.protocol && i.clients?.some(c => owns(c) && (link.protocol === 'trojan' ? c.password : c.id) === credential))) return false;
+      // Include denied/unavailable memberships of this same customer so a
+      // duplicate name or port still cannot bypass the original every() rule.
+      return nativeLinksForInbounds([link], allowedMemberships, memberships).length > 0;
+    });
+  }
   return links.filter(link => {
     const named = allInbounds.filter(i => link.remark && [i.remark, i.tag].includes(link.remark));
     const matches = named.length ? named : allInbounds.filter(i => i.protocol === link.protocol && i.port === link.port);

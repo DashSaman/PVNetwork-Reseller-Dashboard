@@ -23,10 +23,10 @@ export function AdminUsersTab() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState("");
-  const tools = useCustomerMetadata('admin', users);
+  const reload = useRef<() => void>(() => {});
+  const tools = useCustomerMetadata('admin', users, () => reload.current());
   const [labelFilter, setLabelFilter] = useState('');
   const [page, setPage] = useState(0);
-  const reload = useRef<() => void>(() => {});
   useEffect(() => {
     let disposed = false, running = false;
     async function load(live: boolean) {

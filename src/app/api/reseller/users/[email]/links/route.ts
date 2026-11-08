@@ -32,7 +32,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       const panel = await getPanelById(bundle.panelId);
       if (!panel) throw new Error('Missing native panel');
       const canonical = await readNativeSubscription(panel, tracked.subId || '');
-      for (const link of nativeLinksForInbounds(canonical, eligible, bundle.inbounds)) {
+      for (const link of nativeLinksForInbounds(canonical, eligible, bundle.inbounds, { email, subId: tracked.subId || '' })) {
         const label = publicLocationLabel(link.remark, bundle.panelName);
         links.push({ ...link, remark: label, tag: label, panelName: PUBLIC_SERVICE_NAME });
       }

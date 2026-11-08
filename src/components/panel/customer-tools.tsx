@@ -8,20 +8,23 @@ import { Tags, Bell } from 'lucide-react';
 import { api, faDate, faNum } from './shared';
 import { toast } from '@/hooks/use-toast';
 
-type Metadata = { email: string; labels: string[]; lastOnline: number | null; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null; pendingOperationId?: string | null; canCancelReset?: boolean; canCancelOperation?: boolean };
+type Metadata = { email: string; labels: string[]; lastOnline: number | null; deleted?: boolean; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null; pendingOperationId?: string | null; canCancelReset?: boolean; canCancelOperation?: boolean };
 type Customer = { email: string; name?: string | null; usedGB?: number | null };
 type Batch = { emails: string[]; enable: boolean; requestId: string };
 type ItemResult = { email: string; ok: boolean; error?: string };
-export function useCustomerMetadata(scope: 'admin' | 'reseller', users: Customer[]) {
+export function useCustomerMetadata(scope: 'admin' | 'reseller', users: Customer[], onDeleted?: () => void) {
   const [data, setData] = useState<Map<string, Metadata>>(new Map());
   const [error, setError] = useState('');
+  const deletedCallback = useRef(onDeleted);
+  useEffect(() => { deletedCallback.current = onDeleted; }, [onDeleted]);
+  const pendingDelete = [...data.values()].some(m => m.pendingOperation === 'DELETE');
   const signature = users.map(u => u.email).sort().join('|');
   const reload = useCallback(async () => {
     const r = await api<{ users: Metadata[] }>(scope === 'admin' ? '/api/admin/customer-observations' : '/api/reseller/customer-tools?live=1', { signal: AbortSignal.timeout(20000) });
-    if (r.ok && r.data) { setData(new Map(r.data.users.map(u => [u.email, u]))); setError(''); }
+    if (r.ok && r.data) { setData(new Map(r.data.users.map(u => [u.email, u]))); setError('');if (r.data.users.some(u => u.deleted)) deletedCallback.current?.(); }
     else setError('اطلاعات گروه‌ها و آخرین اتصال فعلاً دریافت نشد.');
   }, [scope]);
-  useEffect(() => { let alive = true; const run = () => { if (alive && document.visibilityState === 'visible') void reload(); };run();const t = setInterval(run, 60000);return () => { alive = false;clearInterval(t); }; }, [reload, signature]);
+  useEffect(() => { let alive = true; const run = () => { if (alive && document.visibilityState === 'visible') void reload(); };run();const t = setInterval(run, pendingDelete ? 5000 : 60000);return () => { alive = false;clearInterval(t); }; }, [reload, signature, pendingDelete]);
   return { data, reload, error };
 }
 

@@ -19,6 +19,57 @@ test('shared ports cannot expose a hidden or unavailable inbound',()=>{
  assert.equal(nativeLinksForInbounds(parseNativeSubscription(uri),[available],[available,hidden]).length,0);
  assert.equal(nativeLinksForInbounds(parseNativeSubscription(uri.replace(/#.*$/,'')),[available],[available,hidden]).length,0);
 });
+
+const customer={email:'owned-user',subId:'owned-subscription'};
+const ownClient={...customer,id:'11111111-1111-4111-8111-111111111111'};
+const customerInbound=(extra={})=>({tag:'owned-inbound',remark:'فنلاند',protocol:'vless',port:443,clients:[ownClient],...extra});
+
+test('another customer with the same inbound name cannot hide an authorized native URI',()=>{
+ const allowed=customerInbound(),unrelated=customerInbound({tag:'unrelated-inbound',clients:[{email:'other-user',subId:'other-subscription',id:'other-credential'}]});
+ const actual=nativeLinksForInbounds(parseNativeSubscription(uri),[allowed],[allowed,unrelated],customer);
+ assert.deepEqual(actual.map(x=>x.uri),[uri]);
+});
+
+test('customer-scoped matching still rejects denied same-customer names and unnamed shared ports',()=>{
+ const allowed=customerInbound(),hidden=customerInbound({tag:'denied-inbound'});
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(uri),[allowed],[allowed,hidden],customer).length,0);
+ const onSamePort={...allowed,port:8443},hiddenSamePort={...hidden,port:8443};
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(uri.replace(/#.*$/,'')),[onSamePort],[onSamePort,hiddenSamePort],customer).length,0);
+});
+
+test('customer matching requires verified email and subscription membership',()=>{
+ const absent=customerInbound({clients:[]});
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(uri),[absent],[absent],customer).length,0);
+ const wrongSub=customerInbound({clients:[{...ownClient,subId:'different-subscription'}]});
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(uri),[wrongSub],[wrongSub],customer).length,0);
+});
+
+test('a matching native name cannot authorize a different VLESS credential',()=>{
+ const allowed=customerInbound(),foreign=uri.replace(ownClient.id,'22222222-2222-4222-8222-222222222222');
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(foreign),[allowed],[allowed],customer).length,0);
+});
+
+test('another native email sharing the subscription identifier is rejected',()=>{
+ const allowed=customerInbound(),foreign=customerInbound({remark:'different-name',port:4433,clients:[{email:'other-user',subId:customer.subId,id:'other-credential'}]});
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(uri),[allowed],[allowed,foreign],customer).length,0);
+});
+
+test('native VMess and Trojan customer credentials are checked without rewriting their URI',()=>{
+ const vm='vmess://'+Buffer.from(JSON.stringify({add:'vpn.example',port:443,id:ownClient.id,ps:'فنلاند'})).toString('base64');
+ const trojan='trojan://kept%3Asecret@vpn.example:443#'+encodeURIComponent('فنلاند');
+ const v=customerInbound({protocol:'vmess'}),t=customerInbound({protocol:'trojan',clients:[{...customer,password:'kept:secret'}]});
+ assert.deepEqual(nativeLinksForInbounds(parseNativeSubscription(vm),[v],[v],customer).map(x=>x.uri),[vm]);
+ assert.deepEqual(nativeLinksForInbounds(parseNativeSubscription(trojan),[t],[t],customer).map(x=>x.uri),[trojan]);
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(vm.replace(Buffer.from(JSON.stringify({add:'vpn.example',port:443,id:ownClient.id,ps:'فنلاند'})).toString('base64'),Buffer.from(JSON.stringify({add:'vpn.example',port:443,id:'foreign-id',ps:'فنلاند'})).toString('base64'))),[v],[v],customer).length,0);
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(trojan.replace('kept%3Asecret','foreign-secret')),[t],[t],customer).length,0);
+});
+
+test('unsupported credential formats keep the original global ambiguity restrictions',()=>{
+ const ss='ss://'+Buffer.from('2022-blake3-aes-128-gcm:kept-password').toString('base64url')+'@vpn.example:8388#'+encodeURIComponent('فنلاند');
+ const allowed=customerInbound({protocol:'shadowsocks',port:8388,clients:[{...customer,password:'kept-password'}]}),other=customerInbound({protocol:'shadowsocks',port:8388,clients:[{email:'other-user',subId:'other-subscription',password:'other-password'}]});
+ assert.equal(nativeLinksForInbounds(parseNativeSubscription(ss),[allowed],[allowed,other],customer).length,0);
+ assert.deepEqual(nativeLinksForInbounds(parseNativeSubscription(ss),[allowed],[allowed],customer).map(x=>x.uri),[ss]);
+});
 test('empty, HTML, mixed and malformed subscriptions never produce fabricated working configurations',()=>{
  for(const body of ['', '<html>login</html>',uri+'\nnot-a-config','vless://x@host:99999'])assert.throws(()=>parseNativeSubscription(body));
 });

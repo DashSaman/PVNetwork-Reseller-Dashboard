@@ -1,7 +1,7 @@
 import { db } from './db';
 import { normalizedLabels, onlineTimestamp, type UsageHistory } from './customer-model';
 import { getResellerWithAccess, withResellerLock, parseInboundRefs, validateInboundSelection } from './reseller-helpers';
-import { getRequiredUserPanelIds, confirmQueuedUserUpdates } from './accounting-ops';
+import { getRequiredUserPanelIds, confirmQueuedUserUpdates, confirmAcknowledgedDeletions } from './accounting-ops';
 import { isSavedQueuedUpdate } from './queued-update';
 import type { ResellerUser } from '@prisma/client';
 import { confirmQueuedCreations } from './user-create';
@@ -25,7 +25,8 @@ export async function ownedCustomers(resellerId: string, input: unknown) {
 }
 
 export async function customerMetadata(users: ResellerUser[]) {
-  await Promise.all([...new Set(users.map(u => u.resellerId))].map(async id => { await confirmQueuedUserUpdates(id, false, 4000);await confirmQueuedCreations(id, { budgetMs: 4000 }); }));
+  await Promise.all([...new Set(users.map(u => u.resellerId))].map(async id => { await confirmAcknowledgedDeletions(id);await confirmQueuedUserUpdates(id, false, 4000);await confirmQueuedCreations(id, { budgetMs: 4000 }); }));
+  const present = new Set((await db.resellerUser.findMany({ where: { id: { in: users.map(u => u.id) } }, select: { id: true } })).map(u => u.id));
   const entries = await db.setting.findMany({ where: { key: { in: users.map(u => customerMetaKey(u.id)) } } });
   const values = new Map(entries.map(s => [s.key, s.value]));
   const updates = await db.operationJournal.findMany({ where: { userId: { in: users.map(u => u.id) }, type: { in: ['UPDATE', 'CREATE', 'DELETE', 'RESET'] }, status: { in: ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'] } }, orderBy: { createdAt: 'desc' } });
@@ -37,7 +38,7 @@ export async function customerMetadata(users: ResellerUser[]) {
     const pending = parseSetting<{ newTrafficGB?: number; kind?: string; bulkJobId?: string; localCommitted?: boolean } | null>(operation?.metadata, null);
     const pendingUpdate = pending && !pending.kind && !pending.bulkJobId && Number.isSafeInteger(pending.newTrafficGB) && pending.newTrafficGB! >= 0 ? { trafficGB: pending.newTrafficGB!, localCommitted: !!operation && isSavedQueuedUpdate(u, operation) } : null;
     const destructive = updates.find(j => j.userId === u.id && j.resellerId === u.resellerId && j.email === u.email && ['DELETE', 'RESET'].includes(j.type) && parseSetting<{ explicitDestructive?: boolean }>(j.metadata, {}).explicitDestructive === true);
-    return { email: u.email, labels, pendingUpdate, pendingCreate: updates.some(j => j.userId === u.id && j.type === 'CREATE' && j.resellerId === u.resellerId && j.email === u.email), pendingOperation: destructive?.type || null, pendingOperationId: destructive?.id || null, canCancelReset: !!destructive && canCancelUnstartedReset(destructive, operationInstallation()), canCancelOperation: !!destructive && canCancelUnstartedOperation(destructive, operationInstallation()) };
+    return { email: u.email, labels, deleted: !present.has(u.id), pendingUpdate, pendingCreate: updates.some(j => j.userId === u.id && j.type === 'CREATE' && j.resellerId === u.resellerId && j.email === u.email), pendingOperation: destructive?.type || null, pendingOperationId: destructive?.id || null, canCancelReset: !!destructive && canCancelUnstartedReset(destructive, operationInstallation()), canCancelOperation: !!destructive && canCancelUnstartedOperation(destructive, operationInstallation()) };
   });
 }
 

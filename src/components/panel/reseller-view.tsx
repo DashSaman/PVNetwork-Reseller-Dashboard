@@ -769,7 +769,7 @@ function UsersTab({
   const [busy, setBusy] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
-  const tools = useCustomerMetadata('reseller', users);
+  const tools = useCustomerMetadata('reseller', users, reload);
   const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
   const [labelFilter, setLabelFilter] = useState('');
   const [activityFilter, setActivityFilter] = useState('');
