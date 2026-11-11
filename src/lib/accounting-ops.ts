@@ -329,9 +329,9 @@ async function requiredTargetsReady(tracked: TrackedUser): Promise<boolean> {
   return true;
 }
 
-/** A short native config push must not strand an explicit DELETE until the next
+/** A short native config push must not strand an explicit operation until the next
  * observer tick. Read-triggered completion still performs one read only. */
-async function deletionTargetsReady(tracked: TrackedUser, completionOnly: boolean): Promise<boolean> {
+async function destructiveTargetsReady(tracked: TrackedUser, completionOnly: boolean): Promise<boolean> {
   const deadline = Date.now() + (completionOnly ? 0 : 8000);
   do {
     if (await requiredTargetsReady(tracked)) return true;
@@ -446,7 +446,7 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
     }
 
     const targetPanels = parseArr(journal.targetPanels); // تغییرناپذیر
-    if (!await deletionTargetsReady(tracked, completionOnly)) return waitingForTargets();
+    if (!await destructiveTargetsReady(tracked, completionOnly)) return waitingForTargets();
     await prepareUsageLedger(journal.id, snapshot.panels, email);
     const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "delete", email, completionOnly);
 
@@ -454,7 +454,7 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
       return { ok: false, status: 502, partial: true, msg: `حذف ناقص بود — ${failed.length} پنل انجام نشد (${failed.map((f) => f.result).join(", ")}). مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
 
-    if (!await deletionTargetsReady(tracked, completionOnly)) return waitingForTargets();
+    if (!await destructiveTargetsReady(tracked, completionOnly)) return waitingForTargets();
 
     // Native health and a vanished master are not proof that its remote copies
     // vanished. Recheck every configured peer without writes before any refund.
@@ -470,7 +470,7 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
       // guard every write. Never dispatch this reconciliation from a GET.
       const retry = await executeAcrossPanels(journal.id, targetPanels, completed, "delete", email);
       if (retry.failed.length) return { ok: false, status: 502, partial: true, msg: "تأیید نهایی حذف کامل نشد؛ سهمیه و مصرف ثبت‌شده محفوظ است" };
-      if (!await deletionTargetsReady(tracked, false)) return waitingForTargets();
+      if (!await destructiveTargetsReady(tracked, false)) return waitingForTargets();
       absent = await readAbsence();
     }
     if (!absent.every(Boolean)) return waitingForTargets();
@@ -536,7 +536,7 @@ export async function resetUserByJournal(resellerId: string, email: string, expe
     }
 
     const targetPanels = parseArr(journal.targetPanels);
-    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
+    if (!await destructiveTargetsReady(tracked, false)) return waitingForTargets();
     await prepareUsageLedger(journal.id, snapshot.panels, email);
     const { failed, completed } = await executeAcrossPanels(journal.id, targetPanels, parseArr(journal.completedPanels), "reset", email);
 
@@ -544,7 +544,7 @@ export async function resetUserByJournal(resellerId: string, email: string, expe
       return { ok: false, status: 502, partial: true, msg: `ریست ناقص بود — ${failed.length} پنل انجام نشد. مصرف ثبت‌شده حفظ شد؛ پس از رفع مشکل دوباره تلاش کنید.` };
     }
 
-    if (!await requiredTargetsReady(tracked)) return waitingForTargets();
+    if (!await destructiveTargetsReady(tracked, false)) return waitingForTargets();
 
     usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
     await commitJournalAccounting(journal.id, resellerId, usageGB);

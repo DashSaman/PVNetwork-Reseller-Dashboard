@@ -260,6 +260,11 @@ function parseInbound(raw: RawInbound): PanelInbound {
   };
 }
 
+// A full controller list contains every client's settings/statistics and can
+// take several seconds even while the small runtime endpoints are healthy.
+// Keep this bounded and independent of mutation timeouts and display caches.
+export const INBOUND_CATALOG_TIMEOUT_MS = 12000;
+
 /** دریافت لیست کامل اینباندها به همراه آمار کلاینت‌ها */
 export async function getInbounds(auth: PanelAuth, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PanelApiResult<PanelInbound[]>> {
   // Large panel snapshots can finish after 20s; write requests keep their own
@@ -447,8 +452,20 @@ export async function getVerifiedClientUsage(auth: PanelAuth, email: string, exp
 // Shared only within one confirmation batch; stale health still fails closed.
 export type PanelNodeSyncSnapshot = { inbounds: Pick<PanelInbound, 'id' | 'nodeId'>[] | null; health: InboundRuntimeHealth };
 export async function getPanelNodeSyncSnapshot(auth: PanelAuth, signal?: AbortSignal): Promise<PanelNodeSyncSnapshot> {
-  const [inbounds, health] = await Promise.all([getInbounds(auth, { timeoutMs: 4000, signal }), getInboundRuntimeHealth(auth, signal)]);
-  return { inbounds: inbounds.ok && inbounds.data ? inbounds.data.map(({ id, nodeId }) => ({ id, nodeId })) : null, health };
+  // Readiness needs identities of inbounds and their hosting nodes, not a full
+  // copy of every customer's traffic. Older panels retain a fresh full-list
+  // fallback; neither path accepts cached or unknown runtime state.
+  const options = await panelRequest<RawInbound[]>(auth, '/panel/api/inbounds/options', { timeoutMs: 4000, signal });
+  let inbounds: PanelNodeSyncSnapshot['inbounds'];
+  if (options.ok && Array.isArray(options.data) && options.data.every(i => i && Number.isSafeInteger(i.id) && i.id > 0)) {
+    inbounds = options.data.map(i => ({ id: i.id, nodeId: parseInbound(i).nodeId }));
+  } else {
+    const full = await getInbounds(auth, { timeoutMs: INBOUND_CATALOG_TIMEOUT_MS, signal });
+    inbounds = full.ok && full.data ? full.data.map(({ id, nodeId }) => ({ id, nodeId })) : null;
+  }
+  // Obtain health after a potentially slow fallback so its freshness window
+  // has not expired while unrelated customer payloads were downloading.
+  return { inbounds, health: await getInboundRuntimeHealth(auth, signal) };
 }
 export async function arePanelNodesSynchronized(auth: PanelAuth, allowEmpty = false, inboundIds?: number[], snapshot?: PanelNodeSyncSnapshot): Promise<boolean> {
   if (inboundIds) {

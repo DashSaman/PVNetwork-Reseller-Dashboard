@@ -1,5 +1,5 @@
 import { getAllPanels, getPanelConnection, type AllPanelsResult, type PanelBundle } from './panel-manager';
-import { getInboundRuntimeHealth, getInbounds } from './panel';
+import { getInboundRuntimeHealth, getInbounds, INBOUND_CATALOG_TIMEOUT_MS } from './panel';
 import { inboundAvailable } from './inbound-availability';
 import type { InboundRef } from './reseller-helpers';
 
@@ -13,12 +13,15 @@ async function readCatalog(): Promise<Catalog> {
   const results = await Promise.all(configs.map(async p => {
     const connection = await getPanelConnection(p.id);
     if (!connection.ok) return { panelId: p.id, failed: true as const };
-    const [snapshot, health] = await Promise.all([getInbounds(connection.conn, { timeoutMs: 4000 }), getInboundRuntimeHealth(connection.conn)]);
+    const snapshot = await getInbounds(connection.conn, { timeoutMs: INBOUND_CATALOG_TIMEOUT_MS });
     if (!snapshot.ok || !snapshot.data) return { panelId: p.id, failed: true as const };
-    return { panelId: p.id, panelName: p.name, inbounds: snapshot.data, health, failed: false as const };
+    return { panelId: p.id, panelName: p.name, inbounds: snapshot.data, auth: connection.conn, failed: false as const };
   }));
+  // Refresh every successful panel after all large payloads finish. A slower
+  // independent panel must not age a healthy panel's evidence out of the batch.
+  const observed = await Promise.all(results.map(async r => r.failed ? r : { ...r, health: await getInboundRuntimeHealth(r.auth) }));
   const panels: PanelBundle[] = [], available = new Set<string>(), failedPanelIds: string[] = [];
-  for (const r of results) {
+  for (const r of observed) {
     if (r.failed) { failedPanelIds.push(r.panelId);continue; }
     panels.push({ panelId: r.panelId, panelName: r.panelName, inbounds: r.inbounds });
     for (const inbound of r.inbounds) if (inboundAvailable(inbound, r.health)) available.add(key(r.panelId, inbound.id));
@@ -28,7 +31,7 @@ async function readCatalog(): Promise<Catalog> {
 
 const flight: { current?: { started: number; promise: Promise<Catalog> } } = ((globalThis as { __pvnetInboundCatalog?: object }).__pvnetInboundCatalog ??= {});
 export async function getSelectableInboundCatalog(): Promise<Catalog> {
-  if (flight.current && Date.now() - flight.current.started < 5000) return flight.current.promise;
+  if (flight.current) return flight.current.promise;
   const promise = readCatalog();flight.current = { started: Date.now(), promise };
   try { return await promise; } finally { if (flight.current?.promise === promise) flight.current = undefined; }
 }
