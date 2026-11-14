@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
 import { hashPassword } from "@/lib/crypto";
 import { getAllPanelInbounds, getPrimaryPanel } from "@/lib/panel-manager";
-import { scheduleInboundRevocations, runInboundRevocationWorker } from '@/lib/inbound-revocation';
+import { scheduleInboundRevocations, runInboundRevocationWorker, markInboundGrantChange } from '@/lib/inbound-revocation';
 import { logActivity } from "@/lib/logger";
 import { refKey, withResellerLock, type InboundRef } from "@/lib/reseller-helpers";
 import { handoverToken, isAdminManagedReseller } from "@/lib/reseller-ownership";
@@ -147,6 +147,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
         });
       }
       await tx.reseller.update({ where: { id }, data });
+      await markInboundGrantChange(tx, id);
       scheduled = await scheduleInboundRevocations(tx, id, primary, panelResult.panels);
       });
       after(async () => { await runInboundRevocationWorker(id); });

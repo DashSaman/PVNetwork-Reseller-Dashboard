@@ -11,6 +11,7 @@ const {PrismaClient}=await import('@prisma/client');const {encryptSecret,hashPas
 const GB=1024**3,clients=new Map(),writes=[],mode={};let db,server,app,checks=0;const failures=[];
 function check(name,fn){try{fn();checks++;console.log('PASS',name)}catch(e){failures.push(name+': '+e.message);console.error('FAIL',name,e.message)}}
 async function child(args){await new Promise((resolve,reject)=>{const p=spawn(process.execPath,args,{cwd:root,env:process.env,stdio:'inherit',windowsHide:true});p.on('error',reject);p.on('exit',code=>code===0?resolve():reject(Error('child '+code)))})}
+async function stopApp(){const current=app;if(!current)return;app=null;if(current.exitCode!==null)return;const exited=new Promise(resolve=>current.once('exit',resolve));if(process.platform==='win32')await new Promise(resolve=>{const p=spawn('taskkill.exe',['/PID',String(current.pid),'/T','/F'],{windowsHide:true});p.on('exit',resolve)});else current.kill('SIGTERM');await exited}
 try{
  await child(['node_modules/prisma/build/index.js','db','push','--skip-generate']);db=new PrismaClient();
  server=http.createServer(async(req,res)=>{let raw='';for await(const b of req)raw+=b;const body=JSON.parse(raw||'{}'),second=req.url.startsWith('/b/'),prefix=second?'b:':'',url=second?req.url.slice(2):req.url,email=decodeURIComponent(url.split('/').at(-1));let success=true,msg='',obj;const c=clients.get(prefix+email),visible=[...clients.entries()].filter(([key])=>second?key.startsWith('b:'):!key.startsWith('b:')).map(([,c])=>c);
@@ -35,8 +36,8 @@ try{
  async function seed(who,email,ids,used=3){const c={id:'uuid-'+email,email,subId:'sub-'+email,totalGB:10*GB,expiryTime:Date.now()+30*86400000,enable:true,limitIp:2,used:used*GB,ids:new Set(ids)};clients.set(email,c);await db.resellerUser.create({data:{resellerId:who.id,email,subId:c.subId,trafficGB:10,panelId:panel.id,inboundIds:JSON.stringify(ids.map(inboundId=>({panelId:panel.id,inboundId})))}});return c}
  const customer=await seed(owner,'original',[1,2]),other=await seed(foreign,'other',[1]),originalId=customer.id,originalExpiry=customer.expiryTime,originalForeign=JSON.stringify({...other,ids:[...other.ids]});
  const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));const base='http://127.0.0.1:'+port;
- const log=createWriteStream(path.join(dir,'next.log'));app=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','--webpack','--hostname','127.0.0.1','--port',String(port)],{cwd:root,env:{...process.env,NEXT_TELEMETRY_DISABLED:'1'},windowsHide:true});app.stdout.pipe(log);app.stderr.pipe(log);
- for(let i=0;i<150;i++){if(app.exitCode!==null)throw Error('Next exited; inspect '+dir);try{if((await fetch(base,{signal:AbortSignal.timeout(3000)})).ok)break}catch{}await new Promise(r=>setTimeout(r,500));if(i===149)throw Error('startup timeout')}
+ async function startApp(){const log=createWriteStream(path.join(dir,'next.log'),{flags:'a'});app=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','--webpack','--hostname','127.0.0.1','--port',String(port)],{cwd:root,env:{...process.env,NEXT_TELEMETRY_DISABLED:'1'},windowsHide:true});app.stdout.pipe(log);app.stderr.pipe(log);
+ for(let i=0;i<150;i++){if(app.exitCode!==null)throw Error('Next exited; inspect '+dir);try{if((await fetch(base,{signal:AbortSignal.timeout(3000)})).ok)break}catch{}await new Promise(r=>setTimeout(r,500));if(i===149)throw Error('startup timeout')}}await startApp();
  async function api(who,route,method='GET',body){const cookie='rp_session='+signAccountSession(who===admin?'ADMIN':'RESELLER',who,'dashboard',Date.now()+3600000);const r=await fetch(base+route,{method,headers:{Cookie:cookie,'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return{status:r.status,data:await r.json().catch(()=>({}))}}
  const grants=ids=>({inbounds:ids.map(inboundId=>({panelId:panel.id,inboundId}))}),pathOwner='/api/admin/resellers/'+owner.id;
  let result=await api(admin,pathOwner,'PUT',grants([2,3]));assert.equal(result.status,200);
@@ -63,8 +64,13 @@ try{
  check('delete after all-location revocation cannot recover the three GB already consumed',()=>{assert.equal(result.status,200);assert.equal(balance.consumedGB,3);assert.equal(poolView.data.permissions.remainingGB,97);assert.equal(poolView.data.permissions.allocatedGB,0)});
  async function raceOwner(name){const r=await db.reseller.create({data:{username:name,password:hashPassword('fixture'),active:true,multiLocation:true,trafficPoolGB:100}});for(const id of [1,2])await db.resellerInbound.create({data:{resellerId:r.id,panelId:panel.id,inboundId:id,inboundTag:'loc-'+id,protocol:'vless',port:4400+id}});return r}
  function holdCatalog(){let started,release;const signal=new Promise(r=>{started=r}),wait=new Promise(r=>{release=r});mode.catalogGate={started,wait};return{signal,release}}
+ async function isolateRace(){for(let i=0;i<100&&await db.setting.count({where:{key:{startsWith:'inboundGrantQueue:'}}});i++)await new Promise(r=>setTimeout(r,50));assert.equal(await db.setting.count({where:{key:{startsWith:'inboundGrantQueue:'}}}),0);await stopApp();await startApp()}
+ // Each race starts without unrelated background requests that could consume
+ // the native read barrier before the intended customer request reaches it.
+ await isolateRace();
  const addRaceOwner=await raceOwner('grant-race-add'),addRace=await seed(addRaceOwner,'race_add',[2]),addGate=holdCatalog();const adding=api(addRaceOwner,'/api/reseller/users/race_add','PUT',grants([1,2]));await addGate.signal;await api(admin,'/api/admin/resellers/'+addRaceOwner.id,'PUT',grants([2]));addGate.release();const addedRace=await adding;
  check('a renewal prepared before grant revocation cannot add a location using stale authorization',()=>{assert.equal(addedRace.status,403);assert.deepEqual([...addRace.ids],[2]);assert.equal(addRace.used,3*GB)});
+ await isolateRace();
  const renewRaceOwner=await raceOwner('grant-race-renew'),renewRace=await seed(renewRaceOwner,'race_renew',[1,2]),renewGate=holdCatalog();const renewing=api(renewRaceOwner,'/api/reseller/users/race_renew','PUT',{expiryDays:60});await renewGate.signal;await api(admin,'/api/admin/resellers/'+renewRaceOwner.id,'PUT',grants([2]));await api(admin,'/api/admin/resellers/'+renewRaceOwner.id+'/reconcile-inbounds','POST',{});renewGate.release();const renewedRace=await renewing,renewedRow=await db.resellerUser.findFirstOrThrow({where:{email:'race_renew'}});
  check('a stale ordinary renewal cannot restore local memberships removed by the administrator',()=>{assert.equal(renewedRace.status,409);assert.deepEqual([...renewRace.ids],[2]);assert.deepEqual(JSON.parse(renewedRow.inboundIds),[{panelId:panel.id,inboundId:2}])});
  const extraOwner=await raceOwner('native-extra'),extra=await seed(extraOwner,'native_extra',[2]);extra.ids.add(1);await api(admin,'/api/admin/resellers/'+extraOwner.id,'PUT',grants([2]));await api(admin,'/api/admin/resellers/'+extraOwner.id+'/reconcile-inbounds','POST',{});
@@ -84,6 +90,27 @@ try{
  await db.operationJournal.update({where:{id:crashed.id},data:{completedPanels:'[]',metadata:JSON.stringify(crashMeta)}});
  mode.failDeleteB=false;result=await api(multiOwner,'/api/reseller/users/bare_multi','DELETE');const completedMulti=await api(multiOwner,'/api/reseller/bootstrap');
  check('a crash after bare native deletion resumes from its durable ledger and charges all eight GB once',()=>{assert.equal(result.status,200);assert.equal(completedMulti.data.permissions.consumedGB,8);assert.equal(completedMulti.data.permissions.remainingGB,92);assert.equal(writes.filter(w=>w.url==='/panel/api/clients/del/bare_multi').length,1)});
+ const blockedOwner=await raceOwner('deferred-grants'),blocked=await seed(blockedOwner,'deferred_grants',[1,2]),blockedUser=await db.resellerUser.findFirstOrThrow({where:{email:blocked.email}}),blocking=await db.operationJournal.create({data:{idempotencyKey:'fixture-blocking-edit',resellerId:blockedOwner.id,userId:blockedUser.id,email:blocked.email,type:'UPDATE',status:'PENDING',reservedGB:0,targetPanels:JSON.stringify([panel.id]),metadata:'{}'}});
+ await api(admin,'/api/admin/resellers/'+blockedOwner.id,'PUT',grants([2]));
+ check('a grant change blocked by an earlier operation remains in a durable owner queue',()=>{assert.ok(blocked.ids.has(1));});
+ const queue=await db.setting.findUnique({where:{key:'inboundGrantQueue:'+blockedOwner.id}});check('the durable queue exists even before a revocation journal can be scheduled',()=>assert.ok(queue));
+ await db.operationJournal.update({where:{id:blocking.id},data:{status:'CANCELLED'}});
+ await stopApp();await startApp();
+ for(let i=0;i<100&&(blocked.ids.has(1)||await db.setting.findUnique({where:{key:'inboundGrantQueue:'+blockedOwner.id}}));i++)await new Promise(r=>setTimeout(r,100));
+ const recovered=await db.resellerUser.findUniqueOrThrow({where:{id:blockedUser.id}});
+ check('server restart automatically resumes the saved grant change without an operator HTTP mutation',()=>{assert.deepEqual([...blocked.ids],[2]);assert.deepEqual(JSON.parse(recovered.inboundIds),[{panelId:panel.id,inboundId:2}]);assert.equal(blocked.used,3*GB);assert.equal(blocked.totalGB,10*GB);assert.equal(recovered.trafficGB,10)});
+ for(let i=0;i<30&&await db.setting.findUnique({where:{key:'inboundGrantQueue:'+blockedOwner.id}});i++)await new Promise(r=>setTimeout(r,100));
+ check('restart recovery preserves the existing connection and subscription identity',()=>{assert.equal(blocked.id,'uuid-deferred_grants');assert.equal(blocked.subId,'sub-deferred_grants')});
+ const finishedQueue=await db.setting.findUnique({where:{key:'inboundGrantQueue:'+blockedOwner.id}});check('no completed grant queue is left waiting for the next observation job',()=>assert.equal(finishedQueue,null));
+ const restoredOwner=await raceOwner('restored-grants'),restored=await seed(restoredOwner,'restored_grants',[1,2]),restoredUser=await db.resellerUser.findFirstOrThrow({where:{email:restored.email}});
+ await db.resellerInbound.deleteMany({where:{resellerId:restoredOwner.id,inboundId:1}});
+ const foreignQueue=JSON.stringify({version:1,installation:'another-installation',revision:'restored-revision'});
+ await db.setting.create({data:{key:'inboundGrantQueue:'+restoredOwner.id,value:foreignQueue}});
+ const foreignJournal=await db.operationJournal.create({data:{idempotencyKey:'foreign-installation-revocation',resellerId:restoredOwner.id,userId:restoredUser.id,email:restored.email,type:'REVOKE',status:'PENDING',targetPanels:JSON.stringify([panel.id]),metadata:JSON.stringify({version:1,kind:'INBOUND_REVOCATION',installation:'another-installation',sourceRefs:restoredUser.inboundIds,sourceMemberships:JSON.parse(restoredUser.inboundIds),removed:[{panelId:panel.id,inboundId:1}],node:{}})}});
+ const writesBeforeRestore=writes.length;await stopApp();await startApp();await new Promise(r=>setTimeout(r,1500));
+ check('startup never executes a membership queue restored from a different installation',()=>{assert.deepEqual([...restored.ids],[1,2]);assert.equal(writes.length,writesBeforeRestore);assert.equal(restored.used,3*GB)});
+ const foreignSaved=await db.operationJournal.findUniqueOrThrow({where:{id:foreignJournal.id}}),foreignSetting=await db.setting.findUniqueOrThrow({where:{key:'inboundGrantQueue:'+restoredOwner.id}});
+ check('foreign restoration leaves its journal and queue guarded instead of reauthorizing them',()=>{assert.equal(foreignSaved.status,'PENDING');assert.equal(foreignSetting.value,foreignQueue)});
  console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;
 }catch(e){console.error(e);console.error('Fixture:',dir);process.exitCode=1}
-finally{if(app){if(process.platform==='win32')await new Promise(resolve=>{const p=spawn('taskkill.exe',['/PID',String(app.pid),'/T','/F'],{windowsHide:true});p.on('exit',resolve)});else app.kill('SIGTERM')}if(server){server.closeAllConnections();server.close()}if(db)await db.$disconnect()}
+finally{await stopApp();if(server){server.closeAllConnections();server.close()}if(db)await db.$disconnect()}

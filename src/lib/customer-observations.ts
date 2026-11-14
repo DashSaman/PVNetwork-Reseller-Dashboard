@@ -18,7 +18,8 @@ export async function loadAlertPreferences(resellerId: string) {
     expiryDays: typeof value.expiryDays === 'number' && Number.isInteger(value.expiryDays) && value.expiryDays >= 0 && value.expiryDays <= 30 ? value.expiryDays : 3 };
 }
 
-/** Read-only native collection. Setting writes only; no customer/inbound mutations. */
+/** Collect observations and continue previously authorized lifecycle/membership
+ * journals through their existing ownership and accounting guards. */
 export async function collectCustomerObservations() {
   // A fresh installation must remain eligible for backup restore. Even a lease
   // Setting would make the empty-target check fail before any customer exists.

@@ -8,8 +8,15 @@ import type { MembershipRevokeProgress } from './node-client-sync';
 import { membershipStateKey, readMembershipState, type MembershipState } from './membership-state';
 import { operationInstallation } from './operation-installation';
 import { isAdminManagedReseller } from './reseller-ownership';
+import { createReconciliationRunner } from './background-reconciliation';
 
 const ACTIVE = ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'];
+const QUEUE = 'inboundGrantQueue:';
+type GrantQueue = { version: 1; installation: string; revision: string };
+export async function markInboundGrantChange(tx: Prisma.TransactionClient, resellerId: string) {
+  const value = JSON.stringify({ version: 1, installation: operationInstallation(true)!, revision: randomUUID() } satisfies GrantQueue);
+  await tx.setting.upsert({ where: { key: QUEUE + resellerId }, create: { key: QUEUE + resellerId, value }, update: { value } });
+}
 async function waitForRevocationSync(auth: PanelAuth, ids: number[]) {
   const deadline = Date.now() + 8000;
   do { if (await arePanelNodesSynchronized(auth, true, ids)) return true;if (Date.now() >= deadline) return false;await new Promise(resolve => setTimeout(resolve, 500)); } while (Date.now() < deadline);
@@ -19,20 +26,24 @@ type RevokeIntent = { version: 1; kind: 'INBOUND_REVOCATION'; installation: stri
 
 /** Called in the same transaction and owner lock that saves grants. No remote
  * work runs in this transaction. Revocation never reserves or refunds quota. */
-export async function scheduleInboundRevocations(tx: Prisma.TransactionClient, resellerId: string, primary: string, observed: PanelBundle[] = []): Promise<number> {
+export async function scheduleInboundRevocations(tx: Prisma.TransactionClient, resellerId: string, primary: string, observed: PanelBundle[] = [], remaining?: { value: number }): Promise<number> {
   const grants = await tx.resellerInbound.findMany({ where: { resellerId } }), allowed = new Set(grants.map(g => refKey({ panelId: g.panelId || primary, inboundId: g.inboundId })));
-  const users = await tx.resellerUser.findMany({ where: { resellerId } });let scheduled = 0;
+  const users = await tx.resellerUser.findMany({ where: { resellerId } });let scheduled = 0, outstanding = 0;
   for (const user of users) {
     const refs = parseInboundRefs(user.inboundIds, user.panelId || primary);
     // Include authenticated native memberships that an old import/repair left
     // outside tracked refs. Match the exact owned subscription, never just name.
     const actual = observed.flatMap(p => p.inbounds.filter(i => i.id > 0 && !!user.subId && i.clients.some(c => c.email === user.email && c.subId === user.subId)).map(i => ({ panelId: p.panelId, inboundId: i.id })));
     const memberships = [...new Map([...refs, ...actual].map(r => [refKey(r), r])).values()], removed = memberships.filter(r => !allowed.has(refKey(r)));
+    if (removed.length) outstanding++;
     if (!removed.length || await tx.operationJournal.findFirst({ where: { resellerId, userId: user.id, type: 'REVOKE', status: { in: ACTIVE } } })) continue;
     if (await tx.operationJournal.count({ where: { resellerId, email: user.email, status: { in: ACTIVE } } })) continue;
     const intent: RevokeIntent = { version: 1, kind: 'INBOUND_REVOCATION', installation: operationInstallation(true)!, sourceRefs: user.inboundIds, sourceMemberships: memberships, removed, node: {} };
     await tx.operationJournal.create({ data: { idempotencyKey: `revoke:${user.id}:${randomUUID()}`, resellerId, userId: user.id, email: user.email, type: 'REVOKE', status: 'PENDING', reservedGB: 0, targetPanels: JSON.stringify([...new Set(removed.map(r => r.panelId))]), metadata: JSON.stringify(intent) } });scheduled++;
   }
+  if (remaining) remaining.value = outstanding;
+  if (outstanding) await tx.setting.upsert({ where: { key: QUEUE + resellerId },
+    create: { key: QUEUE + resellerId, value: JSON.stringify({ version: 1, installation: operationInstallation(true)!, revision: randomUUID() } satisfies GrantQueue) }, update: {} });
   return scheduled;
 }
 
@@ -104,6 +115,7 @@ export async function reconcileInboundRevocations(resellerId: string, options: {
   const primary = (await getPrimaryPanel())?.id || '';
   const schedule = async () => { const observed = await getAllPanelInboundsFresh();return withResellerLock(resellerId, () => db.$transaction(tx => scheduleInboundRevocations(tx, resellerId, primary, observed.panels))); };
   if (options.schedule) await schedule();
+  const queue = await db.setting.findUnique({ where: { key: QUEUE + resellerId } });
   const rows = await db.operationJournal.findMany({ where: { resellerId, type: 'REVOKE', status: { in: ACTIVE } }, orderBy: { createdAt: 'asc' }, take: options.maxUsers ?? 100 });
   const deadline = Date.now() + (options.budgetMs ?? 20000);let completed = 0;
   for (const row of rows) {
@@ -111,21 +123,51 @@ export async function reconcileInboundRevocations(resellerId: string, options: {
     try { if (await runUserRevocation(resellerId, row.id)) completed++; }
     catch { await db.operationJournal.updateMany({ where: { id: row.id, status: { in: ACTIVE } }, data: { status: 'PARTIAL', lastError: 'جداسازی لوکیشن‌ها هنوز قابل تأیید نیست؛ مصرف و سهمیه محفوظ است' } }); }
   }
-  if (options.schedule) await schedule();
-  return { completed, pending: await db.operationJournal.count({ where: { resellerId, type: 'REVOKE', status: { in: ACTIVE } } }) };
+  const remaining = { value: 0 };
+  if (options.schedule) {
+    const observed = await getAllPanelInboundsFresh();
+    await withResellerLock(resellerId, () => db.$transaction(tx => scheduleInboundRevocations(tx, resellerId, primary, observed.panels, remaining)));
+  }
+  let pending = Math.max(remaining.value, await db.operationJournal.count({ where: { resellerId, type: 'REVOKE', status: { in: ACTIVE } } }));
+  if (!pending && queue) {
+    // A newer grant change must not be acknowledged by an older worker.
+    const cleared = (await db.setting.deleteMany({ where: { key: queue.key, value: queue.value } })).count;
+    pending = cleared || !await db.setting.findUnique({ where: { key: queue.key } }) ? 0 : 1;
+  }
+  return { completed, pending };
 }
 
-const workers: Map<string, Promise<void>> = ((globalThis as { __pvnetInboundRevocationWorkers?: Map<string, Promise<void>> }).__pvnetInboundRevocationWorkers ??= new Map());
-/** One bounded worker per owner in the existing app. Keep making progress for
- * large grant changes, but stop on a genuinely unavailable/blocked batch. The
- * existing observation job resumes durable work after a restart or recovery. */
+const runner = ((globalThis as { __pvnetInboundReconciliationRunner?: ReturnType<typeof createReconciliationRunner> }).__pvnetInboundReconciliationRunner ??= createReconciliationRunner({
+  reconcile: resellerId => reconcileInboundRevocations(resellerId, { schedule: true, budgetMs: 60000 }),
+}));
+/** One bounded worker per owner in the existing app. Remaining batches continue
+ * automatically; unavailable targets retry with backoff and unchanged guards. */
 export function runInboundRevocationWorker(resellerId: string): Promise<void> {
-  const existing = workers.get(resellerId);if (existing) return existing;
-  const work = (async () => {
-    for (let pass = 0; pass < 5; pass++) {
-      const result = await reconcileInboundRevocations(resellerId, { schedule: true, budgetMs: 60000 });
-      if (!result.pending || !result.completed) break;
-    }
-  })().finally(() => { if (workers.get(resellerId) === work) workers.delete(resellerId); });
-  workers.set(resellerId, work);return work;
+  return runner.run(resellerId);
+}
+
+/** Restart recovery reads only the dashboard's durable queue. Native work still
+ * goes through the exact owner/installation/identity guards above. Empty installs
+ * acquire no leases/settings and remain eligible for backup restoration. */
+export async function recoverInboundGrantWork() {
+  const installation = operationInstallation();if (!installation) return;
+  const [queued, journals] = await Promise.all([
+    db.setting.findMany({ where: { key: { startsWith: QUEUE } }, select: { key: true, value: true } }),
+    db.operationJournal.findMany({ where: { type: 'REVOKE', status: { in: ACTIVE }, metadata: { contains: JSON.stringify(installation) } }, distinct: ['resellerId'], select: { resellerId: true } }),
+  ]);
+  const owners = new Set(journals.map(j => j.resellerId));
+  for (const item of queued) {
+    try { const value = JSON.parse(item.value) as GrantQueue;if (value.version === 1 && value.installation === installation) owners.add(item.key.slice(QUEUE.length)); } catch { /* Unknown/restored intent never authorizes native work. */ }
+  }
+  for (const owner of owners) void runner.ensure(owner);
+}
+
+export function initializeInboundGrantRecovery() {
+  const global = globalThis as { __pvnetInboundRecoveryStarted?: boolean };
+  if (global.__pvnetInboundRecoveryStarted) return;
+  global.__pvnetInboundRecoveryStarted = true;
+  let scanning = false;
+  const scan = async () => { if (scanning) return;scanning = true;try { await recoverInboundGrantWork(); } catch { /* The next bounded scan retries dashboard DB availability. */ } finally { scanning = false; } };
+  const first = setTimeout(() => { void scan(); }, 1000);first.unref();
+  const timer = setInterval(() => { void scan(); }, 60000);timer.unref();
 }
