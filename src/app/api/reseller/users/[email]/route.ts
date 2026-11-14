@@ -27,6 +27,8 @@ import { randomUuid } from "@/lib/crypto";
 import { deleteUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota } from "@/lib/accounting-ops";
 import { logActivity } from "@/lib/logger";
 import { readBridgeClient } from '@/lib/bridge-client';
+import { retainDetachedAccounting } from '@/lib/retained-accounting';
+import { readMembershipState } from '@/lib/membership-state';
 
 type Ctx = { params: Promise<{ email: string }> };
 
@@ -88,6 +90,8 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
     // ---- اینباندهای زنده همه پنل‌ها ----
     const panelResult = await getAllPanelInboundsFresh();
+    panelResult.panels = await retainDetachedAccounting(panelResult.panels, tracked);
+    const membership = await readMembershipState(tracked);
     if (!panelResult.ok) return NextResponse.json({ error: panelResult.msg || "هیچ پنلی در دسترس نیست" }, { status: 502 });
     const inboundIndex = new Map<string, { protocol: string }>();
     const emailExistsInPanel = new Map<string, boolean>();
@@ -102,8 +106,8 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 
     // مشخصات فعلی کاربر (از اولین پنلی که او را دارد)
     let current: { totalGB: number; expiryTime: number; enable: boolean; subId: string; protocol: string } | null = null;
-    for (const ref of currentRefs) {
-      const bundle = panelResult.panels.find((p) => p.panelId === ref.panelId);
+    for (const panelId of new Set([...currentRefs.map(r => r.panelId), ...(membership?.panels || [])])) {
+      const bundle = panelResult.panels.find((p) => p.panelId === panelId);
       if (!bundle) continue;
       for (const inb of bundle.inbounds) {
         const st = inb.clientStats.find((c) => c.email === email);
@@ -152,7 +156,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       : body.inboundIds
         ? body.inboundIds.map((inboundId) => ({ panelId: primaryPanelId, inboundId }))
         : currentRefs;
-    const selection = await validateInboundSelection(reseller, newRefs);
+    const selection = !newRefs.length && membership ? { ok: true as const } : await validateInboundSelection(reseller, newRefs);
     if (!selection.ok) return NextResponse.json({ error: selection.msg }, { status: 403 });
     const curKeys = new Set(currentRefs.map(refKey));
     for (const ref of newRefs) {
@@ -221,6 +225,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const panelsToUpdate = new Set<string>([
       ...currentRefs.map((r) => r.panelId),
       ...newRefs.map((r) => r.panelId),
+      ...(membership?.panels || []),
     ]);
     for (const panelId of panelsToUpdate) {
       if (!emailExistsInPanel.get(panelId)) continue;
@@ -247,7 +252,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     const updateRes = await updateUserByJournal(
       reseller.id,
       email,
-      { trafficGB, enable: body.enable, snapshotStartedAt },
+      { trafficGB, enable: body.enable, snapshotStartedAt, inboundRefs: newRefs, expectedInboundIds: tracked.inboundIds },
       applyRemote,
       async (tx) => {
         await tx.resellerUser.update({

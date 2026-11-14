@@ -22,6 +22,8 @@ import { createResellerUserCore } from "@/lib/user-create";
 import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
 import { attachBridgeClient, readBridgeClient } from '@/lib/bridge-client';
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
+import { retainDetachedAccounting } from '@/lib/retained-accounting';
+import { readMembershipState } from '@/lib/membership-state';
 import { logActivity } from "@/lib/logger";
 
 /**
@@ -542,12 +544,16 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   const panelResult = await getAllPanelInboundsFresh();
   if (!panelResult.ok) return xui(false, panelResult.msg || "هیچ پنلی در دسترس نیست");
   const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
+  panelResult.panels = await retainDetachedAccounting(panelResult.panels, tracked);
+  const membership = await readMembershipState(tracked);
+  const updatePanels = [...new Set([...refs.map(r => r.panelId), ...(membership?.panels || [])])];
 
   const errors: string[] = [];
   const applyRemote = async (): Promise<{ errors: string[]; pending: boolean }> => {
   let pending = false;
   const donePanels = new Set<string>();
-  for (const ref of refs) {
+  for (const panelId of updatePanels) {
+    const ref = { panelId };
     if (donePanels.has(ref.panelId)) continue;
     donePanels.add(ref.panelId);
     const bundle = panelResult.panels.find((p) => p.panelId === ref.panelId);
@@ -573,7 +579,7 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   const updateRes = await updateUserByJournal(
     reseller.id,
     email,
-    { trafficGB, enable, snapshotStartedAt },
+    { trafficGB, enable, snapshotStartedAt, inboundRefs: refs, expectedInboundIds: tracked.inboundIds },
     applyRemote,
     async (tx) => {
       await tx.resellerUser.update({

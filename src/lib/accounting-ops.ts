@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
-import { withResellerLock, canonicalUserUsage, parseInboundRefs, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
+import { withResellerLock, canonicalUserUsage, parseInboundRefs, validateInboundSelection, type ResellerWithInbounds, type InboundRef } from "./reseller-helpers";
+import { readMembershipState } from './membership-state';
+import { retainDetachedAccounting } from './retained-accounting';
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
 import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, isQueuedClientSaved, readClientCreation, readClientDeletion, type PanelAuth, type PanelNodeSyncSnapshot } from "./panel";
 import { isSavedQueuedCreation, creationMetadata } from './queued-create';
@@ -99,7 +101,10 @@ export async function getRequiredUserPanelIds(tracked: TrackedUser): Promise<{ o
   } catch {
     refs = [];
   }
-  const panelIds = [...new Set(refs.map((r) => r.panelId || primary).filter(Boolean))];
+  let retained: string[] = [];
+  try { retained = (await readMembershipState(tracked))?.panels || []; }
+  catch { return { ok: false, msg: 'اطلاعات حسابداری لوکیشن‌های جداشده نیاز به بررسی مدیر دارد' }; }
+  const panelIds = [...new Set([...refs.map((r) => r.panelId || primary).filter(Boolean), ...retained])];
   if (panelIds.length === 0) {
     return { ok: false, msg: "ارجاع اینباندهای این کاربر خالی یا نامعتبر است — ابتدا باید توسط مدیر تعمیر شود" };
   }
@@ -136,7 +141,7 @@ async function findResumableJournal(
 export async function hasActiveOperation(
   resellerId: string,
   email: string,
-  types: ("DELETE" | "RESET" | "UPDATE" | "CREATE")[] = ["DELETE", "RESET", "UPDATE", "CREATE"]
+  types: ("DELETE" | "RESET" | "UPDATE" | "CREATE" | "REVOKE")[] = ["DELETE", "RESET", "UPDATE", "CREATE", "REVOKE"]
 ): Promise<boolean> {
   const n = await db.operationJournal.count({
     where: { resellerId, email, type: { in: types }, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } },
@@ -279,6 +284,7 @@ async function assertNoConflictingOperation(resellerId: string, email: string, s
   });
   const conflict = rows.find((r) => r.type !== self && !superseded.includes(r.id));
   if (conflict) {
+    if (conflict.type === 'REVOKE') return { ok: false, status: 409, msg: 'لوکیشن‌های لغوشده در حال جداسازی هستند؛ مصرف و سهمیه محفوظ است و پس از تأیید اتصال‌ها، تمدید باز می‌شود' };
     if (['DELETE', 'RESET'].includes(conflict.type)) {
       const name = conflict.type === 'DELETE' ? 'حذف' : 'ریست';
       return { ok: false, status: 409, msg: canCancelUnstartedOperation(conflict, operationInstallation())
@@ -321,7 +327,7 @@ async function supersedeSavedPredecessors(tx: Prisma.TransactionClient, predeces
 
 async function requiredTargetsReady(tracked: TrackedUser): Promise<boolean> {
   const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
-  if (!refs.length) return false;
+  if (!refs.length) return !!await readMembershipState(tracked);
   for (const id of new Set(refs.map(r => r.panelId))) {
     const connection = await getPanelConnection(id);
     if (!connection.ok || !await arePanelNodesSynchronized(connection.conn, true, refs.filter(r => r.panelId === id).map(r => r.inboundId))) return false;
@@ -401,6 +407,23 @@ async function continuedDestructiveMetadata(journalId: string): Promise<string |
 }
 
 /** حذف کاربر — مسیر مشترک داشبورد و پل */
+async function recordedDeletionAccountingPanels(resellerId: string, tracked: TrackedUser, journalId?: string): Promise<Set<string>> {
+  const result = new Set<string>();
+  if (!journalId) return result;
+  const row = await db.operationJournal.findUnique({ where: { id: journalId } });
+  if (!row || row.resellerId !== resellerId || row.userId !== tracked.id || row.email !== tracked.email || row.type !== 'DELETE' || !isCurrentDestructiveRequest(row, operationInstallation())) return result;
+  const meta = updateMetadata(row.metadata), ledger = meta.usageByPanel as Record<string, number> | undefined, targets = parseArr(row.targetPanels);
+  if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger) || !targets.length || new Set(targets).size !== targets.length || Object.keys(ledger).length !== targets.length
+    || targets.some(id => !Object.hasOwn(ledger, id) || typeof ledger[id] !== 'number' || !Number.isFinite(ledger[id]) || ledger[id] < 0)
+    || row.usageSnapshotGB === null || !Number.isFinite(row.usageSnapshotGB) || Math.abs(targets.reduce((sum, id) => sum + ledger[id], 0) - row.usageSnapshotGB) > 1e-9) return result;
+  // The ledger precedes every native delete. A crash may lose DONE and even
+  // deleteVerified after the record vanished. Do not require the deleted record
+  // to reconstruct already-durable spending. This is NOT absence/completion
+  // proof: executeAcrossPanels and the final full-native read still reconcile
+  // every exact target/identity and prove absence before any refund or debit.
+  return new Set(targets);
+}
+
 export async function deleteUserByJournal(resellerId: string, email: string, expectedJournalId?: string, completionOnly = false): Promise<OpResult> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
@@ -420,12 +443,13 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
     const req = await getRequiredUserPanelIds(tracked);
     if (!req.ok) return { ok: false, status: 409, msg: req.msg };
 
+    let journal = await findResumableJournal(resellerId, email, "DELETE");
+    if (expectedJournalId && journal?.id !== expectedJournalId) return { ok: true, debitedGB: 0 };
     const snapshot = await getAllPanelInboundsFresh();
+    snapshot.panels = await retainDetachedAccounting(snapshot.panels, tracked, await recordedDeletionAccountingPanels(resellerId, tracked, journal?.id));
     const readable = assertRequiredPanelsReadable(snapshot, req.panelIds);
     if (!readable.ok) return { ok: false, status: 502, msg: `حذف انجام نشد: ${readable.msg}` };
 
-    let journal = await findResumableJournal(resellerId, email, "DELETE");
-    if (expectedJournalId && journal?.id !== expectedJournalId) return { ok: true, debitedGB: 0 };
     let usageGB = journal?.usageSnapshotGB ?? null;
     if (usageGB === null) {
       usageGB = canonicalUserUsage(snapshot.panels, email).usedBytes / 1073741824;
@@ -505,6 +529,7 @@ export async function resetUserByJournal(resellerId: string, email: string, expe
     if (!req.ok) return { ok: false, status: 409, msg: req.msg };
 
     const snapshot = await getAllPanelInboundsFresh();
+    snapshot.panels = await retainDetachedAccounting(snapshot.panels, tracked);
     const readable = assertRequiredPanelsReadable(snapshot, req.panelIds);
     if (!readable.ok) return { ok: false, status: 502, msg: `ریست انجام نشد: ${readable.msg}` };
 
@@ -598,7 +623,7 @@ export async function cancelUnstartedOperation(resellerId: string, email: string
 export async function updateUserByJournal(
   resellerId: string,
   email: string,
-  desired: { trafficGB: number; enable?: boolean; note?: string; snapshotStartedAt?: number; intent?: string },
+  desired: { trafficGB: number; enable?: boolean; note?: string; snapshotStartedAt?: number; intent?: string; inboundRefs?: InboundRef[]; expectedInboundIds?: string },
   applyRemote: () => Promise<string[] | { errors: string[]; pending: boolean }>,
   commitLocal: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<void>
 ): Promise<{ ok: true; pending?: boolean } | { ok: false; status: number; msg: string; partial?: boolean }> {
@@ -606,6 +631,11 @@ export async function updateUserByJournal(
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
 
+    if (desired.expectedInboundIds !== undefined && desired.expectedInboundIds !== loaded.tracked.inboundIds) return { ok: false, status: 409, msg: 'لوکیشن‌های حساب هنگام آماده‌سازی تغییر کرده‌اند؛ صفحه را بازخوانی کنید' };
+    if (desired.inboundRefs) {
+      const selection = desired.inboundRefs.length ? await validateInboundSelection(loaded.reseller, desired.inboundRefs) : { ok: !!await readMembershipState(loaded.tracked), msg: 'حداقل یک لوکیشن مجاز انتخاب کنید' };
+      if (!selection.ok) return { ok: false, status: 403, msg: selection.msg || 'لوکیشن انتخابی مجاز نیست' };
+    }
     const conflict = await assertNoConflictingOperation(resellerId, email, 'UPDATE');
     if (conflict) return conflict;
 
@@ -627,7 +657,7 @@ export async function updateUserByJournal(
     // C1: نمایندهٔ محدود هرگز کاربر نامحدود نمی‌سازد
     if (desired.snapshotStartedAt !== undefined) {
       const newer = await db.operationJournal.findFirst({ where: {
-        resellerId, email, type: "UPDATE", status: "SUCCESS", updatedAt: { gte: new Date(desired.snapshotStartedAt) },
+        resellerId, email, type: { in: ['UPDATE', 'REVOKE'] }, status: "SUCCESS", updatedAt: { gte: new Date(desired.snapshotStartedAt) },
       } });
       if (newer) return { ok: false, status: 409, msg: "کاربر هنگام آماده‌سازی درخواست تغییر کرده؛ صفحه را بازخوانی و دوباره ویرایش کنید" };
     }

@@ -10,7 +10,7 @@ import { privateNodeRequest, type NodeTls } from './private-node-http';
 import { nodesSynchronized } from './queued-update';
 import { inboundAvailable } from './inbound-availability';
 import type { InboundRuntimeHealth } from './inbound-availability';
-import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifyClientCreationRecord, verifiedClientUsage, verifyClientDeletion, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
+import { syncNodeClientUpdate, updateMasterClient, mutateWithNodePeers, ensureClientMembership, verifyClientCreationRecord, verifiedClientUsage, verifyClientDeletion, revokeClientMemberships, type MembershipRevokeProgress, type NodePeer, type NodeMutationProgress } from "./node-client-sync";
 
 export type PanelInbound = {
   id: number;
@@ -441,6 +441,14 @@ export async function detachClient(
     method: "POST",
     json: { inboundIds },
   });
+}
+
+export async function revokeClientInbounds(auth: PanelAuth, email: string, subId: string, ids: number[], progress: { load(): Promise<MembershipRevokeProgress | undefined>; save(value: MembershipRevokeProgress): Promise<void> }, verifyOnly = false): Promise<PanelApiResult> {
+  return revokeClientMemberships(auth, email, subId, ids, panelRequest, progress, verifyOnly);
+}
+
+export async function getClientProfile(auth: PanelAuth, email: string) {
+  return panelRequest<{ client: PanelClient & { uuid?: string }; inboundIds: number[]; usedTraffic: number }>(auth, `/panel/api/clients/get/${encodeURIComponent(email)}`);
 }
 
 /** حذف کلاینت از همه اینباندها (رکورد یکتا) */

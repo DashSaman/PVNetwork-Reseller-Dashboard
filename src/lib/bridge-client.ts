@@ -6,6 +6,8 @@ import { canonicalUserUsage, getResellerWithAccess, parseInboundRefs, refKey, st
 import { validateAvailableInboundSelection } from './inbound-catalog';
 import { updateUserByJournal } from './accounting-ops';
 import { onlineTimestamp } from './customer-model';
+import { readMembershipState } from './membership-state';
+import { retainDetachedAccounting } from './retained-accounting';
 
 const unavailable = 'اطلاعات زندهٔ حساب قابل تأیید نیست؛ دوباره تلاش کنید';
 const seenCache = new Map<string, { at: number; value: Promise<Record<string, number>> }>();
@@ -28,8 +30,10 @@ export async function readBridgeClient(reseller: ResellerWithInbounds, email: st
   if (!tracked) return { ok: false as const, error: 'کاربر یافت نشد' };
   const primary = tracked.panelId || (await getPrimaryPanel())?.id || '';
   const refs = parseInboundRefs(tracked.inboundIds, primary);
-  const required = [...new Set(refs.map(r => r.panelId))];
+  const state = await readMembershipState(tracked);
+  const required = [...new Set([...refs.map(r => r.panelId), ...(state?.panels || [])])];
   const snapshot = await (fresh ? getAllPanelInboundsFresh() : getAllPanelInbounds());
+  snapshot.panels = await retainDetachedAccounting(snapshot.panels, tracked);
   if (!required.length || !snapshot.ok || snapshot.pending || snapshot.stale) return { ok: false as const, error: unavailable };
   const bundles = snapshot.panels.filter(p => required.includes(p.panelId));
   if (bundles.length !== required.length) return { ok: false as const, error: unavailable };
@@ -44,7 +48,7 @@ export async function readBridgeClient(reseller: ResellerWithInbounds, email: st
   const client = { id: profile.id || profile.password || '', email, subId: tracked.subId || profile.subId || '',
     password: profile.password || '', flow: profile.flow || '', limitIp: profile.limitIp ?? 0,
     totalGB: profile.totalGB!, expiryTime: profile.expiryTime!, enable: profile.enable };
-  const inboundIds = bundles.find(b => b.panelId === primary)?.inbounds.filter(i => i.clients.some(c => c.email === email)).map(i => i.id) || [];
+  const inboundIds = bundles.find(b => b.panelId === primary)?.inbounds.filter(i => i.id > 0 && i.clients.some(c => c.email === email)).map(i => i.id) || [];
   const usage = canonicalUserUsage(bundles, email);
   const stamps = includeLastOnline ? await Promise.all(required.map(async id => onlineTimestamp((await lastSeen(id))[email]))) : [];
   const lastOnline = stamps.length && stamps.every(s => s !== null) ? Math.max(...stamps as number[]) : 0;
@@ -61,6 +65,7 @@ export async function attachBridgeClient(reseller: ResellerWithInbounds, email: 
   const primary = tracked.panelId || (await getPrimaryPanel())?.id || '';
   const current = parseInboundRefs(tracked.inboundIds, primary);
   const snapshot = await getAllPanelInboundsFresh();
+  snapshot.panels = await retainDetachedAccounting(snapshot.panels, tracked);
   if (!snapshot.ok) return { ok: false as const, error: unavailable };
   const allowed = new Set(reseller.inbounds.map(i => refKey({ panelId: i.panelId || primary, inboundId: i.inboundId })));
   const requested: InboundRef[] = [];
@@ -91,7 +96,7 @@ export async function attachBridgeClient(reseller: ResellerWithInbounds, email: 
     identities.set(panelId, identity);
   }
   const intent = 'BRIDGE_ATTACH:' + createHash('sha256').update(JSON.stringify(combined.map(refKey).sort())).digest('hex');
-  const result = await updateUserByJournal(reseller.id, email, { trafficGB: tracked.trafficGB, snapshotStartedAt, intent }, async () => {
+  const result = await updateUserByJournal(reseller.id, email, { trafficGB: tracked.trafficGB, snapshotStartedAt, intent, inboundRefs: combined, expectedInboundIds: tracked.inboundIds }, async () => {
     const owner = await getResellerWithAccess(reseller.id);
     if (!owner?.mirzaEnabled) return { errors: ['اتصال فروش این حساب فعال نیست'], pending: false };
     const access = await validateInboundSelection(owner, combined);

@@ -8,6 +8,7 @@ import { getAllPanelInboundsFresh } from './panel-manager';
 import { sendThresholdAlerts, type ThresholdAlert } from './telegram';
 import { isAdminManagedReseller } from './reseller-ownership';
 import { confirmQueuedCreations } from './user-create';
+import { reconcileInboundRevocations } from './inbound-revocation';
 
 export async function loadAlertPreferences(resellerId: string) {
   const entry = await db.setting.findUnique({ where: { key: `customerAlertPreferences:${resellerId}` } });
@@ -33,6 +34,7 @@ export async function collectCustomerObservations() {
     const resellers = await db.reseller.findMany({ take: 100 });
     for (const reseller of resellers) {
       await continuePendingDestructiveOperations(reseller.id);
+      await reconcileInboundRevocations(reseller.id, { schedule: true, budgetMs: 20000 });
       const alerts = await withResellerLock(reseller.id, async () => {
         await confirmQueuedUserUpdates(reseller.id, true);
         const creations = await confirmQueuedCreations(reseller.id, { locked: true, recoverUntracked: true });

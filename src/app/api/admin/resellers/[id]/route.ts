@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
 import { hashPassword } from "@/lib/crypto";
-import { getAllPanelInbounds } from "@/lib/panel-manager";
+import { getAllPanelInbounds, getPrimaryPanel } from "@/lib/panel-manager";
+import { scheduleInboundRevocations, runInboundRevocationWorker } from '@/lib/inbound-revocation';
 import { logActivity } from "@/lib/logger";
 import { refKey, withResellerLock, type InboundRef } from "@/lib/reseller-helpers";
 import { handoverToken, isAdminManagedReseller } from "@/lib/reseller-ownership";
@@ -103,14 +104,14 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     }
 
     // به‌روزرسانی اینباندهای مجاز (فرمت refs جدید یا ids قدیمی)
-    const newRefs: InboundRef[] | null =
-      body.inbounds && body.inbounds.length > 0
-        ? body.inbounds.map((r) => ({ panelId: r.panelId || "", inboundId: Number(r.inboundId) })).filter((r) => Number.isFinite(r.inboundId))
-        : body.inboundIds && body.inboundIds.length > 0
-          ? body.inboundIds.map((inboundId) => ({ panelId: "", inboundId }))
-          : null;
+    const primary = (await getPrimaryPanel())?.id || '';
+    if (body.inboundIds !== undefined && !Array.isArray(body.inboundIds)) return NextResponse.json({ error: 'فهرست لوکیشن‌ها نامعتبر است' }, { status: 400 });
+    const supplied = body.inbounds !== undefined ? body.inbounds : body.inboundIds?.map(inboundId => ({ panelId: '', inboundId }));
+    if (supplied !== undefined && (!Array.isArray(supplied) || supplied.some(r => !r || !Number.isSafeInteger(r.inboundId) || r.inboundId <= 0 || r.panelId !== undefined && typeof r.panelId !== 'string'))) return NextResponse.json({ error: 'فهرست لوکیشن‌ها نامعتبر است' }, { status: 400 });
+    const newRefs: InboundRef[] | null = supplied === undefined ? null : [...new Map(supplied.map(r => { const ref = { panelId: r.panelId || primary, inboundId: r.inboundId };return [refKey(ref), ref] as const; })).values()];
+    let scheduled = 0;
 
-    if (newRefs && newRefs.length > 0) {
+    if (newRefs) {
       const panelResult = await getAllPanelInbounds();
       const metaMap = new Map<string, { tag: string; protocol: string; port: number; remark: string }>();
       if (panelResult.ok) {
@@ -120,15 +121,17 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
           }
         }
       }
-      const currentKeys = new Set(current.inbounds.map((i) => refKey({ panelId: i.panelId, inboundId: i.inboundId })));
+      const currentKeys = new Set(current.inbounds.map((i) => refKey({ panelId: i.panelId || primary, inboundId: i.inboundId })));
       const newKeys = new Set(newRefs.map(refKey));
-      const toRemove = current.inbounds.filter((i) => !newKeys.has(refKey({ panelId: i.panelId, inboundId: i.inboundId }))).map((i) => i.id);
+      const toRemove = current.inbounds.filter((i) => !newKeys.has(refKey({ panelId: i.panelId || primary, inboundId: i.inboundId }))).map((i) => i.id);
       const toAdd = newRefs.filter((r) => !currentKeys.has(refKey(r)));
+      if (toAdd.some(r => !metaMap.has(refKey(r)))) return NextResponse.json({ error: 'لوکیشن جدید در پنل تأیید نشد؛ فهرست را بازخوانی کنید' }, { status: 409 });
+      await db.$transaction(async tx => {
       if (toRemove.length) {
-        await db.resellerInbound.deleteMany({ where: { id: { in: toRemove } } });
+        await tx.resellerInbound.deleteMany({ where: { resellerId: id, id: { in: toRemove } } });
       }
       if (toAdd.length) {
-        await db.resellerInbound.createMany({
+        await tx.resellerInbound.createMany({
           data: toAdd.map((r) => {
             const meta = metaMap.get(`${r.panelId}::${r.inboundId}`);
             return {
@@ -143,9 +146,14 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
           }),
         });
       }
+      await tx.reseller.update({ where: { id }, data });
+      scheduled = await scheduleInboundRevocations(tx, id, primary, panelResult.panels);
+      });
+      after(async () => { await runInboundRevocationWorker(id); });
+    } else {
+      await db.reseller.update({ where: { id }, data });
     }
 
-    await db.reseller.update({ where: { id }, data });
     await logActivity({
       actorType: "ADMIN",
       actorName: admin.username,
@@ -153,7 +161,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       detail: `نماینده ${current.username} به‌روزرسانی شد${data.trafficPoolGB !== undefined ? ` — پول جدید: ${data.trafficPoolGB as number} گیگ` : ""}`,
       resellerId: id,
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, revocationsScheduled: scheduled });
     });
   } catch (e) {
     console.error("update reseller error:", e);

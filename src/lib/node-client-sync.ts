@@ -1,5 +1,6 @@
 import type { PanelAuth, PanelApiResult, PanelClient } from "./panel";
 import type { NodeTls } from './private-node-http';
+import { createHash } from 'node:crypto';
 
 /** Explicit repair peers, never additional billing/statistics panels. */
 export type NodePeer = {
@@ -13,6 +14,8 @@ export type NodePeer = {
 type RecordData = Record<string, unknown>;
 type ClientDetail = { client: RecordData; inboundIds: number[]; usedTraffic?: unknown };
 export type NativeRequest = <T>(auth: PanelAuth, path: string, init?: { method?: string; json?: unknown }) => Promise<PanelApiResult<T>>;
+type RevokeStep = { key: string; ids: number[]; identity: string; endpoint: string; before?: RecordData; usageBefore?: number };
+export type MembershipRevokeProgress = { version: 1; email: string; subId: string; removed: number[]; steps: RevokeStep[] };
 type Step = { key: string; identity: string; status: "PENDING" | "STARTED" | "DONE"; wasEnabled?: boolean; reactivateExhausted?: boolean; usageBytes?: number };
 export type NodeMutationState = { version: 1; email: string; op: "delete" | "reset"; steps: Step[]; deleteTargets?: string[]; deleteVerified?: boolean };
 export type NodeMutationProgress = {
@@ -94,6 +97,89 @@ async function readUsage(request: NativeRequest, auth: PanelAuth, email: string)
   const values = stats.map(s => Number(s.up) + Number(s.down));
   if (values.some(v => !Number.isFinite(v) || v < 0)) throw new Error("Usage invalid");
   return Math.max(...values);
+}
+
+/** Membership-only revocation. Central/native records and traffic counters stay
+ * intact even when no inbound remains. Every target/identity is saved before a
+ * write; an uncertain detach is reconciled by readback, never by resetting data. */
+export async function revokeClientMemberships(auth: PanelAuth, email: string, subId: string, removed: number[], request: NativeRequest,
+  progress: { load(): Promise<MembershipRevokeProgress | undefined>; save(value: MembershipRevokeProgress): Promise<void> }, verifyOnly = false): Promise<PanelApiResult> {
+  try {
+    const endpoint = (target: PanelAuth) => createHash('sha256').update(JSON.stringify([target.baseUrl, target.tls || null, (target as NodePeer).nativeNodeId ?? null])).digest('hex');
+    let state = await progress.load();
+    if (verifyOnly && !state) throw Error('Read-only revocation proof missing');
+    const master = await detail(request, auth, email);
+    if (!subId || !master || master.client.subId !== subId) throw Error('Revocation master identity unavailable');
+    const targets = new Map<string, { auth: PanelAuth; ids: number[] }>();targets.set('master', { auth, ids: removed });
+    if (!state) {
+      type Binding = { id: number; nodeId?: unknown; tag: string; port: number; protocol: string };
+      let catalog = await request<Binding[]>(auth, '/panel/api/inbounds/options');
+      if (!catalog.ok) catalog = await request<Binding[]>(auth, '/panel/api/inbounds/list');
+      if (!catalog.ok || !Array.isArray(catalog.data)) throw Error('Revocation catalog unavailable');
+      for (const id of removed) {
+        const rows = catalog.data.filter(i => i.id === id);
+        if (!rows.length && !master.inboundIds.includes(id)) continue;
+        if (rows.length !== 1) throw Error('Revoked inbound identity unavailable');
+        const row = rows[0], node = row.nodeId;
+        if (node == null) continue;
+        if (!Number.isSafeInteger(node) || (node as number) <= 0) throw Error('Invalid revoked node identity');
+        const peers = (auth.nodePeers || []).filter(p => p.nativeNodeId === node || p.masterInboundIds.includes(id));
+        if (!peers.some(p => p.nativeNodeId === node)) throw Error('Revoked native node is not provisioned');
+        for (const peer of peers) {
+          let native = await request<Binding[]>(peer, '/panel/api/inbounds/options');
+          if (!native.ok) native = await request<Binding[]>(peer, '/panel/api/inbounds/list');
+          if (!native.ok || !Array.isArray(native.data)) throw Error('Native revocation catalog unavailable');
+          const tag = row.tag.replace(new RegExp(`^n${node}-`), '');
+          const mapped = native.data.filter(i => i.tag === tag && i.port === row.port && i.protocol === row.protocol);
+          if (mapped.length !== 1) throw Error('Ambiguous native inbound mapping');
+          const target = targets.get(peer.key) || { auth: peer, ids: [] as number[] };target.ids.push(mapped[0].id);targets.set(peer.key, target);
+        }
+      }
+      const steps: RevokeStep[] = [];
+      for (const [key, target] of targets) {
+        const current = key === 'master' ? master : await detail(request, target.auth, email);
+        if (current && (identity(current.client) !== identity(master.client) || current.client.subId !== subId)) throw Error('Foreign native identity');
+        steps.push({ key, ids: [...new Set(target.ids)], identity: identity(master.client), endpoint: endpoint(target.auth), before: current?.client, usageBefore: current ? await readUsage(request, target.auth, email) : undefined });
+      }
+      state = { version: 1, email, subId, removed: [...removed], steps };await progress.save(state);
+    }
+    if (state.version !== 1 || state.email !== email || state.subId !== subId || JSON.stringify(state.removed) !== JSON.stringify(removed) || state.steps.some(step => step.identity !== identity(master.client))
+      || !state.steps.length || state.steps[0].key !== 'master' || new Set(state.steps.map(s => s.key)).size !== state.steps.length) throw Error('Revocation intent changed');
+    // 3x-ui derives the record's effective flow from its remaining inbound
+    // overrides on detach. We never send a flow/configuration change ourselves.
+    const protectedProfile = (value: RecordData) => JSON.stringify(Object.entries(value).filter(([k]) => !['updatedAt', 'updated_at', 'createdAt', 'created_at', 'flow'].includes(k)).sort(([a], [b]) => a.localeCompare(b)));
+    const read = async (step: RevokeStep) => {
+      const target = step.key === 'master' ? auth : auth.nodePeers?.find(p => p.key === step.key);
+      if (!target) throw Error('Revocation target removed');
+      if (step.endpoint !== endpoint(target)) throw Error('Revocation endpoint changed');
+      const current = await detail(request, target, email);
+      if (!current) { if (step.before || step.key === 'master') throw Error('Revocation erased a retained account');return { target, current }; }
+      if (identity(current.client) !== step.identity || current.client.subId !== subId) throw Error('Revocation identity changed');
+      if (step.before && protectedProfile(current.client) !== protectedProfile(step.before)) throw Error('Revocation profile changed');
+      const used = await readUsage(request, target, email);
+      if (used < (step.usageBefore || 0)) throw Error('Revocation lost traffic counters');
+      if (!step.before) { step.before = current.client;step.usageBefore = used;await progress.save(state!); }
+      return { target, current };
+    };
+    // Recheck every identity before the first write of this continuation.
+    for (const step of state.steps) await read(step);
+    for (let pass = 0; pass < 2; pass++) {
+      for (const step of state.steps) {
+        const { target, current } = await read(step);
+        const ids = step.ids.filter(id => current?.inboundIds.includes(id));
+        if (!ids.length) continue;
+        if (verifyOnly) throw Error('Revoked membership still present');
+        await request(target, `/panel/api/clients/${encodeURIComponent(email)}/detach`, { method: 'POST', json: { inboundIds: ids } });
+        const after = await read(step);
+        if (ids.some(id => after.current?.inboundIds.includes(id))) throw Error('Native detach not acknowledged');
+        if (current!.inboundIds.some(id => !ids.includes(id) && !after.current?.inboundIds.includes(id))) throw Error('Unrelated membership was detached');
+      }
+      let complete = true;
+      for (const step of state.steps) { const { current } = await read(step);if (step.ids.some(id => current?.inboundIds.includes(id))) complete = false; }
+      if (complete) return { ok: true };
+    }
+    throw Error('Late native membership not settled');
+  } catch { return failure('جداسازی لوکیشن‌های لغوشده هنوز تأیید نشده؛ مصرف و سهمیهٔ حساب محفوظ است'); }
 }
 
 export async function verifiedClientUsage(auth: PanelAuth, email: string, request: NativeRequest, expectedTotalBytes?: number): Promise<PanelApiResult<number>> {
