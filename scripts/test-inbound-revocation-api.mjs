@@ -64,7 +64,7 @@ try{
  check('delete after all-location revocation cannot recover the three GB already consumed',()=>{assert.equal(result.status,200);assert.equal(balance.consumedGB,3);assert.equal(poolView.data.permissions.remainingGB,97);assert.equal(poolView.data.permissions.allocatedGB,0)});
  async function raceOwner(name){const r=await db.reseller.create({data:{username:name,password:hashPassword('fixture'),active:true,multiLocation:true,trafficPoolGB:100}});for(const id of [1,2])await db.resellerInbound.create({data:{resellerId:r.id,panelId:panel.id,inboundId:id,inboundTag:'loc-'+id,protocol:'vless',port:4400+id}});return r}
  function holdCatalog(){let started,release;const signal=new Promise(r=>{started=r}),wait=new Promise(r=>{release=r});mode.catalogGate={started,wait};return{signal,release}}
- async function isolateRace(){for(let i=0;i<100&&await db.setting.count({where:{key:{startsWith:'inboundGrantQueue:'}}});i++)await new Promise(r=>setTimeout(r,50));assert.equal(await db.setting.count({where:{key:{startsWith:'inboundGrantQueue:'}}}),0);await stopApp();await startApp()}
+ async function isolateRace(){for(let i=0;i<800&&await db.setting.count({where:{key:{startsWith:'inboundGrantQueue:'}}});i++)await new Promise(r=>setTimeout(r,50));assert.equal(await db.setting.count({where:{key:{startsWith:'inboundGrantQueue:'}}}),0);await stopApp();await startApp()}
  // Each race starts without unrelated background requests that could consume
  // the native read barrier before the intended customer request reaches it.
  await isolateRace();
