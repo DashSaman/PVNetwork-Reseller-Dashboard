@@ -9,6 +9,7 @@ import { sendThresholdAlerts, type ThresholdAlert } from './telegram';
 import { isAdminManagedReseller } from './reseller-ownership';
 import { confirmQueuedCreations } from './user-create';
 import { reconcileInboundRevocations } from './inbound-revocation';
+import { retainDetachedAccounting } from './retained-accounting';
 
 export async function loadAlertPreferences(resellerId: string) {
   const entry = await db.setting.findUnique({ where: { key: `customerAlertPreferences:${resellerId}` } });
@@ -46,7 +47,9 @@ export async function collectCustomerObservations() {
           if (await db.operationJournal.count({ where: { resellerId: reseller.id, email: user.email, status: { in: CUSTOMER_ACTIVE } } })) { skipped++; continue; }
           const required = await getRequiredUserPanelIds(user);
           if (!required.ok) { skipped++; continue; }
-          const panels = snapshot.panels.filter(p => required.panelIds.includes(p.panelId));
+          let panels = snapshot.panels.filter(p => required.panelIds.includes(p.panelId));
+          try { panels = await retainDetachedAccounting(panels, user); }
+          catch { skipped++; continue; }
           const stats = panels.flatMap(p => p.inbounds.flatMap(i => i.clientStats.filter(s => s.email === user.email)));
           if (!required.panelIds.every(id => panels.some(p => p.panelId === id && p.inbounds.some(i => i.clientStats.some(s => s.email === user.email)))) || !stats.length || stats.some(s => !Number.isFinite(s.up) || !Number.isFinite(s.down) || s.up < 0 || s.down < 0)) { skipped++; continue; }
           const usedGB = canonicalUserUsage(panels, user.email).usedBytes / 1073741824;

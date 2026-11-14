@@ -28,8 +28,10 @@ try{
   else if(url==='/panel/api/nodes/list'){if(mode.get('nodes-unavailable')){success=false;msg='temporarily unavailable'}else obj=[{id:1,enable:true,status:mode.get('nodes-offline')?'offline':'online',configDirty:!mode.get('defer-native-dirty')&&(!!mode.get('node-pending')||[...mode.values()].some(m=>m?.pendingUpdate===true)),xrayState:'running',parentGuid:'fixture-controller',lastHeartbeat:Math.floor(Date.now()/1000)-(mode.get('stale-node')?600:0)}];}
   else if(url==='/panel/api/server/status')obj={panelGuid:'fixture-controller',xray:{state:mode.get('local-stopped')?'stopped':'running'}};
   else if(url.startsWith('/panel/api/clients/get/')){if(mode.get('slow-confirmation')&&email==='sync_customer')await new Promise(r=>setTimeout(r,6000));if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
+  else if(url.startsWith('/panel/api/clients/traffic/')){if(c)obj={up:c.used,down:0,total:c.totalGB};else{success=false;msg='Obtain (record not found)'}}
   else if(url==='/panel/api/clients/add'){mode.delete('defer-native-dirty');const v=body.client;clients.set(key(p,v.email),{...v,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
+  else if(url.endsWith('/detach')){const e=decodeURIComponent(url.split('/').at(-2)),target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.delete(id));else{success=false;msg='Obtain (record not found)'}}
   else if(url.startsWith('/panel/api/clients/update/')){if(m.failUpdate){success=false;msg='temporary failure'}else if(c){Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true}}else{success=false;msg='client not found'}}
   else if(url.startsWith('/panel/api/clients/del/')){if(m.deleteAckOnly){}else if(m.badMissing){success=false;msg='API route not found'}else if(m.failB&&p==='b'){success=false;msg='temporarily unavailable'}else clients.delete(key(p,email));}
   else if(url.startsWith('/panel/api/clients/resetTraffic/')){if(c){c.used=0;m.resets=(m.resets||0)+1;if(m.loseResetResponse){m.loseResetResponse=false;success=false;msg='connection closed after reset'}}}
@@ -122,6 +124,8 @@ try{
  check('history cannot read another tenant',()=>assert.equal(result.status,404));
  result=await adminApi('/api/admin/customer-observations','POST');
  check('admin can collect read-only observations',()=>assert.equal(result.status,200));
+ check('collector reconciles revoked membership while retaining the paid customer record',()=>{assert.deepEqual([...clients.get(key('a','revoked_customer')).ids],[]);assert.equal(clients.get(key('a','revoked_customer')).totalGB,10*GB)});
+ check('collector continues observing the authoritative record after the last membership is revoked',()=>assert.equal(result.data.skipped,0));
  result=await api(source,'/api/reseller/customer-tools/history?email=first_customer');
  check('first observation establishes baseline without invented history',()=>{assert.equal(result.status,200);assert.equal(result.data.history?.days?.length,0);assert.ok(result.data.history?.startedAt)});
  result=await api(source,'/api/admin/customer-observations','POST');
