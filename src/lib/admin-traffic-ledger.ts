@@ -20,6 +20,7 @@ type LedgerResellerInput = {
   name: string | null;
   trafficPoolGB: number;
   consumedGB: number;
+  forfeitedGB?: number;
 };
 
 type LedgerUserInput = {
@@ -43,6 +44,7 @@ export type AdminTrafficLedger = {
     actualUsedGB: number | null;
     consumedHistoricalGB: number;
     reservedGB: number;
+    forfeitedGB: number;
   };
   resellers: {
     id: string;
@@ -56,6 +58,7 @@ export type AdminTrafficLedger = {
     actualUsedGB: number | null;
     consumedHistoricalGB: number;
     reservedGB: number;
+    forfeitedGB: number;
     usageKnownUsers: number;
     users: number;
   }[];
@@ -83,6 +86,7 @@ export function calculateAdminTrafficLedger(input: {
   let actualUsedTotal = 0;
   let historicalTotal = 0;
   let reservedTotal = 0;
+  let forfeitedTotal = 0;
   let allRemainingKnown = true;
   let allUnusedKnown = true;
   let allUsageKnown = Boolean(input.snapshot?.ok && !input.snapshot.pending && !input.snapshot.stale);
@@ -100,7 +104,7 @@ export function calculateAdminTrafficLedger(input: {
 
     const remainingGB = unlimitedPool
       ? null
-      : Math.max(0, reseller.trafficPoolGB - soldGB - (reseller.consumedGB || 0) - reservations);
+      : Math.max(0, reseller.trafficPoolGB - soldGB - (reseller.consumedGB || 0) - (reseller.forfeitedGB || 0) - reservations);
     if (remainingGB === null) allRemainingKnown = false;
 
     let usageKnownUsers = 0;
@@ -158,6 +162,7 @@ export function calculateAdminTrafficLedger(input: {
     unlimitedUsersTotal += unlimitedUsers;
     historicalTotal += reseller.consumedGB || 0;
     reservedTotal += reservations;
+    forfeitedTotal += reseller.forfeitedGB || 0;
     if (remainingGB !== null) unsoldTotal += remainingGB;
 
     return {
@@ -172,6 +177,7 @@ export function calculateAdminTrafficLedger(input: {
       actualUsedGB,
       consumedHistoricalGB: reseller.consumedGB || 0,
       reservedGB: reservations,
+      forfeitedGB: reseller.forfeitedGB || 0,
       usageKnownUsers,
       users: users.length,
     };
@@ -188,6 +194,7 @@ export function calculateAdminTrafficLedger(input: {
       actualUsedGB: allUsageKnown ? actualUsedTotal : null,
       consumedHistoricalGB: historicalTotal,
       reservedGB: reservedTotal,
+      forfeitedGB: forfeitedTotal,
     },
     resellers,
   };
@@ -198,16 +205,17 @@ export async function getAdminTrafficLedger(snapshot?: LedgerSnapshot, primaryPa
   const [{ db }, { canonicalUserUsage }] = await Promise.all([import("./db"), import("./reseller-helpers")]);
   const transferred = await (await import("./reseller-ownership")).adminManagedResellers();
   const resellerScope = resellerId === undefined ? undefined : { resellerId };
-  const [resellers, users, reservations] = await Promise.all([
+  const [resellers, users, reservations, forfeited] = await Promise.all([
     db.reseller.findMany({ where: resellerId === undefined ? undefined : { id: resellerId }, select: { id: true, username: true, name: true, trafficPoolGB: true, consumedGB: true } }),
     db.resellerUser.findMany({ where: resellerScope, select: { resellerId: true, email: true, trafficGB: true, inboundIds: true, panelId: true } }),
     db.operationJournal.findMany({
       where: { ...(resellerScope ?? {}), type: { in: ["CREATE", "UPDATE", "RESET"] }, status: { in: ACTIVE_RESERVATION_STATUSES } },
       select: { resellerId: true, reservedGB: true, type: true, status: true },
     }),
+    (await import('./deletion-refund-ledger')).getForfeitedGBByReseller(resellerId),
   ]);
   return calculateAdminTrafficLedger({
-    resellers: resellers.map(r => transferred.has(r.id) ? { ...r, name: `مدیریت ادمین (${transferred.get(r.id)?.sourceName || transferred.get(r.id)?.sourceUsername || r.username})` } : r),
+    resellers: resellers.map(r => ({ ...r, forfeitedGB: forfeited.get(r.id) || 0, ...(transferred.has(r.id) ? { name: `مدیریت ادمین (${transferred.get(r.id)?.sourceName || transferred.get(r.id)?.sourceUsername || r.username})` } : {}) })),
     users,
     reservations,
     snapshot,

@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { quotaChartModel } from '../src/lib/quota-chart.ts';
 const row={poolGB:100,soldGB:30,unsoldGB:60,actualUsedGB:8,soldButUnusedGB:22,consumedHistoricalGB:7,reservedGB:3,unlimitedUsers:0};
+
+test('non-refundable deleted allocation has a separate slice and is never added to actual traffic',()=>{
+ const m=quotaChartModel({...row,unsoldGB:50,forfeitedGB:10});
+ assert.equal(m.pool.reduce((s,x)=>s+x.value,0),100);assert.equal(m.donut.reduce((s,x)=>s+x.value,0),100);
+ assert.equal(m.donut.find(x=>x.color==='#f43f5e').value,10);assert.equal(m.sales[0].value,8);
+});
 test('pool partitions include sold only once, and used/unused partition that sale',()=>{
  const m=quotaChartModel(row);assert.equal(m.pool.reduce((s,x)=>s+x.value,0),100);assert.equal(m.sales.reduce((s,x)=>s+x.value,0),30);assert.deepEqual(m.sales.map(s=>s.value),[8,22]);assert.equal(m.overQuotaGB,0);
 });

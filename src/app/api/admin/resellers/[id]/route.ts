@@ -73,10 +73,10 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
       if (newPool > 0) {
         const { getQuotaState } = await import("@/lib/accounting-ops");
         const q = await getQuotaState(id, current);
-        const obligations = q.allocated + q.reserved + q.consumed;
+        const obligations = q.allocated + q.reserved + q.consumed + q.forfeited;
         if (newPool < obligations && body.overrideSafety !== true) {
           return NextResponse.json(
-            { error: `پول جدید (${newPool} گیگ) کمتر از تعهدات فعلی (${Math.round(obligations * 100) / 100} گیگ = تخصیص ${q.allocated} + رزرو ${q.reserved} + مصرف ${q.consumed}) است — برای تایید صریح، overrideSafety ارسال کنید` },
+            { error: `پول جدید (${newPool} گیگ) کمتر از تعهدات فعلی (${Math.round(obligations * 100) / 100} گیگ = تخصیص ${q.allocated} + رزرو ${q.reserved} + مصرف ${q.consumed} + حذف غیرقابل‌برگشت ${q.forfeited}) است — برای تایید صریح، overrideSafety ارسال کنید` },
             { status: 409 }
           );
         }

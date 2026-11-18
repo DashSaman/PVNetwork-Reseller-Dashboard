@@ -72,6 +72,7 @@ type TrafficLedger = {
     actualUsedGB: number | null;
     consumedHistoricalGB: number;
     reservedGB: number;
+    forfeitedGB: number;
   };
   resellers: {
     id: string;
@@ -85,6 +86,7 @@ type TrafficLedger = {
     actualUsedGB: number | null;
     consumedHistoricalGB: number;
     reservedGB: number;
+    forfeitedGB: number;
     usageKnownUsers: number;
     users: number;
   }[];
@@ -383,7 +385,7 @@ function OverviewTab({
           <StatCard title="فروش مصرف‌نشده کاربران" value={businessLedger.totals.soldButUnusedGB === null ? "نامشخص" : `${faNum(businessLedger.totals.soldButUnusedGB)} GB`} icon={<TrendingUp className="h-4 w-4" />} />
           <StatCard title="مصرف واقعی کاربران" value={businessLedger.totals.actualUsedGB === null ? "نامشخص" : `${faNum(businessLedger.totals.actualUsedGB)} GB`} sub={!businessLedger.available ? "در انتظار داده زنده کامل" : undefined} icon={<ArrowUpDown className="h-4 w-4" />} tone="success" />
         </div>
-        <TrafficQuotaChart label="نمودار تخصیص و مصرف نماینده‌ها" data={{ poolGB: businessLedger.totals.allocatedToResellersGB, soldGB: businessLedger.totals.soldToUsersGB, unsoldGB: businessLedger.totals.unsoldGB, actualUsedGB: businessLedger.totals.actualUsedGB, soldButUnusedGB: businessLedger.totals.soldButUnusedGB, consumedHistoricalGB: businessLedger.totals.consumedHistoricalGB, reservedGB: businessLedger.totals.reservedGB, unlimitedUsers: businessLedger.totals.soldUnlimitedUsers }} />
+        <TrafficQuotaChart label="نمودار تخصیص و مصرف نماینده‌ها" data={{ poolGB: businessLedger.totals.allocatedToResellersGB, soldGB: businessLedger.totals.soldToUsersGB, unsoldGB: businessLedger.totals.unsoldGB, actualUsedGB: businessLedger.totals.actualUsedGB, soldButUnusedGB: businessLedger.totals.soldButUnusedGB, consumedHistoricalGB: businessLedger.totals.consumedHistoricalGB, reservedGB: businessLedger.totals.reservedGB, forfeitedGB: businessLedger.totals.forfeitedGB, unlimitedUsers: businessLedger.totals.soldUnlimitedUsers }} />
         <Card className="bg-card card-soft">
           <CardContent className="p-4 sm:p-5">
             <div className="overflow-x-auto">

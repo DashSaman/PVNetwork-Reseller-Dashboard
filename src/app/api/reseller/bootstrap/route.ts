@@ -63,6 +63,7 @@ export async function GET() {
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB: quota.allocated,
       consumedGB: quota.consumed,
+      forfeitedGB: quota.forfeited,
       remainingGB: quota.remaining,
     },
     brand: {

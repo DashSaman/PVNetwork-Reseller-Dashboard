@@ -56,6 +56,7 @@ export type ResellerPermissions = {
   trafficPoolGB: number;
   allocatedGB: number;
   consumedGB: number;
+  forfeitedGB?: number;
   remainingGB: number;
 };
 

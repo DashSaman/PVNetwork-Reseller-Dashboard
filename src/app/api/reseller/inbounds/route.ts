@@ -64,6 +64,7 @@ export async function GET() {
 
   const allocatedGB = await getAllocatedGB(reseller.id);
   const consumedGB = await getConsumedGB(reseller.id);
+  const quota = await getQuotaState(reseller.id, reseller);
 
   return NextResponse.json({
     inbounds,
@@ -75,7 +76,8 @@ export async function GET() {
       trafficPoolGB: reseller.trafficPoolGB,
       allocatedGB,
       consumedGB,
-      remainingGB: (await getQuotaState(reseller.id, reseller)).remaining,
+      remainingGB: quota.remaining,
+      forfeitedGB: quota.forfeited,
     },
   }, { headers: { 'Cache-Control': 'private, no-store, max-age=0' } });
 }

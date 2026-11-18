@@ -44,7 +44,55 @@ try{
  async function owner(name,pool=100){const r=await db.reseller.create({data:{username:name,password:hashPassword('test'),trafficPoolGB:pool,multiLocation:true}});for(const id of [1,2,3])await db.resellerInbound.create({data:{resellerId:r.id,panelId:panel.id,inboundId:id,inboundTag:'loc-'+id,protocol:'vless',port:4400+id}});return r}
  async function seed(r,email,used=0,extraPanel){const refs=[{panelId:panel.id,inboundId:1},...(extraPanel?[{panelId:extraPanel.id,inboundId:1}]:[])];const v={id:'uuid-'+email,email,subId:'sub-'+email,totalGB:10*GB,expiryTime:Date.now()+86400000*30,enable:true,limitIp:0,flow:'',used:used*GB,ids:new Set([1])};clients.set(key('a',email),v);if(extraPanel)clients.set(key('b',email),{...v,used:2*GB,ids:new Set([1])});await db.resellerUser.create({data:{resellerId:r.id,email,subId:v.subId,trafficGB:10,panelId:panel.id,inboundIds:JSON.stringify(refs)}});return v}
  async function api(r,route,method='GET',body){const cookie='rp_session='+signAccountSession('RESELLER',r,'dashboard',Date.now()+3600000);const response=await fetch(base+route,{method,headers:{Cookie:cookie,'content-type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:response.status,data:await response.json()}}
- if(!process.argv.includes('--availability-only')) {
+ if(process.argv.includes('--refund-only')) {
+  for(const [name,expiry,used,refund,forfeited] of [
+   ['early-delete',Date.now()+8*86400000,3,7,0],
+   ['last-week-delete',Date.now()+7*86400000,3,0,7],
+   ['expired-delete',Date.now()-86400000,0,0,10],
+   ['unstarted-short-delete',-3*86400000,0,0,10],
+   ['unstarted-long-delete',-30*86400000,0,10,0],
+   ['unlimited-date-delete',0,3,7,0],
+   ['overspent-delete',Date.now()+30*86400000,10.25,0,0],
+  ]) {
+   const r=await owner(name,100),c=await seed(r,name,used);c.expiryTime=expiry;
+   const result=await api(r,'/api/reseller/users/'+name,'DELETE'),pool=await api(r,'/api/reseller/bootstrap'),after=await db.reseller.findUniqueOrThrow({where:{id:r.id}});
+   check(name+' settles only the eligible unused balance, without fabricating consumption',()=>{assert.equal(result.status,200,JSON.stringify(result.data));assert.equal(result.data.refundedGB,refund);assert.equal(after.consumedGB,used);assert.equal(pool.data.permissions.remainingGB,100-used-forfeited);if(forfeited)assert.equal(pool.data.permissions.forfeitedGB,forfeited)});
+   await api(r,'/api/reseller/users/'+name,'DELETE');const again=await api(r,'/api/reseller/bootstrap');
+   check(name+' retry cannot settle the same balance twice',()=>assert.equal(again.data.permissions.remainingGB,100-used-forfeited));
+  }
+  const r=await owner('native-portal',100),c=await seed(r,'native-portal',0),response=await fetch(base+'/api/s/'+c.subId+'?format=json'),portal=await response.json();
+  check('public customer portal supplies the exact native subscription URL instead of its own page URL',()=>{assert.equal(response.status,200);assert.equal(portal.subLink,native+'/sub/'+c.subId)});
+  const ownLinks=await api(r,'/api/reseller/users/'+c.email+'/links');
+  check('authenticated link delivery keeps the same native subscription origin',()=>{assert.equal(ownLinks.status,200);assert.equal(ownLinks.data.subLink,native+'/sub/'+c.subId)});
+  if(process.env.PLAYWRIGHT_MODULE){
+   const {pathToFileURL}=await import('node:url'),{chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE)),browser=await chromium.launch({headless:true,channel:'chrome'});
+   try{const context=await browser.newContext({viewport:{width:390,height:844}});await context.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{window.__copiedNative=value}}}));const page=await context.newPage();await page.goto(base+'/s/'+c.subId);await page.waitForLoadState('networkidle');
+    await page.getByRole('button',{name:'کپی',exact:true}).first().click();const copied=await page.evaluate(()=>window.__copiedNative);
+    check('mobile portal Copy writes native X-UI URL rather than the dashboard page address',()=>assert.equal(copied,native+'/sub/'+c.subId));
+    await page.getByRole('button',{name:'نمایش QR',exact:true}).first().click();await page.locator('svg[height="200"][width="200"]').first().waitFor();
+    await page.screenshot({path:path.join(dir,'native-subscription-mobile.png'),fullPage:true});
+    check('mobile portal displays the native link and opens its QR',()=>assert.equal(copied,portal.subLink));
+   }finally{await browser.close()}
+  }
+  const locked=await owner('late-reduction',10),lockedClient=await seed(locked,'late-reduction',1);lockedClient.expiryTime=Date.now()+86400000;
+  let result=await api(locked,'/api/reseller/users/late-reduction','PUT',{trafficGB:2});
+  check('quota reduction cannot bypass the final-week deletion refund rule',()=>{assert.equal(result.status,403);assert.equal(lockedClient.totalGB,10*GB)});
+  result=await api(locked,'/api/reseller/users/late-reduction','DELETE');
+  result=await api(locked,'/api/reseller/users','POST',{name:'CannotReuse',trafficGB:1,expiryDays:30,inbounds:[{panelId:panel.id,inboundId:1}],requestId:'late-refund-reuse'});
+  check('forfeited balance cannot fund another creation',()=>assert.equal(result.status,403));
+  const delayed=await owner('delayed-refund',100),delayedClient=await seed(delayed,'delayed-refund',3);delayedClient.expiryTime=Date.now()+8*86400000;mode.set('all-remote',true);mode.set('node-pending',true);
+  result=await api(delayed,'/api/reseller/users/delayed-refund','DELETE');
+  check('pending deletion retains all allocation before complete native absence proof',()=>assert.equal(result.status,202));
+  delayedClient.expiryTime=Date.now()+86400000;delayedClient.used=4*GB;mode.delete('node-pending');
+  result=await api(delayed,'/api/reseller/users/delayed-refund','DELETE');mode.delete('all-remote');
+  check('retry retains the accepted early-delete policy while charging newly observed usage',()=>{assert.equal(result.status,200);assert.equal(result.data.refundedGB,6);assert.equal(result.data.debitedGB,4)});
+  const legacy=await owner('legacy-committed-delete',100),legacyClient=await seed(legacy,'legacy-committed-delete',3),example=await db.operationJournal.findFirstOrThrow({where:{resellerId:delayed.id,type:'DELETE'}}),installation=JSON.parse(example.metadata).operationInstallation;
+  clients.delete(key('a',legacyClient.email));await db.reseller.update({where:{id:legacy.id},data:{consumedGB:3}});
+  await db.operationJournal.create({data:{idempotencyKey:'legacy-committed-delete',resellerId:legacy.id,userId:(await db.resellerUser.findUniqueOrThrow({where:{resellerId_email:{resellerId:legacy.id,email:legacyClient.email}}})).id,email:legacyClient.email,type:'DELETE',status:'RUNNING',accountingCommitted:true,usageSnapshotGB:3,targetPanels:JSON.stringify([panel.id]),metadata:JSON.stringify({explicitDestructive:true,operationInstallation:installation,usageByPanel:{[panel.id]:3}})}});
+  result=await api(legacy,'/api/reseller/users/'+legacyClient.email,'DELETE');const legacyAfter=await db.reseller.findUniqueOrThrow({where:{id:legacy.id}});
+  check('legacy deletion committed before ownership removal finishes without a second usage debit or retroactive forfeiture',()=>{assert.equal(result.status,200,JSON.stringify(result));assert.equal(legacyAfter.consumedGB,3);assert.equal(result.data.refundedGB,7);assert.equal(result.data.forfeitedGB,0)});
+ }
+ if(!process.argv.includes('--availability-only')&&!process.argv.includes('--refund-only')) {
  const r=await owner('creator');mode.set('partial-add',true);let result=await api(r,'/api/reseller/users','POST',{name:'Partial',trafficGB:10,expiryDays:30,inbounds:[1,2,3].map(inboundId=>({panelId:panel.id,inboundId})),requestId:'partial-create-fixture'});mode.delete('partial-add');
  check('partial native add is completed before create reports ready',()=>{assert.equal(result.status,200);assert.equal(clients.get(key('a',result.data.email)).ids.size,3)});
  const stableEmail=result.data.email;result=await api(r,'/api/reseller/users','POST',{name:'Partial',trafficGB:10,expiryDays:30,inbounds:[1,2,3].map(inboundId=>({panelId:panel.id,inboundId})),requestId:'partial-create-fixture'});check('create retry with relative expiry returns same account',()=>{assert.equal(result.status,200);assert.equal(result.data.email,stableEmail)});
@@ -237,7 +285,8 @@ try{
  result=await api(brieflyDirty,'/api/reseller/users/briefly-dirty-delete','DELETE');clearTimeout(dirtyTimer);mode.delete('node-pending');mode.delete('all-remote');const brieflyDirtyAfter=await db.reseller.findUnique({where:{id:brieflyDirty.id}});
  check('a briefly dirty healthy node settles within the original delete instead of leaving an unstarted queue',()=>{assert.equal(result.status,200);assert.equal(clients.has(key('a','briefly-dirty-delete')),false);assert.equal(brieflyDirtyAfter.consumedGB,3)});
  }
- const slowOwner=await owner('slow-healthy-controller',100);await seed(slowOwner,'slow-healthy-reset',3);mode.set('slow-healthy-reset',{});mode.set('catalog-delay',4500);mode.set('options-supported',true);
+ if(!process.argv.includes('--refund-only')) {
+  const slowOwner=await owner('slow-healthy-controller',100);await seed(slowOwner,'slow-healthy-reset',3);mode.set('slow-healthy-reset',{});mode.set('catalog-delay',4500);mode.set('options-supported',true);
  let result=await api(slowOwner,'/api/reseller/inbounds');
  check('a healthy large controller snapshot taking over four seconds retains granted choices',()=>{assert.equal(result.status,200);assert.deepEqual(result.data.inbounds.map(i=>i.inboundId),[1,2,3])});
  await db.reseller.update({where:{id:slowOwner.id},data:{mirzaEnabled:true}});const slowKey=(await api(slowOwner,'/api/reseller/mirza/api-token','POST',{})).data.token;assert.ok(slowKey);
@@ -255,6 +304,7 @@ try{
  const dirtyResetOwner=await owner('briefly-dirty-reset',100);await seed(dirtyResetOwner,'briefly-dirty-reset',3);mode.set('all-remote',true);mode.set('briefly-dirty-reset',{dirtyAfterReset:true});
  result=await api(dirtyResetOwner,'/api/reseller/users/briefly-dirty-reset/reset-traffic','POST',{});mode.delete('all-remote');const dirtyResetAfter=await db.reseller.findUniqueOrThrow({where:{id:dirtyResetOwner.id}});
  check('a brief configuration push after reset settles without replaying the reset or leaving its charge reserved',()=>{assert.equal(result.status,200);assert.equal(clients.get(key('a','briefly-dirty-reset')).used,0);assert.equal(dirtyResetAfter.consumedGB,3);assert.equal(mode.get('briefly-dirty-reset').resets,1)});
- console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;
+ }
+  console.log(JSON.stringify({checks,failures,fixture:dir}));if(failures.length)process.exitCode=1;
 }catch(e){console.error(e);console.error('Fixture:',dir);process.exitCode=1}
 finally{if(app){if(process.platform==='win32')await new Promise(resolve=>{const p=spawn('taskkill.exe',['/PID',String(app.pid),'/T','/F'],{windowsHide:true});p.on('exit',resolve)});else app.kill('SIGTERM')}if(server){server.closeAllConnections();server.close()}if(db)await db.$disconnect()}

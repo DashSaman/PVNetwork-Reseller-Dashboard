@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { getAllPanelInboundsFresh, getPanelById } from "./panel-manager";
+import { getAllPanelInboundsFresh, getPanelById, buildSubLink } from "./panel-manager";
 import type { BuiltLink } from "./links";
 import { readNativeSubscription } from './native-subscription';
 
@@ -14,6 +14,7 @@ export type PortalData = {
   found: boolean;
   unavailable?: boolean;
   subId: string;
+  subLink: string | null;
   email?: string;
   brandName: string;
   totalGB: number; // گیگ — ۰ = نامحدود
@@ -28,7 +29,7 @@ export type PortalData = {
 
 export async function getPortalData(subIdRaw: string, _requestHost: string): Promise<PortalData> {
   const subId = (subIdRaw || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
-  const empty: PortalData = { found: false, subId, brandName: "PvNetWork", totalGB: 0, usedGB: 0, expiryTime: 0, enable: false, links: [], locations: [] };
+  const empty: PortalData = { found: false, subId, subLink: null, brandName: "PvNetWork", totalGB: 0, usedGB: 0, expiryTime: 0, enable: false, links: [], locations: [] };
   if (!subId || subId.length < 8) return empty;
 
   const tracked = await db.resellerUser.findFirst({ where: { subId } });
@@ -65,11 +66,13 @@ export async function getPortalData(subIdRaw: string, _requestHost: string): Pro
   const links: PortalLink[] = [];
   const locations: string[] = [];
   const seenInbound = new Set<string>();
+  let nativePanelId = '';
 
   for (const bundle of panelResult.panels) {
     const panel = await getPanelById(bundle.panelId);
     const hasOwnedClient = bundle.inbounds.some(i => i.clients.some(c => c.email === email && c.subId === subId));
     if (hasOwnedClient) {
+      if (!nativePanelId || bundle.panelId === tracked?.panelId) nativePanelId = bundle.panelId;
       if (!panel) return { ...empty, unavailable: true };
       try { links.push(...await readNativeSubscription(panel, subId)); }
       catch { return { ...empty, unavailable: true }; }
@@ -101,6 +104,7 @@ export async function getPortalData(subIdRaw: string, _requestHost: string): Pro
   return {
     found: true,
     subId,
+    subLink: nativePanelId ? await buildSubLink(subId, null, nativePanelId) : null,
     email,
     brandName: reseller?.brandName || reseller?.name || "PvNetWork",
     totalGB,

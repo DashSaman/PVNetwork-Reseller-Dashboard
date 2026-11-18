@@ -1001,7 +1001,7 @@ function UsersTab({
     if (!deleting) return;
     const r = await api<{ refundedGB?: number; pending?: boolean; message?: string }>(`/api/reseller/users/${encodeURIComponent(deleting.email)}`, { method: "DELETE" });
     if (r.ok) {
-      toast({ title: r.data?.pending ? 'درخواست حذف ثبت شد' : "کاربر حذف شد", description: r.data?.pending ? r.data.message : `${faNum(Math.round((r.data?.refundedGB || 0) * 100) / 100)} گیگ حجم مصرف‌نشده به موجودی شما برگشت. مصرف قبلی در حساب محفوظ ماند.` });
+      toast({ title: r.data?.pending ? 'درخواست حذف ثبت شد' : "کاربر حذف شد", description: r.data?.message || `${faNum(Math.round((r.data?.refundedGB || 0) * 100) / 100)} گیگ حجم مصرف‌نشده به موجودی شما برگشت. مصرف قبلی در حساب محفوظ ماند.` });
       void tools.reload();
       reload();
     } else {
@@ -1381,6 +1381,7 @@ function UsersTab({
                     مصرف قطعی (کاربران حذف/ریست‌شده): {faNum(Math.round(permissions.consumedGB * 100) / 100)} گیگ — به پول شما برنمی‌گردد
                   </div>
                 )}
+                {(permissions.forfeitedGB || 0) > 0 && <div className="text-[11px] text-muted-foreground">حجم حذف‌شدهٔ غیرقابل‌برگشت: {faNum(Math.round(permissions.forfeitedGB! * 100) / 100)} گیگ — جدا از مصرف واقعی</div>}
               </div>
             ) : (
               <div className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
@@ -1755,7 +1756,7 @@ function UsersTab({
               {linkData.subLink ? (
                 <div className="space-y-2">
                   <div className="text-sm font-bold flex items-center gap-1.5">
-                    <Link2 className="h-4 w-4 text-[var(--brand)]" /> لینک سابسکریپشن
+                    <Link2 className="h-4 w-4 text-[var(--brand)]" /> لینک اصلی سابسکریپشن
                   </div>
                   <code dir="ltr" className="block bg-muted rounded-lg px-2.5 py-2 font-mono text-[10px] break-all border border-border">
                     {linkData.subLink}
@@ -1769,7 +1770,7 @@ function UsersTab({
                     </Button>
                     {linkData.subId && (
                       <Button size="sm" variant="outline" title="صفحه اختصاصی کاربر — آمار و QR و دانلود اپ" onClick={() => window.open(`/s/${linkData.subId}`, "_blank")}>
-                        <UserCircle className="h-3.5 w-3.5" /> صفحه کاربر
+                        <UserCircle className="h-3.5 w-3.5" /> صفحه آمار کاربر
                       </Button>
                     )}
                     <Button
@@ -1859,6 +1860,7 @@ function UsersTab({
             <AlertDialogTitle>حذف کاربر {deleting?.name || deleting?.email}؟</AlertDialogTitle>
             <AlertDialogDescription>
               کاربر از همه لوکیشن‌های سامانه حذف می‌شود و دسترسی او قطع خواهد شد. این عمل قابل بازگشت نیست.
+              {' '}فقط حجم مصرف‌نشدهٔ حساب با بیش از ۷ روز اعتبار باقی‌مانده، پس از تأیید حذف کامل برمی‌گردد. حسابِ هفتهٔ آخر یا منقضی‌شده برگشت حجم ندارد.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

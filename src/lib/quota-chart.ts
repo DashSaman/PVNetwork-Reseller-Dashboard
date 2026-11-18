@@ -6,6 +6,7 @@ export type QuotaChartData = {
   soldButUnusedGB: number | null;
   consumedHistoricalGB: number;
   reservedGB: number;
+  forfeitedGB?: number;
   unlimitedUsers: number;
 };
 
@@ -19,6 +20,7 @@ export function quotaChartModel(data: QuotaChartData) {
     { label: "باقی‌مانده", value: amount(data.unsoldGB ?? 0), color: "#10b981" },
     { label: "مصرف تاریخی", value: amount(data.consumedHistoricalGB), color: "#94a3b8" },
     { label: "رزرو", value: amount(data.reservedGB), color: "#eab308" },
+    { label: "حذف غیرقابل‌برگشت", value: amount(data.forfeitedGB || 0), color: "#f43f5e" },
   ].filter(s => s.value > 0);
   const sales: Segment[] | null = data.soldButUnusedGB === null || data.actualUsedGB === null || !Number.isFinite(data.soldButUnusedGB) || !Number.isFinite(data.actualUsedGB) || data.unlimitedUsers > 0 ? null : [
     // Used current quota is nested inside sold quota, never added to it.

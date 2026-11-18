@@ -11,6 +11,8 @@ import type { NodeMutationState, NodeMutationProgress } from "./node-client-sync
 import type { Prisma } from '@prisma/client';
 import { operationInstallation } from './operation-installation';
 import { canCancelUnstartedOperation, canFinalizeAcknowledgedDeletion, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
+import { deletionRefundPolicy, deletionSettlement, readDeletionSettlement } from './deletion-refund';
+import { getForfeitedGB } from './deletion-refund-ledger';
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -52,27 +54,28 @@ export function validateRequestedUserQuota(
 }
 
 export type QuotaState = {
-  pool: number; allocated: number; consumed: number; reserved: number;
+  pool: number; allocated: number; consumed: number; reserved: number; forfeited: number;
   remaining: number; unlimited: boolean;
 };
 
 /**
  * وضعیت سهمیهٔ نماینده — تابع مرجع و واحد؛ همهٔ مسیرهای create/bulk/PUT/پل باید از همین استفاده کنند.
- * remaining = pool − allocated − reserved − consumed (رزروهای CREATE فعال لحاظ می‌شوند)
+ * remaining = pool − allocated − reserved − consumed − forfeited
  */
 export async function getQuotaState(resellerId: string, reseller?: { trafficPoolGB: number }): Promise<QuotaState> {
   const row = reseller ?? (await db.reseller.findUnique({ where: { id: resellerId }, select: { trafficPoolGB: true } }));
   const pool = row?.trafficPoolGB ?? 0;
   const { getAllocatedGB, getConsumedGB } = await import("./reseller-helpers");
-  const [allocated, consumed, reserved] = await Promise.all([
+  const [allocated, consumed, reserved, forfeited] = await Promise.all([
     getAllocatedGB(resellerId),
     getConsumedGB(resellerId),
     getActiveReservationsGB(resellerId),
+    getForfeitedGB(resellerId),
   ]);
   return {
-    pool, allocated, consumed, reserved,
+    pool, allocated, consumed, reserved, forfeited,
     unlimited: pool <= 0,
-    remaining: pool > 0 ? Math.max(0, pool - allocated - reserved - consumed) : 0,
+    remaining: pool > 0 ? Math.max(0, pool - allocated - reserved - consumed - forfeited) : 0,
   };
 }
 
@@ -183,7 +186,7 @@ function nodeProgress(journalId: string, panelId: string): NodeMutationProgress 
       const usage = Object.values(byPanel).reduce((a, b) => a + b, 0);
       if (row.type === "RESET" && !row.accountingCommitted) {
         const q = await getQuotaState(row.resellerId);
-        if (!q.unlimited && usage > q.pool - q.allocated - q.consumed - Math.max(0, q.reserved - row.reservedGB)) throw new Error("Insufficient pool for reset");
+        if (!q.unlimited && usage > q.pool - q.allocated - q.consumed - q.forfeited - Math.max(0, q.reserved - row.reservedGB)) throw new Error("Insufficient pool for reset");
       }
       await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...m, usageByPanel: byPanel }), usageSnapshotGB: usage, ...(row.type === "RESET" && !row.accountingCommitted ? { reservedGB: usage } : {}) } });
     },
@@ -253,7 +256,14 @@ async function executeAcrossPanels(
   return { failed, completed: [...completed] };
 }
 
-export type OpResult = { ok: true; debitedGB: number; refundedGB?: number; pending?: boolean; message?: string } | { ok: false; status: number; msg: string; partial?: boolean };
+export type OpResult = { ok: true; debitedGB: number; refundedGB?: number; forfeitedGB?: number; pending?: boolean; message?: string } | { ok: false; status: number; msg: string; partial?: boolean };
+
+function refundPolicyForPanels(panels: PanelBundle[], panelIds: string[], tracked: TrackedUser, at: number) {
+  return deletionRefundPolicy(panelIds.flatMap(id => {
+    const clients = panels.find(p => p.panelId === id)?.inbounds.flatMap(i => i.clients).filter(c => c.email === tracked.email && c.subId === tracked.subId) || [];
+    return clients.length ? clients.map(c => typeof c.expiryTime === 'number' ? c.expiryTime : null) : [null];
+  }), at);
+}
 
 async function prepareUsageLedger(journalId: string, panels: PanelBundle[], email: string): Promise<void> {
   const row = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
@@ -461,7 +471,7 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
           idempotencyKey: opKey("delete", tracked.id),
           resellerId, userId: tracked.id, email, type: "DELETE", status: "RUNNING",
           usageSnapshotGB: usageGB,
-          metadata: JSON.stringify({ explicitDestructive: true, operationInstallation: operationInstallation(true) }),
+          metadata: JSON.stringify({ explicitDestructive: true, operationInstallation: operationInstallation(true), deletionRefundPolicy: refundPolicyForPanels(snapshot.panels, req.panelIds, tracked, Date.now()) }),
           targetPanels: JSON.stringify(req.panelIds), completedPanels: "[]", failedPanels: "[]",
         },
       });await supersedeSavedPredecessors(tx, predecessors, next.id);return next; });
@@ -500,15 +510,26 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
     if (!absent.every(Boolean)) return waitingForTargets();
 
     usageGB = (await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } })).usageSnapshotGB || 0;
-    await commitJournalAccounting(journal.id, resellerId, usageGB);
-    // حذف محلی + بستن ژورنال در «یک» تراکنش (crash-safe)؛ اگر رکورد قبلاً حذف شده، فقط ژورنال بسته می‌شود
-    await db.$transaction(async (tx) => {
+    // Settle usage, non-refundable allocation, ownership removal and SUCCESS in
+    // one transaction. The committed journal is the sole forfeiture ledger.
+    const settlement = await db.$transaction(async (tx) => {
+      const current = await tx.operationJournal.findUniqueOrThrow({ where: { id: journal.id } });
+      const meta = updateMetadata(current.metadata);
+      // A legacy pending delete retains its originally accepted refund policy.
+      const policy = meta.deletionRefundPolicy as ReturnType<typeof deletionRefundPolicy> | undefined;
+      const saved = readDeletionSettlement(current.metadata);
+      const next = saved || deletionSettlement(policy || deletionRefundPolicy([0], current.createdAt.getTime()), tracked.trafficGB, usageGB);
+      if (!current.accountingCommitted) {
+        await tx.reseller.update({ where: { id: resellerId }, data: { consumedGB: { increment: usageGB } } });
+      }
       const stillThere = await tx.resellerUser.findUnique({ where: { id: tracked.id } });
       if (stillThere) await tx.resellerUser.delete({ where: { id: tracked.id } });
-      await tx.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
+      await tx.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", accountingCommitted: true, reservedGB: 0, completedPanels: JSON.stringify(completed), failedPanels: "[]", metadata: JSON.stringify({ ...meta, deletionSettlement: next }) } });
+      return next;
     });
-    await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "حذف کاربر", detail: `${email}${usageGB > 0 ? ` | مصرف قطعی: ${usageGB} گیگ` : ""}`, resellerId });
-    return { ok: true, debitedGB: usageGB, refundedGB: Math.max(0, tracked.trafficGB - usageGB) };
+    const message = settlement.forfeitedGB > 0 ? 'حجم مصرف‌نشده به‌دلیل ورود به هفتهٔ آخر اعتبار، انقضا یا نامشخص‌بودن تاریخ قابل برگشت نیست.' : undefined;
+    await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "حذف کاربر", detail: `${email} | مصرف قطعی: ${usageGB} گیگ | برگشت: ${settlement.refundedGB} گیگ | غیرقابل‌برگشت: ${settlement.forfeitedGB} گیگ (${settlement.reason})`, resellerId });
+    return { ok: true, debitedGB: usageGB, refundedGB: settlement.refundedGB, forfeitedGB: settlement.forfeitedGB, message };
   });
 }
 
@@ -541,7 +562,7 @@ export async function resetUserByJournal(resellerId: string, email: string, expe
 
     const quota = await getQuotaState(resellerId);
     const own = journal ? await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } }) : null;
-    if (!own?.accountingCommitted && !quota.unlimited && usageGB > quota.pool - quota.allocated - quota.consumed - Math.max(0, quota.reserved - (own?.reservedGB || 0))) {
+    if (!own?.accountingCommitted && !quota.unlimited && usageGB > quota.pool - quota.allocated - quota.consumed - quota.forfeited - Math.max(0, quota.reserved - (own?.reservedGB || 0))) {
       return { ok: false, status: 403, msg: "برای ریست ترافیک، موجودی آزاد کافی نیست؛ مصرف قبلی باید از پول نماینده پرداخت شود" };
     }
 
@@ -670,6 +691,9 @@ export async function updateUserByJournal(
     const live = await getAllPanelInboundsFresh();
     const readable = assertRequiredPanelsReadable(live, required.panelIds);
     if (!readable.ok) return { ok: false, status: 502, msg: readable.msg };
+    if (!existingJournal && desired.trafficGB < loaded.tracked.trafficGB && !refundPolicyForPanels(live.panels, required.panelIds, loaded.tracked, Date.now()).eligible) {
+      return { ok: false, status: 403, msg: 'کاهش سهمیه در هفتهٔ آخر اعتبار یا پس از انقضا مجاز نیست؛ حجم این حساب قابل برگشت به موجودی نیست' };
+    }
     let usedBytes = 0;
     for (const panelId of required.panelIds) {
       const conn = await getPanelConnection(panelId);
@@ -685,7 +709,7 @@ export async function updateUserByJournal(
     const delta = Math.max(0, desired.trafficGB - loaded.tracked.trafficGB);
     if (!quotaBefore.unlimited && delta > 0) {
       const reservedOthers = Math.max(0, quotaBefore.reserved - ownReserved);
-      const available = quotaBefore.pool - quotaBefore.allocated - reservedOthers - quotaBefore.consumed;
+      const available = quotaBefore.pool - quotaBefore.allocated - reservedOthers - quotaBefore.consumed - quotaBefore.forfeited;
       if (delta > available) {
         return { ok: false, status: 403, msg: `پول ترافیک برای این افزایش کافی نیست — باقیماندهٔ مؤثر: ${Math.round(available * 100) / 100} گیگ` };
       }

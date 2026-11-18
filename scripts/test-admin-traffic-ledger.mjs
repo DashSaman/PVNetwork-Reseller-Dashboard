@@ -24,6 +24,12 @@ const reseller = (id, trafficPoolGB, consumedGB = 0) => ({ id, username: id, nam
 const user = (resellerId, email, trafficGB, inboundIds, panelId = '') => ({ resellerId, email, trafficGB, inboundIds, panelId });
 const panel = (panelId, stats, ids = stats.map((_, i) => i + 1)) => ({ panelId, inbounds: stats.map((clientStats, i) => ({ id: ids[i], clientStats })) });
 
+test('forfeited unused allocation reduces available funds without becoming measured traffic',()=>{
+ const result=withCanonical({resellers:[{...reseller('r1',100,3),forfeitedGB:7}],users:[],reservations:[],snapshot:{ok:true,panels:[]}});
+ assert.equal(result.resellers[0].unsoldGB,90);assert.equal(result.totals.unsoldGB,90);
+ assert.equal(result.totals.consumedHistoricalGB,3);assert.equal(result.totals.actualUsedGB,0);assert.equal(result.totals.forfeitedGB,7);
+});
+
 test('deduplicates inbound copies per panel, sums distinct target panels, and accounts reserves', () => {
   const result = withCanonical({
     resellers: [reseller('r1', 30, 1.5)],

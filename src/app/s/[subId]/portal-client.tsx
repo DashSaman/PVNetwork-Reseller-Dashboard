@@ -50,7 +50,7 @@ export function PortalClient({ data }: { data: PortalData }) {
     );
   }
 
-  const subUrl = typeof window !== "undefined" ? window.location.href : "";
+  const subUrl = data.subLink || '';
 
   function copy(text: string, label: string) {
     navigator.clipboard.writeText(text).then(() => {

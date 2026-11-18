@@ -28,7 +28,7 @@ class RestoreTests(unittest.TestCase):
         with closing(sqlite3.connect(self.template)) as c, c:
             for table in ['AdminUser', 'Reseller', 'ResellerUser', 'ResellerInbound', 'PanelConfig', 'OperationJournal', 'Setting', 'ActivityLog']:
                 c.execute(f'CREATE TABLE {table}(id TEXT PRIMARY KEY, value TEXT)')
-            for table, cols in [('AdminUser',['totpSecret']),('Reseller',['totpSecret','tgBotToken','mirzaBotToken']),('PanelConfig',['password','apiToken']),('Setting',['key'])]:
+            for table, cols in [('AdminUser',['totpSecret']),('Reseller',['totpSecret','tgBotToken','mirzaBotToken']),('PanelConfig',['password','apiToken']),('Setting',['key']),('OperationJournal',['metadata'])]:
                 for col in cols: c.execute(f'ALTER TABLE {table} ADD COLUMN {col} TEXT')
         self.source = self.root / 'source.db'; self.source.write_bytes(self.template.read_bytes())
         with closing(sqlite3.connect(self.source)) as c, c:
@@ -95,6 +95,17 @@ class RestoreTests(unittest.TestCase):
         self.assertTrue((self.data / '.restore/pending.json').exists())
         restore.apply_pending(self.data, self.template, 'target-secret')
         self.assertEqual((self.data / '.app-secret').read_text(), 'source-secret')
+    def test_completed_deletion_refund_and_forfeiture_ledger_survives_backup_restore(self):
+        value = json.dumps({'deletionSettlement': {'version':1, 'allocatedGB':10, 'usedGB':3, 'refundedGB':0, 'forfeitedGB':7, 'reason':'final-week'}})
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute('INSERT INTO OperationJournal(id,value,metadata) VALUES(?,?,?)', ('settled-delete','SUCCESS-accountingCommitted',value))
+        directory = self.root / 'financial-archive'
+        out = backup.create_archive(self.source, directory, 'source-secret', [])
+        self.archive = directory / out['name']
+        stage, _ = self.stage(); self.queue(stage)
+        restore.apply_pending(self.data, self.template, 'target-secret')
+        with closing(sqlite3.connect(self.data / 'custom.db')) as c:
+            self.assertEqual(c.execute('SELECT value,metadata FROM OperationJournal WHERE id=?', ('settled-delete',)).fetchone(), ('SUCCESS-accountingCommitted',value))
     def test_tampered_stage_cannot_install(self):
         stage, _ = self.stage(); self.queue(stage)
         (stage / 'archive.zip').write_bytes(b'broken')
