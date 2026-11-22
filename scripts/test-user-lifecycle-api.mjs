@@ -69,6 +69,10 @@ try{
    try{const context=await browser.newContext({viewport:{width:390,height:844}});await context.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{window.__copiedNative=value}}}));const page=await context.newPage();await page.goto(base+'/s/'+c.subId);await page.waitForLoadState('networkidle');
     await page.getByRole('button',{name:'کپی',exact:true}).first().click();const copied=await page.evaluate(()=>window.__copiedNative);
     check('mobile portal Copy writes native X-UI URL rather than the dashboard page address',()=>assert.equal(copied,native+'/sub/'+c.subId));
+    const v2box=await page.getByRole('link',{name:'افزودن با نام در V2Box',exact:true}).getAttribute('href',{timeout:4000}).catch(()=>null);
+    check('mobile portal opens V2Box with the original URL and an Android-compatible subscription name',()=>{
+     assert.equal(v2box,'v2box://install-sub?url='+encodeURIComponent(copied)+'#'+encodeURIComponent(c.email));
+    });
     await page.getByRole('button',{name:'نمایش QR',exact:true}).first().click();await page.locator('svg[height="200"][width="200"]').first().waitFor();
     await page.screenshot({path:path.join(dir,'native-subscription-mobile.png'),fullPage:true});
     check('mobile portal displays the native link and opens its QR',()=>assert.equal(copied,portal.subLink));

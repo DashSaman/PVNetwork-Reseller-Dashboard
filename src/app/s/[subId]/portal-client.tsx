@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import QRCode from "react-qr-code";
 import { PvLogo, faNum } from "@/components/panel/shared";
 import type { PortalData } from "@/lib/user-portal";
+import { buildV2BoxSubscriptionLink } from "@/lib/v2box-subscription";
 import {
   Link2,
   Copy,
@@ -51,6 +52,7 @@ export function PortalClient({ data }: { data: PortalData }) {
   }
 
   const subUrl = data.subLink || '';
+  const v2boxLink = buildV2BoxSubscriptionLink(data.subLink, data.email);
 
   function copy(text: string, label: string) {
     navigator.clipboard.writeText(text).then(() => {
@@ -153,6 +155,11 @@ export function PortalClient({ data }: { data: PortalData }) {
               {subUrl}
             </code>
             <div className="flex flex-wrap gap-2">
+              {v2boxLink && (
+                <Button size="sm" variant="outline" asChild>
+                  <a href={v2boxLink}><Smartphone className="h-3.5 w-3.5" /> افزودن با نام در V2Box</a>
+                </Button>
+              )}
               <Button size="sm" variant="outline" onClick={() => copy(subUrl, "sub")}>
                 {copied === subUrl ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />} کپی
               </Button>
@@ -160,6 +167,11 @@ export function PortalClient({ data }: { data: PortalData }) {
                 <QrCode className="h-3.5 w-3.5" /> نمایش QR
               </Button>
             </div>
+            {v2boxLink && (
+              <p className="text-xs text-muted-foreground leading-5">
+                اگر اشتراک قبلاً در V2Box اضافه شده، از منوی همان اشتراک نام آن را به نام کاربر تغییر دهید.
+              </p>
+            )}
             {qr === "sub" && (
               <div className="flex justify-center p-3 bg-card rounded-xl border border-border">
                 <QRCode value={subUrl} size={200} />

@@ -25,6 +25,7 @@ import { CustomerToolsBar, CustomerRowTools, useCustomerMetadata } from "./custo
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 import { MirzaSetupGuide } from './mirza-setup-guide';
 import { getCreateAttempt, finishCreateAttempt } from '@/lib/create-attempt';
+import { buildV2BoxSubscriptionLink } from '@/lib/v2box-subscription';
 import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 import type { InboundInfo, ResellerPermissions, ResellerUserRow, Session, InboundRefForm } from "./types";
 import {
@@ -764,6 +765,7 @@ function UsersTab({
   const [linksUser, setLinksUser] = useState<{ email: string; name: string | null } | null>(null);
   const [regenLoading, setRegenLoading] = useState(false);
   const [linkData, setLinkData] = useState<UserLinkData | null>(null);
+  const v2boxLink = buildV2BoxSubscriptionLink(linkData?.subLink, linkData?.email);
   const [linksLoading, setLinksLoading] = useState(false);
   const [qrLink, setQrLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1768,6 +1770,11 @@ function UsersTab({
                     <Button size="sm" variant="outline" onClick={() => setQrLink(qrLink === linkData.subLink ? null : linkData.subLink!)}>
                       <QrCode className="h-3.5 w-3.5" /> QR
                     </Button>
+                    {v2boxLink && (
+                      <Button size="sm" variant="outline" asChild>
+                        <a href={v2boxLink}>افزودن با نام در V2Box</a>
+                      </Button>
+                    )}
                     {linkData.subId && (
                       <Button size="sm" variant="outline" title="صفحه اختصاصی کاربر — آمار و QR و دانلود اپ" onClick={() => window.open(`/s/${linkData.subId}`, "_blank")}>
                         <UserCircle className="h-3.5 w-3.5" /> صفحه آمار کاربر
@@ -1785,7 +1792,7 @@ function UsersTab({
                     </Button>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-5">
-                    این لینک را در اپ کاربر (V2RayNG / v2box / Streisand) وارد کنید — همه لوکیشن‌ها خودکار اضافه می‌شوند و به‌روزرسانی هم خودکار است.
+                    برای ارسال گزینهٔ «افزودن با نام در V2Box» به مشتری، صفحهٔ آمار کاربر را بفرستید.
                   </p>
                   {qrLink === linkData.subLink && (
                     <div className="flex justify-center p-3 bg-card rounded-xl border border-border">
