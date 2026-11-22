@@ -64,6 +64,15 @@ try{
   check('public customer portal supplies the exact native subscription URL instead of its own page URL',()=>{assert.equal(response.status,200);assert.equal(portal.subLink,native+'/sub/'+c.subId)});
   const ownLinks=await api(r,'/api/reseller/users/'+c.email+'/links');
   check('authenticated link delivery keeps the same native subscription origin',()=>{assert.equal(ownLinks.status,200);assert.equal(ownLinks.data.subLink,native+'/sub/'+c.subId)});
+  const launch=await fetch(base+'/s/'+c.subId+'/v2box?url=https://untrusted.example/&name=attacker');
+  const launchHtml=await launch.text();
+  check('Mirza HTTPS launcher resolves the original URL and username only from the tracked subscription',()=>{
+   assert.equal(launch.status,200);assert.match(launch.headers.get('cache-control'),/no-store/);
+   assert.ok(launchHtml.includes('href="v2box://install-sub?url='+encodeURIComponent(portal.subLink)+'#'+encodeURIComponent(c.email)+'"'));
+   assert.ok(!launchHtml.includes('untrusted.example'));assert.ok(!launchHtml.includes('attacker'));
+  });
+  const unknown=await fetch(base+'/s/nonexistent-fixture/v2box');
+  check('Mirza HTTPS launcher rejects missing subscriptions',()=>assert.equal(unknown.status,404));
   if(process.env.PLAYWRIGHT_MODULE){
    const {pathToFileURL}=await import('node:url'),{chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE)),browser=await chromium.launch({headless:true,channel:'chrome'});
    try{const context=await browser.newContext({viewport:{width:390,height:844}});await context.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{window.__copiedNative=value}}}));const page=await context.newPage();await page.goto(base+'/s/'+c.subId);await page.waitForLoadState('networkidle');
