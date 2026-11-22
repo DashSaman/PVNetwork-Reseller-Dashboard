@@ -9,7 +9,7 @@ import { api, PvLogo } from "./shared";
 import { ThemeToggle } from "./theme";
 import type { Session } from "./types";
 
-export function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
+export function LoginView({ onLogin, notice = "" }: { onLogin: (s: Session) => void; notice?: string }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
@@ -44,8 +44,9 @@ export function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
       setError("");
       return;
     }
-    const me = await api<{ user: Session | null }>("/api/auth/me");
+    const me = await api<{ user: Session | null; notice?: string }>("/api/auth/me");
     if (me.ok && me.data?.user) onLogin(me.data.user);
+    else if (me.data?.notice) setError(me.data.notice);
   }
 
   return (
@@ -161,8 +162,8 @@ export function LoginView({ onLogin }: { onLogin: (s: Session) => void }) {
                 </button>
               </div>
             </div>
-            {error && (
-              <p className="text-sm tone-danger border rounded-md px-3 py-2">{error}</p>
+            {(error || notice) && (
+              <p role="alert" className="text-sm tone-danger border rounded-md px-3 py-2">{error || notice}</p>
             )}
             {need2fa && (
               <div className="space-y-2 rounded-xl border border-[var(--brand)]/30 bg-[var(--brand-soft)] p-3">

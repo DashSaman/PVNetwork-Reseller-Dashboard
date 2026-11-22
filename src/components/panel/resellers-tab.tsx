@@ -23,7 +23,7 @@ import { toast } from "@/hooks/use-toast";
 import { api, StatusBadge, Spinner, gbLabel, faNum, PasswordInput, NumberInput, parseNumberInput } from "./shared";
 import type { InboundInfo, ResellerInfo, InboundRefForm } from "./types";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
-import { UserCog, Plus, Pencil, Trash2, KeyRound, Loader2, Globe, BadgeCheck, Server, ShieldOff } from "lucide-react";
+import { UserCog, Plus, Pencil, Trash2, Loader2, Globe, BadgeCheck, Server, ShieldOff } from "lucide-react";
 import type { AdminTrafficLedger } from "@/lib/admin-traffic-ledger";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 
@@ -73,6 +73,7 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
   const [editing, setEditing] = useState<ResellerInfo | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [changingStatus, setChangingStatus] = useState<string | null>(null);
   const [disabling2fa, setDisabling2fa] = useState(false);
   const [deleting, setDeleting] = useState<ResellerInfo | null>(null);
   const [extending, setExtending] = useState<ResellerInfo | null>(null);
@@ -186,9 +187,16 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
   }
 
   async function toggleActive(r: ResellerInfo) {
-    const res = await api(`/api/admin/resellers/${r.id}`, { method: "PUT", body: JSON.stringify({ active: !r.active }) });
-    if (res.ok) void load();
-    else toast({ title: "خطا", description: res.error, variant: "destructive" });
+    setChangingStatus(r.id);
+    const active = !r.active;
+    const res = await api(`/api/admin/resellers/${r.id}`, { method: "PUT", body: JSON.stringify({ active }) });
+    if (res.ok) {
+      setResellers((rows) => rows.map((row) => row.id === r.id ? { ...row, active } : row));
+      toast({ title: active ? "نماینده فعال شد" : "نماینده غیرفعال شد", description: r.username });
+    } else {
+      toast({ title: "تغییر وضعیت انجام نشد", description: res.error, variant: "destructive" });
+    }
+    setChangingStatus(null);
   }
 
   const grouped = groupByPanel(inbounds);
@@ -271,6 +279,17 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                               </Badge>
                             )}
                           </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-2"
+                            aria-label={r.active ? `غیرفعال کردن نماینده ${r.username}` : `فعال کردن نماینده ${r.username}`}
+                            disabled={changingStatus !== null}
+                            onClick={() => void toggleActive(r)}
+                          >
+                            {changingStatus === r.id && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                            {r.active ? "غیرفعال کردن" : "فعال کردن"}
+                          </Button>
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
                           <div className="flex flex-wrap gap-1 max-w-64">
@@ -368,14 +387,11 @@ export function ResellersTab({ inbounds, panelConnected }: { inbounds: InboundIn
                         </TableCell>
                         <TableCell className="text-left">
                           <div className="flex items-center gap-1 justify-start" dir="ltr">
-                            <Button size="icon" variant="ghost" title="ویرایش" onClick={() => openEdit(r)}>
+                            <Button size="icon" variant="ghost" title="ویرایش" disabled={changingStatus === r.id} onClick={() => openEdit(r)}>
                               <Pencil className="h-4 w-4" />
                             </Button>
                             <Button size="sm" variant="outline" onClick={() => setExtending(r)}>
                               افزایش گروهی
-                            </Button>
-                            <Button size="icon" variant="ghost" title={r.active ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleActive(r)}>
-                              <KeyRound className={`h-4 w-4 ${r.active ? "text-[var(--brand)]" : "text-red-400"}`} />
                             </Button>
                             <Button size="icon" variant="ghost" title="حذف" aria-label={`حذف نماینده ${r.username}`} onClick={() => setDeleting(r)}>
                               <Trash2 className="h-4 w-4 text-red-400" />

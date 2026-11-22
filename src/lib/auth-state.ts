@@ -4,6 +4,7 @@ import { accountSessionVersion, verifySession, type SessionPayload, type Session
 import { isAdminManagedReseller } from "./reseller-ownership";
 
 export const SESSION_REVOCATION_PREFIX = "sessionRevoked:";
+export const RESELLER_DISABLED_NOTICE = "حساب نمایندگی شما غیرفعال است. برای فعال‌سازی دوباره به پشتیبانی پیام بدهید.";
 export const isSessionRevocationKey = (key: string) => /^sessionRevoked:[a-f0-9]{64}$/.test(key);
 const revokedKey = (token: string) => SESSION_REVOCATION_PREFIX + createHash("sha256").update(token).digest("hex");
 
@@ -13,23 +14,31 @@ export function matchesAccountSession(payload: SessionPayload, account: SessionA
   return timingSafeEqual(Buffer.from(payload.ver!), Buffer.from(expected));
 }
 
-export async function validateAccountToken(token: string | undefined, audience: "dashboard" | "bridge"): Promise<SessionPayload | null> {
+export async function inspectAccountToken(token: string | undefined, audience: "dashboard" | "bridge") {
   const payload = verifySession(token);
   if (!payload || payload.aud !== audience) return null;
   const account = payload.role === "ADMIN"
     ? await db.adminUser.findUnique({ where: { id: payload.uid } })
     : await db.reseller.findUnique({ where: { id: payload.uid } });
-  if (!account || "active" in account && !account.active || !matchesAccountSession(payload, account, audience)) return null;
-  if (payload.role === "RESELLER" && await isAdminManagedReseller(account.id)) return null;
+  if (!account || !matchesAccountSession(payload, account, audience)) return null;
+  const resellerDisabled = payload.role === "RESELLER"
+    && (("active" in account && !account.active) || await isAdminManagedReseller(account.id));
+  if (resellerDisabled && audience === "bridge") return null;
   if (audience === "bridge" && (payload.role !== "RESELLER" || !("mirzaEnabled" in account) || !account.mirzaEnabled)) return null;
   if (await db.setting.findUnique({ where: { key: revokedKey(token!) }, select: { key: true } })) return null;
-  return payload;
+  return { payload, resellerDisabled };
+}
+
+export async function validateAccountToken(token: string | undefined, audience: "dashboard" | "bridge"): Promise<SessionPayload | null> {
+  const accountToken = await inspectAccountToken(token, audience);
+  return accountToken && !accountToken.resellerDisabled ? accountToken.payload : null;
 }
 
 /** Revokes this cookie server-side; storing only its hash never discloses a token. */
 export async function revokeDashboardToken(token: string | undefined): Promise<void> {
-  const payload = await validateAccountToken(token, "dashboard");
-  if (!payload) return;
+  const accountToken = await inspectAccountToken(token, "dashboard");
+  if (!accountToken) return;
+  const { payload } = accountToken;
   await db.setting.upsert({ where: { key: revokedKey(token!) }, create: { key: revokedKey(token!), value: String(payload.exp) }, update: { value: String(payload.exp) } });
   await db.setting.deleteMany({ where: { key: { startsWith: SESSION_REVOCATION_PREFIX }, value: { lt: String(Date.now()) } } });
 }

@@ -28,6 +28,7 @@ function ViewSpinner() {
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
+  const [loginNotice, setLoginNotice] = useState("");
   const [checking, setChecking] = useState(true);
   const inFlight = useRef(false);
   const sessionVersion = useRef(0);
@@ -36,8 +37,11 @@ export default function Home() {
     if (inFlight.current) return;
     inFlight.current = true;
     const version = sessionVersion.current;
-    const r = await api<{ user: Session | null }>("/api/auth/me", { cache: "no-store" });
-    if (version === sessionVersion.current && r.ok && r.data) setSession(r.data.user);
+    const r = await api<{ user: Session | null; notice?: string }>("/api/auth/me", { cache: "no-store" });
+    if (version === sessionVersion.current && r.ok && r.data) {
+      setSession(r.data.user);
+      setLoginNotice(r.data.notice ?? "");
+    }
     inFlight.current = false;
     setChecking(false);
   }, []);
@@ -58,6 +62,7 @@ export default function Home() {
   const changeSession = (next: Session | null) => {
     sessionVersion.current++;
     setSession(next);
+    setLoginNotice("");
   };
 
   if (checking) {
@@ -71,7 +76,7 @@ export default function Home() {
   }
 
   if (!session) {
-    return <LoginView onLogin={changeSession} />;
+    return <LoginView onLogin={changeSession} notice={loginNotice} />;
   }
 
   if (session.role === "ADMIN") {

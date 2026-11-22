@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import type { SessionPayload } from "./crypto";
-import { validateAccountToken } from "./auth-state";
+import { inspectAccountToken } from "./auth-state";
 
 export const SESSION_COOKIE = "rp_session";
 const SESSION_TTL = 1000 * 60 * 60 * 12; // ۱۲ ساعت
@@ -22,9 +22,14 @@ export function setDashboardSessionCookie(res: import("next/server").NextRespons
   });
 }
 
-export async function getSession(): Promise<SessionPayload | null> {
+export async function inspectDashboardSession() {
   const store = await cookies();
-  return validateAccountToken(store.get(SESSION_COOKIE)?.value, "dashboard");
+  return inspectAccountToken(store.get(SESSION_COOKIE)?.value, "dashboard");
+}
+
+export async function getSession(): Promise<SessionPayload | null> {
+  const accountToken = await inspectDashboardSession();
+  return accountToken && !accountToken.resellerDisabled ? accountToken.payload : null;
 }
 
 export async function requireAdmin(): Promise<SessionPayload | null> {
