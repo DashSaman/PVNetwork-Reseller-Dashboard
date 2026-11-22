@@ -4,19 +4,20 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ShieldCheck, Loader2, Eye, EyeOff, Gauge, Users, Globe } from "lucide-react";
+import { ShieldCheck, Loader2, Eye, EyeOff, Gauge, Users, Globe, Send } from "lucide-react";
 import { api, PvLogo } from "./shared";
 import { ThemeToggle } from "./theme";
-import type { Session } from "./types";
+import type { DashboardSessionResponse, LoginNotice, Session } from "./types";
 
-export function LoginView({ onLogin, notice = "" }: { onLogin: (s: Session) => void; notice?: string }) {
+export function LoginView({ onLogin, notice }: { onLogin: (s: Session) => void; notice?: LoginNotice }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [need2fa, setNeed2fa] = useState(false);
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [feedback, setFeedback] = useState<LoginNotice | null>();
+  const visibleNotice = feedback === undefined ? notice : feedback;
   const [brand, setBrand] = useState("PvNetWork");
 
   useEffect(() => {
@@ -27,26 +28,25 @@ export function LoginView({ onLogin, notice = "" }: { onLogin: (s: Session) => v
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
+    setFeedback(null);
     setLoading(true);
-    const r = await api<{ role: "ADMIN" | "RESELLER"; username: string; need2fa?: boolean; error?: string }>("/api/auth/login", {
+    const r = await api<{ need2fa?: boolean }, { need2fa?: boolean; supportUrl?: string }>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password, totpCode: totpCode || undefined }),
     });
     setLoading(false);
     if (!r.ok || !r.data) {
-      setError(r.error || "ورود ناموفق بود");
-      if (r.data?.need2fa || (r.error || "").includes("دومرحله")) setNeed2fa(true);
+      setFeedback({ message: r.error || "ورود ناموفق بود", supportUrl: r.errorData?.supportUrl });
+      if (r.errorData?.need2fa || (r.error || "").includes("دومرحله")) setNeed2fa(true);
       return;
     }
     if (r.data.need2fa) {
       setNeed2fa(true);
-      setError("");
       return;
     }
-    const me = await api<{ user: Session | null; notice?: string }>("/api/auth/me");
+    const me = await api<DashboardSessionResponse>("/api/auth/me");
     if (me.ok && me.data?.user) onLogin(me.data.user);
-    else if (me.data?.notice) setError(me.data.notice);
+    else if (me.data?.notice) setFeedback({ message: me.data.notice, supportUrl: me.data.supportUrl });
   }
 
   return (
@@ -162,8 +162,18 @@ export function LoginView({ onLogin, notice = "" }: { onLogin: (s: Session) => v
                 </button>
               </div>
             </div>
-            {(error || notice) && (
-              <p role="alert" className="text-sm tone-danger border rounded-md px-3 py-2">{error || notice}</p>
+            {visibleNotice && (
+              <div className="tone-danger border rounded-md px-3 py-2 space-y-2">
+                <p role="alert" className="text-sm">{visibleNotice.message}</p>
+                {visibleNotice.supportUrl && (
+                  <Button asChild size="sm" variant="outline">
+                    <a href={visibleNotice.supportUrl} target="_blank" rel="noopener noreferrer">
+                      <Send aria-hidden="true" />
+                      پیام به پشتیبانی
+                    </a>
+                  </Button>
+                )}
+              </div>
             )}
             {need2fa && (
               <div className="space-y-2 rounded-xl border border-[var(--brand)]/30 bg-[var(--brand-soft)] p-3">

@@ -1,7 +1,7 @@
 /** Session rejection is distinct from an upstream service failure. */
 export const SESSION_RECHECK_EVENT = "pvnetwork:session-recheck";
 
-export async function api<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; data?: T; error?: string; status?: number }> {
+export async function api<T, E = unknown>(url: string, init?: RequestInit): Promise<{ ok: boolean; data?: T; error?: string; errorData?: E; status?: number }> {
   try {
     const res = await fetch(url, {
       ...init,
@@ -14,7 +14,7 @@ export async function api<T>(url: string, init?: RequestInit): Promise<{ ok: boo
       if (res.status === 401 && /^\/api\/(admin|reseller)(\/|\?)/.test(url) && typeof window !== "undefined") {
         window.dispatchEvent(new Event(SESSION_RECHECK_EVENT));
       }
-      return { ok: false, status: res.status, error: (json as { error?: string }).error || "خطای نامشخص" };
+      return { ok: false, status: res.status, error: (json as { error?: string }).error || "خطای نامشخص", errorData: json as E };
     }
     return { ok: true, status: res.status, data: json as T };
   } catch (e) {

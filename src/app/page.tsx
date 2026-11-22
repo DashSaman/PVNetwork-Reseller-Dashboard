@@ -5,7 +5,7 @@ import { SESSION_RECHECK_EVENT } from "@/lib/browser-api";
 import dynamic from "next/dynamic";
 import { LoginView } from "@/components/panel/login-view";
 import { api, PvLogo, Spinner } from "@/components/panel/shared";
-import type { Session } from "@/components/panel/types";
+import type { DashboardSessionResponse, LoginNotice, Session } from "@/components/panel/types";
 
 // داشبوردها (نمودارها و کتابخانه‌های سنگین) جدا از صفحه ورود لود می‌شوند — کاهش چشمگیر لود اول
 const AdminView = dynamic(
@@ -28,7 +28,7 @@ function ViewSpinner() {
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
-  const [loginNotice, setLoginNotice] = useState("");
+  const [loginNotice, setLoginNotice] = useState<LoginNotice>();
   const [checking, setChecking] = useState(true);
   const inFlight = useRef(false);
   const sessionVersion = useRef(0);
@@ -37,10 +37,10 @@ export default function Home() {
     if (inFlight.current) return;
     inFlight.current = true;
     const version = sessionVersion.current;
-    const r = await api<{ user: Session | null; notice?: string }>("/api/auth/me", { cache: "no-store" });
+    const r = await api<DashboardSessionResponse>("/api/auth/me", { cache: "no-store" });
     if (version === sessionVersion.current && r.ok && r.data) {
       setSession(r.data.user);
-      setLoginNotice(r.data.notice ?? "");
+      setLoginNotice(r.data.notice ? { message: r.data.notice, supportUrl: r.data.supportUrl } : undefined);
     }
     inFlight.current = false;
     setChecking(false);
@@ -62,7 +62,7 @@ export default function Home() {
   const changeSession = (next: Session | null) => {
     sessionVersion.current++;
     setSession(next);
-    setLoginNotice("");
+    setLoginNotice(undefined);
   };
 
   if (checking) {

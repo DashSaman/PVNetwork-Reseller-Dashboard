@@ -1,5 +1,8 @@
 export type Session = { role: "ADMIN" | "RESELLER"; username: string; uid: string };
 
+export type DashboardSessionResponse = { user: Session | null; notice?: string; supportUrl?: string };
+export type LoginNotice = { message: string; supportUrl?: string };
+
 export type InboundInfo = {
   inboundId: number;
   panelId: string;

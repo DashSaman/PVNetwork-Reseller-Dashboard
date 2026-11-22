@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { verifyPassword, signAccountSession, decryptSecret, type SessionAccount } from "@/lib/crypto";
 import { SESSION_COOKIE, sessionExpiry, setDashboardSessionCookie } from "@/lib/session";
 import { RESELLER_DISABLED_NOTICE } from "@/lib/auth-state";
+import { getSupportContact } from "@/lib/support-contact";
 import { verifyTotp } from "@/lib/totp";
 import { logActivity } from "@/lib/logger";
 import { isBlocked, recordFailure, clearFailures, clientIp, LIMITS } from "@/lib/rate-limit";
@@ -134,7 +135,11 @@ export async function POST(req: NextRequest) {
     }
     if (reseller && verifyPassword(password, reseller.password)) {
       if (!reseller.active || await (await import("@/lib/reseller-ownership")).isAdminManagedReseller(reseller.id)) {
-        return NextResponse.json({ error: RESELLER_DISABLED_NOTICE }, { status: 403 });
+        const { url: supportUrl } = await getSupportContact();
+        return NextResponse.json({ error: RESELLER_DISABLED_NOTICE, supportUrl }, {
+          status: 403,
+          headers: { "Cache-Control": "private, no-store" },
+        });
       }
       const gate = totpGate(!!reseller.totpEnabled, reseller.totpSecret, "ورود نماینده", {
         actorType: "RESELLER",

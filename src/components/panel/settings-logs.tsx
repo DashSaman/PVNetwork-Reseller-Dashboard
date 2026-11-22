@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api, Spinner, faDate, faNum, PasswordInput, PvLogo } from "./shared";
+import { SupportContactSettings } from "./support-contact-settings";
 import type { ActivityLogRow, PanelInfo } from "./types";
 import {
   Plug,
@@ -252,6 +253,8 @@ export function PanelSettingsTab() {
           </div>
         </CardContent>
       </Card>
+
+      <SupportContactSettings />
 
       {/* پنل‌های متصل */}
       <Card className="bg-card card-soft">
