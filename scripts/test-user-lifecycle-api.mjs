@@ -30,7 +30,7 @@ try{
   else if(url==='/panel/api/server/status')obj={xray:{state:'running'}};
   else if(url==='/panel/api/clients/add'){nativeAdds++;const v=body.client;clients.set(key(p,v.email),{...v,totalGB:mode.get('bad-create-record')?v.totalGB+GB:v.totalGB,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){nativeAttaches++;const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
-  else if(url.startsWith('/panel/api/clients/update/')){if(c){if(!m.dropUpdate)Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true}}else{success=false;msg='client not found'}}
+  else if(url.startsWith('/panel/api/clients/update/')){if(c){if(!m.dropUpdate)Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true};if(m.useAfterUpdate!==undefined)c.used=m.useAfterUpdate}else{success=false;msg='client not found'}}
   else if(url.startsWith('/panel/api/clients/del/')){nativeDeletes++;if(m.deleteAckOnly){}else if(m.badMissing){success=false;msg='API route not found'}else if(m.failB&&p==='b'){success=false;msg='temporarily unavailable'}else clients.delete(key(p,email));if(m.dirtyAfterDelete)mode.set('node-pending',true);}
   else if(url.startsWith('/panel/api/clients/resetTraffic/')){if(c){if(!m.resetAckOnly)c.used=0;m.resets=(m.resets||0)+1;if(m.dirtyAfterReset){mode.set('node-pending',true);setTimeout(()=>mode.delete('node-pending'),750)}if(m.loseResetResponse){m.loseResetResponse=false;success=false;msg='connection closed after reset'}}}
   else if(url==='/panel/api/clients/onlines')obj=[];
@@ -87,10 +87,58 @@ try{
     check('mobile portal displays the native link and opens its QR',()=>assert.equal(copied,portal.subLink));
    }finally{await browser.close()}
   }
-  const locked=await owner('late-reduction',10),lockedClient=await seed(locked,'late-reduction',1);lockedClient.expiryTime=Date.now()+86400000;
-  let result=await api(locked,'/api/reseller/users/late-reduction','PUT',{trafficGB:2});
-  check('quota reduction cannot bypass the final-week deletion refund rule',()=>{assert.equal(result.status,403);assert.equal(lockedClient.totalGB,10*GB)});
-  result=await api(locked,'/api/reseller/users/late-reduction','DELETE');
+  async function seedTwenty(name,used,expiryTime) {
+   const reseller=await owner(name,20),client=await seed(reseller,name,used);
+   client.expiryTime=expiryTime;client.totalGB=20*GB;
+   await db.resellerUser.update({where:{resellerId_email:{resellerId:reseller.id,email:name}},data:{trafficGB:20}});
+   return {reseller,client,path:'/api/reseller/users/'+name};
+  }
+  const late=await seedTwenty('late-reduction',4,Date.now()+86400000);
+  const originalExpiry=late.client.expiryTime,originalSubId=late.client.subId;
+  let result=await api(late.reseller,late.path,'PUT',{trafficGB:10});
+  let balance=await api(late.reseller,'/api/reseller/bootstrap');
+  check('20 to 10 GB in the final week releases exactly 10 unused GB and preserves usage and identity',()=>{
+   assert.equal(result.status,200,JSON.stringify(result.data));assert.equal(result.data.refundedGB,10);
+   assert.equal(balance.data.permissions.remainingGB,10);assert.equal(late.client.totalGB,10*GB);assert.equal(late.client.used,4*GB);
+   assert.equal(late.client.expiryTime,originalExpiry);assert.equal(late.client.subId,originalSubId);
+  });
+  result=await api(late.reseller,late.path,'PUT',{trafficGB:10});
+  balance=await api(late.reseller,'/api/reseller/bootstrap');
+  check('repeating the same reduction returns no extra quota',()=>{assert.equal(result.status,200);assert.equal(result.data.refundedGB,0);assert.equal(balance.data.permissions.remainingGB,10)});
+  result=await api(late.reseller,late.path,'DELETE');
+  balance=await api(late.reseller,'/api/reseller/bootstrap');
+  check('deleting a reduced final-week account adds no further refund and records consumed traffic',()=>{
+   assert.equal(result.status,200);assert.equal(result.data.refundedGB,0);assert.equal(result.data.debitedGB,4);assert.equal(result.data.forfeitedGB,6);
+   assert.equal(balance.data.permissions.remainingGB,10);
+  });
+  const over=await seedTwenty('consumed-reduction',12,Date.now()+30*86400000);
+  result=await api(over.reseller,over.path,'PUT',{trafficGB:10});
+  balance=await api(over.reseller,'/api/reseller/bootstrap');
+  check('cut beyond the usable balance explains the limit and neither updates nor refunds',()=>{
+   assert.equal(result.status,403);assert.match(result.data.error,/بیشتر از حجم قابل‌کسر/);assert.match(result.data.error,/۸ گیگ/);
+   assert.equal(over.client.totalGB,20*GB);assert.equal(over.client.used,12*GB);assert.equal(balance.data.permissions.remainingGB,0);
+  });
+  const exact=await seedTwenty('exact-reduction',10,Date.now()+30*86400000);
+  result=await api(exact.reseller,exact.path,'PUT',{trafficGB:10});
+  check('exact consumed-volume boundary is allowed without resetting usage',()=>{assert.equal(result.status,200);assert.equal(result.data.refundedGB,10);assert.equal(exact.client.used,10*GB)});
+  const oneByteOver=await seedTwenty('byte-over-reduction',10+1/GB,Date.now()+30*86400000);
+  result=await api(oneByteOver.reseller,oneByteOver.path,'PUT',{trafficGB:10});
+  check('one byte over the target is still consumed volume',()=>{assert.equal(result.status,403);assert.match(result.data.error,/۹ گیگ/);assert.equal(oneByteOver.client.totalGB,20*GB)});
+  const race=await seedTwenty('reduction-usage-race',4,Date.now()+30*86400000);
+  mode.set('reduction-usage-race',{useAfterUpdate:10*GB+1});
+  result=await api(race.reseller,race.path,'PUT',{trafficGB:10});
+  balance=await api(race.reseller,'/api/reseller/bootstrap');
+  check('usage that crosses the new limit during the update prevents accounting release',()=>{
+   assert.equal(result.status,502);assert.equal(result.data.partial,true);assert.match(result.data.error,/مصرف در زمان ویرایش تغییر کرده/);
+   assert.equal(result.data.refundedGB,undefined);assert.equal(balance.data.permissions.remainingGB,0);
+  });
+  const expired=await seedTwenty('expired-reduction',0,Date.now()-86400000);
+  result=await api(expired.reseller,expired.path,'PUT',{trafficGB:10});
+  check('unused quota can be reduced on an expired account without renewing it',()=>{
+   assert.equal(result.status,200);assert.equal(result.data.refundedGB,10);assert.ok(expired.client.expiryTime<Date.now());
+  });
+  const locked=await owner('late-deletion-forfeit',10),lockedClient=await seed(locked,'late-deletion-forfeit',1);lockedClient.expiryTime=Date.now()+86400000;
+  await api(locked,'/api/reseller/users/late-deletion-forfeit','DELETE');
   result=await api(locked,'/api/reseller/users','POST',{name:'CannotReuse',trafficGB:1,expiryDays:30,inbounds:[{panelId:panel.id,inboundId:1}],requestId:'late-refund-reuse'});
   check('forfeited balance cannot fund another creation',()=>assert.equal(result.status,403));
   const delayed=await owner('delayed-refund',100),delayedClient=await seed(delayed,'delayed-refund',3);delayedClient.expiryTime=Date.now()+8*86400000;mode.set('all-remote',true);mode.set('node-pending',true);

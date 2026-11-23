@@ -280,7 +280,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     });
 
     const subLink = await buildSubLink(body.subId !== undefined ? body.subId : current.subId, reseller, newRefs[0]?.panelId || primaryPanelId);
-    return NextResponse.json({ ok: true, subLink, pending: updateRes.pending === true }, { status: updateRes.pending ? 202 : 200 });
+    return NextResponse.json({ ok: true, subLink, pending: updateRes.pending === true, refundedGB: updateRes.refundedGB }, { status: updateRes.pending ? 202 : 200 });
   } catch (e) {
     console.error("update user error:", e);
     return NextResponse.json({ error: "خطای داخلی در ویرایش کاربر" }, { status: 500 });

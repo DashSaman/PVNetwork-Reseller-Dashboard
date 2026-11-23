@@ -256,7 +256,8 @@ async function executeAcrossPanels(
   return { failed, completed: [...completed] };
 }
 
-export type OpResult = { ok: true; debitedGB: number; refundedGB?: number; forfeitedGB?: number; pending?: boolean; message?: string } | { ok: false; status: number; msg: string; partial?: boolean };
+type OpFailure = { ok: false; status: number; msg: string; partial?: boolean };
+export type OpResult = { ok: true; debitedGB: number; refundedGB?: number; forfeitedGB?: number; pending?: boolean; message?: string } | OpFailure;
 
 function refundPolicyForPanels(panels: PanelBundle[], panelIds: string[], tracked: TrackedUser, at: number) {
   return deletionRefundPolicy(panelIds.flatMap(id => {
@@ -279,7 +280,7 @@ async function prepareUsageLedger(journalId: string, panels: PanelBundle[], emai
 }
 
 /** بارگذاری داخل قفل: reseller و tracked تازه */
-async function loadWithinLock(resellerId: string, email: string): Promise<{ reseller: ResellerWithInbounds; tracked: TrackedUser } | { err: OpResult }> {
+async function loadWithinLock(resellerId: string, email: string): Promise<{ reseller: ResellerWithInbounds; tracked: TrackedUser } | { err: OpFailure }> {
   const reseller = await db.reseller.findUnique({ where: { id: resellerId }, include: { inbounds: true } });
   if (!reseller || !reseller.active) return { err: { ok: false, status: 403, msg: "حساب شما فعال نیست" } };
   const tracked = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId, email } } });
@@ -288,7 +289,7 @@ async function loadWithinLock(resellerId: string, email: string): Promise<{ rese
 }
 
 /** مانع تداخل: عملیات تخریبی/ویرایش هم‌زمان روی یک کاربر مجاز نیست */
-async function assertNoConflictingOperation(resellerId: string, email: string, self: "DELETE" | "RESET" | "UPDATE", superseded: string[] = []): Promise<OpResult | null> {
+async function assertNoConflictingOperation(resellerId: string, email: string, self: "DELETE" | "RESET" | "UPDATE", superseded: string[] = []): Promise<OpFailure | null> {
   const rows = await db.operationJournal.findMany({
     where: { resellerId, email, status: { in: ["PENDING", "RUNNING", "PARTIAL", "NEEDS_REPAIR"] } },
   });
@@ -647,7 +648,7 @@ export async function updateUserByJournal(
   desired: { trafficGB: number; enable?: boolean; note?: string; snapshotStartedAt?: number; intent?: string; inboundRefs?: InboundRef[]; expectedInboundIds?: string },
   applyRemote: () => Promise<string[] | { errors: string[]; pending: boolean }>,
   commitLocal: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<void>
-): Promise<{ ok: true; pending?: boolean } | { ok: false; status: number; msg: string; partial?: boolean }> {
+): Promise<{ ok: true; pending?: boolean; refundedGB: number } | OpFailure> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ("err" in loaded) return loaded.err;
@@ -691,9 +692,9 @@ export async function updateUserByJournal(
     const live = await getAllPanelInboundsFresh();
     const readable = assertRequiredPanelsReadable(live, required.panelIds);
     if (!readable.ok) return { ok: false, status: 502, msg: readable.msg };
-    if (!existingJournal && desired.trafficGB < loaded.tracked.trafficGB && !refundPolicyForPanels(live.panels, required.panelIds, loaded.tracked, Date.now()).eligible) {
-      return { ok: false, status: 403, msg: 'کاهش سهمیه در هفتهٔ آخر اعتبار یا پس از انقضا مجاز نیست؛ حجم این حساب قابل برگشت به موجودی نیست' };
-    }
+    const previousGB = loaded.tracked.trafficGB;
+    const reductionGB = desired.trafficGB > 0 ? Math.max(0, previousGB - desired.trafficGB) : 0;
+    const targetBytes = desired.trafficGB * 1073741824;
     let usedBytes = 0;
     for (const panelId of required.panelIds) {
       const conn = await getPanelConnection(panelId);
@@ -702,11 +703,16 @@ export async function updateUserByJournal(
       if (!usage.ok || usage.data === undefined) return { ok: false, status: 502, msg: usage.msg || "مصرف حساب قابل تأیید نیست" };
       usedBytes += Math.max(usage.data, canonicalUserUsage(live.panels.filter(p => p.panelId === panelId), email).usedBytes);
     }
-    const usedGB = usedBytes / 1073741824;
-    if (desired.trafficGB > 0 && desired.trafficGB < usedGB && (desired.trafficGB !== loaded.tracked.trafficGB || desired.enable === true)) return { ok: false, status: 403, msg: "سهمیهٔ کاربر از مصرف فعلی کمتر است؛ ابتدا حجم کافی اضافه کنید و سپس فعال کنید" };
+    if (desired.trafficGB > 0 && usedBytes > targetBytes && (desired.trafficGB !== previousGB || desired.enable === true)) {
+      if (reductionGB > 0) {
+        const availableGB = Math.max(0, previousGB - Math.ceil(usedBytes / 1073741824));
+        return { ok: false, status: 403, msg: `مقدار کسر درخواستی (${reductionGB.toLocaleString("fa-IR")} گیگ) بیشتر از حجم قابل‌کسر بر اساس مصرف واقعی مشتری (${availableGB.toLocaleString("fa-IR")} گیگ) است.` };
+      }
+      return { ok: false, status: 403, msg: "سهمیهٔ کاربر از مصرف فعلی کمتر است؛ ابتدا حجم کافی اضافه کنید و سپس فعال کنید" };
+    }
 
     // C2: دلتای افزایش سهمیه باید قبل از اولین اثر ریموت رزرو شود
-    const delta = Math.max(0, desired.trafficGB - loaded.tracked.trafficGB);
+    const delta = Math.max(0, desired.trafficGB - previousGB);
     if (!quotaBefore.unlimited && delta > 0) {
       const reservedOthers = Math.max(0, quotaBefore.reserved - ownReserved);
       const available = quotaBefore.pool - quotaBefore.allocated - reservedOthers - quotaBefore.consumed - quotaBefore.forfeited;
@@ -741,12 +747,12 @@ export async function updateUserByJournal(
     for (const panelId of required.panelIds) {
       const conn = await getPanelConnection(panelId);
       if (!conn.ok) { errors.push("تأیید پنل مرتبط ممکن نشد"); continue; }
-      const usage = await getVerifiedClientUsage(conn.conn, email, desired.trafficGB * 1073741824);
+      const usage = await getVerifiedClientUsage(conn.conn, email, targetBytes);
       if (!usage.ok || usage.data === undefined) errors.push("مصرف نهایی حساب قابل تأیید نیست");
       else finalUsedBytes += usage.data;
     }
-    if (!errors.length && desired.trafficGB > 0 && desired.trafficGB < loaded.tracked.trafficGB) {
-      if (finalUsedBytes > desired.trafficGB * 1073741824) errors.push("مصرف در زمان ویرایش تغییر کرده؛ کاهش سهمیه تأیید نشد");
+    if (!errors.length && reductionGB > 0 && finalUsedBytes > targetBytes) {
+      errors.push("مصرف در زمان ویرایش تغییر کرده و کسر درخواستی بیشتر از حجم باقی‌مانده است؛ سهمیه‌ای به موجودی برنگشت");
     }
     // A queued decrease must keep the larger allocation until every node confirms.
     if (pending && (desired.trafficGB < loaded.tracked.trafficGB || loaded.tracked.trafficGB === 0 && desired.trafficGB > 0)) errors.push("کاهش سهمیه تا پایان همگام‌سازی لوکیشن‌ها ثبت نهایی نمی‌شود");
@@ -767,7 +773,9 @@ export async function updateUserByJournal(
         data: { status: pending ? "PARTIAL" : "SUCCESS", reservedGB: 0, completedPanels: pending ? "[]" : jTargets, failedPanels: "[]", lastError: pending ? "تغییر در مرجع ثبت شده؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند" : null, metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: true, nativePending: pending, intent: desired.intent }) },
       });
     });
-    return { ok: true, pending };
+    // The smaller allocation releases this volume in getQuotaState after the
+    // transaction commits. A separate balance credit would count it twice.
+    return { ok: true, pending, refundedGB: quotaBefore.unlimited ? 0 : reductionGB };
   });
 }
 

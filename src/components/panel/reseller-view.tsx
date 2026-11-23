@@ -976,7 +976,7 @@ function UsersTab({
   async function saveEdit() {
     if (!editing || !editForm) return;
     setBusy(true);
-    const r = await api<{ ok: boolean; pending?: boolean }>(`/api/reseller/users/${encodeURIComponent(editing.email)}`, {
+    const r = await api<{ ok: boolean; pending?: boolean; refundedGB?: number }>(`/api/reseller/users/${encodeURIComponent(editing.email)}`, {
       method: "PUT",
       body: JSON.stringify({
         ...editForm,
@@ -989,7 +989,11 @@ function UsersTab({
     });
     setBusy(false);
     if (r.ok) {
-      toast({ title: "کاربر ویرایش شد", description: r.data?.pending ? "تغییر ذخیره شد؛ همگام‌سازی لوکیشن‌ها خودکار پیگیری می‌شود و نیازی به تکرار ویرایش نیست." : undefined });
+      const refundedGB = r.data?.refundedGB ?? 0;
+      const description = r.data?.pending
+        ? "تغییر ذخیره شد؛ همگام‌سازی لوکیشن‌ها خودکار پیگیری می‌شود و نیازی به تکرار ویرایش نیست."
+        : refundedGB > 0 ? `${faNum(refundedGB)} گیگ حجم مصرف‌نشده به موجودی پول شما برگشت.` : undefined;
+      toast({ title: "کاربر ویرایش شد", description });
       setEditing(null);
       setEditForm(null);
       void tools.reload();
