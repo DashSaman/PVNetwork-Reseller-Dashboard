@@ -15,6 +15,28 @@ export function parseRenewalPlan(value: unknown): RenewalPlan | null {
   return { trafficGB, days };
 }
 
+export type ManualRenewalDraft = RenewalPlan & { requestId: string };
+export type PreviousRenewalPeriod = { id: string; trafficGB: number; usedGB: number | null };
+
+export function manualRenewalDraftKey(resellerId: string, userId: string) {
+  return `customerManualRenewalDraft:${resellerId}:${userId}`;
+}
+
+export function isManualRenewalDraftId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
+}
+
+export function readManualRenewalDraft(value: string | undefined): ManualRenewalDraft | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    const plan = parseRenewalPlan(parsed);
+    return plan && isManualRenewalDraftId(parsed.requestId) ? { ...plan, requestId: parsed.requestId } : null;
+  } catch {
+    return null;
+  }
+}
+
 export function parseAutoRenewalLimits(value: unknown): AutoRenewalLimits | null {
   if (!value || typeof value !== 'object') return null;
   const { maxRenewals, stopAt } = value as AutoRenewalLimits;

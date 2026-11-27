@@ -26,6 +26,7 @@ import { OperationsTab } from "./operations-tab";
 import { ResellerSupport } from "./reseller-support";
 import { SavedPlanPicker } from "./saved-plan-picker";
 import { RenewalDialog } from "./renewal-dialog";
+import { EditRenewal } from "./edit-renewal";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 import { MirzaSetupGuide } from './mirza-setup-guide';
 import { getCreateAttempt, finishCreateAttempt } from '@/lib/create-attempt';
@@ -800,6 +801,7 @@ function UsersTab({
   const [extensionOpen, setExtensionOpen] = useState(false);
   const [editing, setEditing] = useState<ResellerUserRow | null>(null);
   const [renewing, setRenewing] = useState<ResellerUserRow | null>(null);
+  const [editRenewalOpen, setEditRenewalOpen] = useState(false);
   const [deleting, setDeleting] = useState<ResellerUserRow | null>(null);
   const [cancellingReset, setCancellingReset] = useState<string | null>(null);
   const [linksUser, setLinksUser] = useState<{ email: string; name: string | null } | null>(null);
@@ -902,6 +904,7 @@ function UsersTab({
   }, []);
 
   function openEdit(u: ResellerUserRow) {
+    setEditRenewalOpen(false);
     if (u.liveFresh === false || u.expiryTime === null || u.enable === null) return;
     // یافتن refs فعلی کاربر بر اساس تگ‌های اینباند و پنل‌ها
     const currentRefs: InboundRefForm[] = [...(u.inboundRefs || [])];
@@ -1682,6 +1685,17 @@ function UsersTab({
             <DialogTitle>ویرایش کاربر: {editing?.name || editing?.email}</DialogTitle>
             <DialogDescription dir="ltr">{editing?.email}</DialogDescription>
           </DialogHeader>
+          {editing && (
+            <details className="min-w-0 rounded-xl border px-3 py-2" open={editRenewalOpen}
+              onToggle={event => setEditRenewalOpen(event.currentTarget.open)}>
+              <summary className="cursor-pointer text-sm font-medium">بستهٔ جدید و سهمیهٔ دورهٔ قبلی</summary>
+              {editRenewalOpen && <EditRenewal key={editing.email} email={editing.email} onRenewed={() => {
+                setEditing(current => current?.email === editing.email ? null : current);
+                reload();
+                void tools.reload();
+              }} />}
+            </details>
+          )}
           {editForm && (
             <div className="grid gap-4 py-2">
               {editing && tools.data.get(editing.email)?.pendingUpdate && <p role="status" className="rounded-lg border border-amber-500/30 p-3 text-xs text-amber-700 dark:text-amber-300">ویرایش قبلی هنوز کامل نشده است. سهمیهٔ همان ویرایش در فرم قرار گرفته است؛ برای پیگیری دوباره ذخیره کنید. مصرف کاربر ریست نمی‌شود.</p>}

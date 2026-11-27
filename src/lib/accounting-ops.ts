@@ -14,7 +14,7 @@ import { canCancelUnstartedOperation, canFinalizeAcknowledgedDeletion, isCurrent
 import { deletionRefundPolicy, deletionSettlement, readDeletionSettlement } from './deletion-refund';
 import { completedAutoRenewals, isRenewalPaused, manualUserStatusKey, renewalStatusKey, saveManualUserStatus } from './renewal-status';
 import { queueAccountingEvents } from './event-webhooks';
-import { renewalCap } from './renewal-plan';
+import { manualRenewalDraftKey, readManualRenewalDraft, renewalCap } from './renewal-plan';
 import { getForfeitedGB } from './deletion-refund-ledger';
 import { isTrafficQuotaGB } from './traffic-quota';
 import { parseRenewalPlan, readAutoRenewal, readRenewalJournal, renewalSettingKey, type RenewalPlan } from './renewal-plan';
@@ -623,32 +623,45 @@ export async function resetUserByJournal(resellerId: string, email: string, expe
 export async function renewUserByJournal(
   resellerId: string,
   email: string,
-  request: { plan?: RenewalPlan; requestId?: string; automatic?: boolean; journalId?: string },
+  request: { plan?: RenewalPlan; requestId?: string; automatic?: boolean; journalId?: string; useSavedDraft?: boolean },
 ): Promise<OpResult> {
   return withResellerLock(resellerId, async () => {
     const loaded = await loadWithinLock(resellerId, email);
     if ('err' in loaded) return loaded.err;
     const { tracked } = loaded;
     if (!tracked.subId) return { ok: false, status: 409, msg: 'شناسهٔ اشتراک برای شروع دورهٔ جدید قابل تأیید نیست' };
+    let requestedPlan = request.plan;
+    if (request.useSavedDraft) {
+      const stored = await db.setting.findUnique({ where: { key: manualRenewalDraftKey(resellerId, tracked.id) } });
+      const draft = readManualRenewalDraft(stored?.value);
+      if (!draft || draft.requestId !== request.requestId) {
+        return { ok: false, status: 409, msg: 'حجم کل و مدت بستهٔ جدید را ذخیره و دوباره تأیید کنید' };
+      }
+      requestedPlan = draft;
+    }
     const key = request.requestId ? `renew:${tracked.id}:${request.requestId}` : undefined;
     if (key) {
       const previous = await db.operationJournal.findUnique({ where: { idempotencyKey: key } });
       const intent = readRenewalJournal(updateMetadata(previous?.metadata ?? null).renewal);
-      if (previous && (!intent || request.plan?.trafficGB !== intent.trafficGB || request.plan.days !== intent.days)) {
+      if (previous && (!intent || requestedPlan?.trafficGB !== intent.trafficGB || requestedPlan.days !== intent.days)) {
         return { ok: false, status: 409, msg: 'حجم یا مدت با درخواست ثبت‌شدهٔ قبلی مطابقت ندارد' };
       }
       if (previous?.status === 'SUCCESS' && previous.accountingCommitted) return { ok: true, debitedGB: previous.usageSnapshotGB || 0 };
+      if (request.useSavedDraft && previous && ['FAILED', 'CANCELLED'].includes(previous.status)) {
+        return { ok: false, status: 409, msg: 'برای شروع دوباره، حجم و مدت بسته را مجدداً ذخیره کنید' };
+      }
     }
     const conflict = await assertNoConflictingOperation(resellerId, email, "RESET");
     if (conflict) return conflict;
     let journal = await db.operationJournal.findFirst({ where: { resellerId, email, type: 'RESET', status: { in: ['PENDING','RUNNING','PARTIAL','NEEDS_REPAIR'] } } });
     if (request.journalId && journal?.id !== request.journalId) return { ok: true, debitedGB: 0 };
-    const installation = operationInstallation(!!request.plan);
+    const installation = operationInstallation(!!requestedPlan);
     if (!installation) return { ok: false, status: 409, msg: 'شناسهٔ نصب برای تمدید در دسترس نیست' };
     let metadata = updateMetadata(journal?.metadata ?? null);
     let renewal = readRenewalJournal(metadata.renewal);
     if (journal && (!renewal || metadata.operationInstallation !== installation || journal.userId !== tracked.id || journal.status === 'NEEDS_REPAIR'
-      || request.plan && (request.plan.trafficGB !== renewal.trafficGB || request.plan.days !== renewal.days))) {
+      || request.useSavedDraft && journal.idempotencyKey !== key
+      || requestedPlan && (requestedPlan.trafficGB !== renewal.trafficGB || requestedPlan.days !== renewal.days))) {
       return { ok: false, status: 409, msg: 'ابتدا عملیات قبلی این کاربر را تکمیل کنید' };
     }
     const required = await getRequiredUserPanelIds(tracked);
@@ -661,7 +674,7 @@ export async function renewUserByJournal(
     if (autoPlan && (await isRenewalPaused({ ...tracked, resellerId }) || renewalCap(autoPlan, autoPlan.maxRenewals ? await completedAutoRenewals(resellerId, tracked.id, autoPlan) : 0))) {
       return { ok: true, debitedGB: 0 };
     }
-    const plan = renewal ?? (request.automatic ? autoPlan : parseRenewalPlan(request.plan));
+    const plan = renewal ?? (request.automatic ? autoPlan : parseRenewalPlan(requestedPlan));
     if (!plan) return request.automatic ? { ok: true, debitedGB: 0 } : { ok: false, status: 400, msg: 'حجم و مدت دورهٔ جدید نامعتبر است' };
     if (!journal) {
       const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);

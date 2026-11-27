@@ -419,6 +419,53 @@ try{
   check('manual retry does not start or bill a second renewal',()=>{assert.equal(replay.status,200);assert.equal(client.used,GB)});
   const tooSoon=await api(master,renew,'POST',{...plan,requestId:'renewal-still-active'});
   check('a usable period cannot be discarded by the start-new-cycle action',()=>assert.equal(tooSoon.status,409));
+  const stagedOwner=await owner('staged-renewal-owner',100), staged=await seed(stagedOwner,'staged-cycle',40);
+  staged.totalGB=40*GB;staged.enable=false;
+  const stagedUser=await db.resellerUser.update({where:{resellerId_email:{resellerId:stagedOwner.id,email:staged.email}},data:{trafficGB:40}});
+  const editRenew='/api/reseller/users/staged-cycle/renew/edit';
+  const ignoredId='00000000-0000-4000-b000-000000000000';
+  const noDraft=await api(stagedOwner,editRenew,'POST',{requestId:ignoredId,trafficGB:10,days:30});
+  const invalidDraft=await api(stagedOwner,editRenew,'PUT',{trafficGB:0,days:30});
+  const notOwned=await api(outsider,editRenew,'PUT',{trafficGB:10,days:30});
+  check('edit renewal requires a valid saved positive plan and ownership',()=>{
+   assert.equal(noDraft.status,409);assert.equal(invalidDraft.status,400);assert.equal(notOwned.status,404);
+  });
+  const saved=await api(stagedOwner,editRenew,'PUT',{trafficGB:10,days:30});
+  const loadedDraft=await api(stagedOwner,editRenew);
+  const beforeStart=await api(stagedOwner,'/api/reseller/bootstrap');
+  check('saving total quota persists a draft while keeping the exhausted account and funds intact',()=>{
+   assert.equal(saved.status,200);assert.deepEqual(loadedDraft.data.draft,saved.data.draft);
+   assert.equal(loadedDraft.data.previousPeriod,null);assert.equal(staged.used,40*GB);assert.equal(staged.totalGB,40*GB);
+   assert.equal(beforeStart.data.permissions.remainingGB,60);
+  });
+  const startRequest={requestId:saved.data.draft.requestId};
+  const wrongId=await api(stagedOwner,editRenew,'POST',{requestId:ignoredId});
+  const start=await api(stagedOwner,editRenew,'POST',{...startRequest,trafficGB:1,days:1});
+  staged.used=2*GB;
+  const again=await api(stagedOwner,editRenew,'POST',startRequest);
+  const history=await api(stagedOwner,editRenew);
+  const historyId=history.data.previousPeriod?.id;
+  const beforeJournal=await db.operationJournal.findFirstOrThrow({where:{userId:stagedUser.id,type:'RESET'}});
+  check('explicit confirmation uses the saved values and is idempotent',()=>{
+   assert.equal(wrongId.status,409);assert.equal(start.status,200,JSON.stringify(start.data));assert.equal(again.status,200);
+   assert.equal(staged.totalGB,10*GB);assert.equal(staged.used,2*GB);assert.equal(history.data.draft,null);
+   assert.equal(history.data.previousPeriod.trafficGB,40);assert.equal(history.data.previousPeriod.usedGB,40);
+   assert.equal(JSON.parse(beforeJournal.metadata).renewal.days,30);
+  });
+  const unauthorizedCorrection=await api(outsider,editRenew,'PATCH',{periodId:historyId,trafficGB:20});
+  const stalePeriod=await api(stagedOwner,editRenew,'PATCH',{periodId:'stale-period-id',trafficGB:20});
+  const invalidCorrection=await api(stagedOwner,editRenew,'PATCH',{periodId:historyId,trafficGB:-5});
+  const corrected=await api(stagedOwner,editRenew,'PATCH',{periodId:historyId,trafficGB:20});
+  const reloadedHistory=await api(stagedOwner,editRenew);
+  const readyFunds=await api(stagedOwner,'/api/reseller/bootstrap');
+  const journal=await db.operationJournal.findUniqueOrThrow({where:{id:historyId}});
+  check('past quota correction updates display history only and rejects stale, foreign or invalid inputs',()=>{
+   assert.equal(unauthorizedCorrection.status,404);assert.equal(stalePeriod.status,409);assert.equal(invalidCorrection.status,400);
+   assert.equal(corrected.status,200);assert.equal(reloadedHistory.data.previousPeriod.trafficGB,20);
+   assert.equal(reloadedHistory.data.previousPeriod.usedGB,40);assert.equal(journal.usageSnapshotGB,40);
+   assert.deepEqual(JSON.parse(journal.metadata).renewal,JSON.parse(beforeJournal.metadata).renewal);
+   assert.equal(staged.used,2*GB);assert.equal(staged.totalGB,10*GB);assert.equal(readyFunds.data.permissions.remainingGB,50);
+  });
   const expiredOwner=await owner('renew-partial-owner',50),expired=await seed(expiredOwner,'renew-partial',3);
   expired.expiryTime=Date.now()-86400000;expired.enable=false;
   const partialPlan={trafficGB:7,days:17,requestId:'renewal-retry-fixture'};
