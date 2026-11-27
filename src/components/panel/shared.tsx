@@ -4,8 +4,19 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Eye, EyeOff } from "lucide-react";
+import { BookOpen, Eye, EyeOff } from "lucide-react";
+import Link from "next/link";
 import { forwardRef, useState, type ReactNode } from "react";
+
+export function PanelGuideLink() {
+  return (
+    <Button asChild size="sm" variant="outline">
+      <Link href="/guide/reseller-operations" prefetch={false}>
+        <BookOpen className="h-4 w-4" aria-hidden /> راهنما
+      </Link>
+    </Button>
+  );
+}
 
 /** فرمت تاریخ شمسی */
 export function faDate(ts: number | string | Date): string {

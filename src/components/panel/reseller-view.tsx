@@ -18,7 +18,7 @@ import {
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/hooks/use-toast";
-import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput, parseNumberInput } from "./shared";
+import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, faNum, PvLogo, NumberInput, parseNumberInput, PanelGuideLink } from "./shared";
 import { ThemeToggle } from "./theme";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { CustomerToolsBar, CustomerRowTools, useCustomerMetadata } from "./customer-tools";
@@ -331,6 +331,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
             <span className="hidden sm:inline text-xs text-muted-foreground">
               <span dir="ltr" className="font-semibold">{session.username}</span>
             </span>
+            <PanelGuideLink />
             <ThemeToggle />
             <Button size="sm" variant="outline" onClick={logout} className="hover:border-red-300 hover:text-red-500">
               <LogOut className="h-4 w-4" /> خروج

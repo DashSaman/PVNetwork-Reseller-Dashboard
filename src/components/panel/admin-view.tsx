@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
-import { api, StatCard, faDate, gbLabel, formatUsageGB, faNum, PvLogo } from "./shared";
+import { api, StatCard, faDate, gbLabel, formatUsageGB, faNum, PvLogo, PanelGuideLink } from "./shared";
 import { ResellersTab } from "./resellers-tab";
 import { AdminUsersTab } from "./admin-users-tab";
 import { PanelSettingsTab, LogsTab } from "./settings-logs";
@@ -197,6 +197,7 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
             <span className="hidden sm:inline text-xs text-muted-foreground">
               ادمین: <span dir="ltr" className="font-semibold">{session.username}</span>
             </span>
+            <PanelGuideLink />
             <ThemeToggle />
             <Button size="sm" variant="outline" onClick={logout} className="hover:border-red-300 hover:text-red-500">
               <LogOut className="h-4 w-4" /> خروج

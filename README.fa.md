@@ -114,9 +114,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DashSaman/PVNetwork-Reseller
 |---|---|
 | ![اپ‌ها](docs/screenshots/15-public-apps.png) | اپ‌های پیشنهادی — کلاینت‌های V2Ray/Clash برای اندروید، iOS، ویندوز و مک. |
 
+## راهنمای امکانات پنل
+
+برای تمدید خودکار، بسته‌های آماده، پیگیری عملیات و پشتیبانی، دکمهٔ «راهنما» را بالای داشبورد بزنید. [راهنمای امکانات پنل](docs/reseller-operations-features.fa.md)
+
 ## 🔗 راه‌اندازی ربات میرزا (قدم‌به‌قدم)
 
-راهنمای کامل: [docs/guide-mirza-bot.fa.md](docs/guide-mirza-bot.fa.md) یا صفحه `/guide/mirza-bot` در پنل.
+راهنمای کامل اتصال میرزا در [ریپو](docs/guide-mirza-bot.fa.md) و در صفحهٔ `/guide/mirza-bot` پنل در دسترس است.
 
 | قدم | عمل |
 |---|---|
