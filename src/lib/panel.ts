@@ -47,6 +47,8 @@ export type PanelClientStat = {
   id?: number;
   inboundId?: number;
   email: string;
+  lastSubFetch?: number;
+  subId?: string;
   enable?: boolean;
   up: number;
   down: number;

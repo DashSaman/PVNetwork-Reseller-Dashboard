@@ -22,6 +22,9 @@ import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, f
 import { ThemeToggle } from "./theme";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { CustomerToolsBar, CustomerRowTools, useCustomerMetadata } from "./customer-tools";
+import { OperationsTab } from "./operations-tab";
+import { ResellerSupport } from "./reseller-support";
+import { SavedPlanPicker } from "./saved-plan-picker";
 import { RenewalDialog } from "./renewal-dialog";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 import { MirzaSetupGuide } from './mirza-setup-guide';
@@ -114,8 +117,12 @@ type UserLinkData = {
 type UserAlert = { email: string; type: "usage" | "expiry"; pct?: number; days?: number };
 type ResellerTrafficRow = AdminTrafficLedger["resellers"][number];
 
+function localDateValue(date: Date) {
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+}
+
 export function ResellerView({ session, onLogout }: { session: Session; onLogout: () => void }) {
-  const [tab, setTab] = useState<"users" | "stats" | "brand" | "account">("users");
+  const [tab, setTab] = useState<"users" | "stats" | "brand" | "account" | "operations" | "support">("users");
   const [users, setUsers] = useState<ResellerUserRow[]>([]);
   const [alerts, setAlerts] = useState<UserAlert[]>([]);
   const [inbounds, setInbounds] = useState<InboundInfo[]>([]);
@@ -162,7 +169,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     if (b.ok && b.data) {
       setUsers(prev => b.data!.users.map(row => {
         const previous = prev.find(u => u.email === row.email);
-        return { ...row, usedGB: previous?.usedGB ?? null, expiryTime: previous?.expiryTime ?? null, enable: previous?.enable ?? null, liveFresh: false };
+        return { ...row, usedGB: previous?.usedGB ?? null, expiryTime: previous?.expiryTime ?? null, enable: previous?.enable ?? null, lastSubFetch: previous?.subId === row.subId ? previous?.lastSubFetch : null, liveFresh: false };
       }));
       void refreshInboundCatalog();
       setPermissions(b.data.permissions);
@@ -179,7 +186,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
     liveInFlight.current = true;
     try {
       const r = await api<{
-        users: { email: string; usedGB: number | null; totalGB: number | null; expiryTime: number | null; enable: boolean | null }[];
+        users: { email: string; usedGB: number | null; totalGB: number | null; expiryTime: number | null; enable: boolean | null; lastSubFetch?: number | null }[];
         panelConnected: boolean;
         dataComplete: boolean;
         pending: boolean;
@@ -196,6 +203,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
             totalGB: live.totalGB ?? u.totalGB,
             expiryTime: live.expiryTime ?? u.expiryTime,
             enable: live.enable ?? u.enable,
+            lastSubFetch: live.lastSubFetch ?? u.lastSubFetch,
             liveFresh: r.data!.dataComplete && !r.data!.pending && !r.data!.stale,
           };
         }));
@@ -292,11 +300,13 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
 
   const brandTitle = whitelabel?.brandName || "پنل نمایندگی";
 
-  const tabs: { id: "users" | "stats" | "brand" | "account"; label: string; icon: React.ReactNode }[] = [
+  const tabs: { id: "users" | "stats" | "brand" | "account" | "operations" | "support"; label: string; icon: React.ReactNode }[] = [
     { id: "users", label: "کاربران من", icon: <Users className="h-4 w-4" /> },
     { id: "stats", label: "آمار و مصرف", icon: <ArrowUpDown className="h-4 w-4" /> },
+    { id: "operations", label: "پیگیری عملیات", icon: <ArrowUpDown className="h-4 w-4" /> },
     { id: "brand", label: "برند و دامنه", icon: <Palette className="h-4 w-4" /> },
     { id: "account", label: "تنظیمات حساب", icon: <ShieldCheck className="h-4 w-4" /> },
+    { id: "support", label: "پشتیبانی", icon: <Users className="h-4 w-4" /> },
   ];
 
   return (
@@ -351,6 +361,8 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
       <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
         {tab === "users" && permissions && <UsersTab session={session} users={visibleUsers} inbounds={inbounds} inboundsLoaded={inboundsLoaded} refreshInbounds={refreshInboundCatalog} permissions={permissions} loading={loading} livePending={livePending} panelError={panelError} reload={load} alerts={alerts} />}
         {tab === "stats" && permissions && <StatsTab stats={stats} charts={charts} trafficLedger={trafficLedger} />}
+        {tab === "operations" && <OperationsTab scope="reseller" />}
+        {tab === "support" && <ResellerSupport />}
         {tab === "brand" && <BrandTab whitelabel={whitelabel} reload={load} />}
         {tab === "account" && <AccountSettingsTab username={session.username} />}
       </main>
@@ -888,6 +900,7 @@ function UsersTab({
   const createSubmitting = useRef(false);
   const selectableKeys = new Set(inbounds.map(i => refKey({ panelId: i.panelId, inboundId: i.inboundId })));
   const missingSelection = selectedInbounds.some(r => !selectableKeys.has(refKey(r)));
+  const expiryCalendarDays = expiryDate ? Math.round((Date.parse(expiryDate) - Date.parse(localDateValue(new Date()))) / 86400000) : 0;
   async function createUser() {
     if (createSubmitting.current) return;
     if (missingSelection) { toast({ title: 'انتخاب لوکیشن تغییر کرده', description: 'گزینه‌های ناموجود را از انتخاب حذف و دوباره بررسی کنید.', variant: 'destructive' });void refreshInbounds();return; }
@@ -1402,6 +1415,19 @@ function UsersTab({
                 پول ترافیک شما نامحدود است — هر سهمیه‌ای بخواهید بدهید.
               </div>
             )}
+            <SavedPlanPicker disabled={busy} draft={{ trafficGB: parseNumberInput(trafficGB),
+              days: expiryMode === 'first-use' ? parseNumberInput(firstUseDays) : expiryCalendarDays,
+              expiryMode, ipLimit: parseNumberInput(ipLimit) || 0, refs: selectedInbounds,
+            }} onApply={plan => {
+              setTrafficGB(String(plan.trafficGB));
+              setExpiryMode(plan.expiryMode);
+              setFirstUseDays(String(plan.days));
+              setIpLimit(permissions.allowIpLimit ? String(plan.ipLimit) : '0');
+              setSelectedInbounds(plan.refs);
+              const date = new Date();
+              date.setDate(date.getDate() + plan.days);
+              setExpiryDate(plan.expiryMode === 'from-now' ? localDateValue(date) : '');
+            }} />
             <div className="space-y-2">
               <Label>تعداد — بیشتر از ۱ یعنی ساخت گروهی (تا ۵۰)</Label>
               <NumberInput

@@ -4,6 +4,7 @@ import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, canonicalUsageByEmail } from "@/lib/reseller-helpers";
 import { getAllPanelInboundsForUi } from "@/lib/panel-manager";
 import { publicPanelErrors } from "@/lib/reseller-presentation";
+import { subscriptionFetchTimes } from "@/lib/subscription-fetch-time";
 
 /**
  * Live user traffic data — with UI deadline (6s).
@@ -19,7 +20,7 @@ export async function GET() {
 
   const tracked = await db.resellerUser.findMany({
     where: { resellerId: reseller.id },
-    select: { email: true },
+    select: { email: true, subId: true },
   });
 
   const snapshot = await getAllPanelInboundsForUi();
@@ -50,6 +51,7 @@ export async function GET() {
     }
   }
 
+  const fetchTimes = subscriptionFetchTimes(snapshot.panels, tracked);
   const GIB = 1024 * 1024 * 1024;
   const users = tracked.map((t) => {
     const live = dataComplete ? liveByEmail.get(t.email) : undefined;
@@ -61,6 +63,7 @@ export async function GET() {
       totalGB: live ? Math.round((live.totalBytes ?? 0) / GIB * 100) / 100 : null,
       expiryTime: live?.expiryTime ?? null,
       enable: live?.enable ?? null,
+      lastSubFetch: fetchTimes.get(t.email) ?? null,
     };
   });
 

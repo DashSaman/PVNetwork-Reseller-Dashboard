@@ -9,7 +9,7 @@ import { api, faDate, faNum } from './shared';
 import { toast } from '@/hooks/use-toast';
 
 type Metadata = { email: string; labels: string[]; lastOnline: number | null; deleted?: boolean; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingRenewal?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null; pendingOperationId?: string | null; canCancelReset?: boolean; canCancelOperation?: boolean };
-type Customer = { email: string; name?: string | null; usedGB?: number | null };
+type Customer = { email: string; name?: string | null; usedGB?: number | null; lastSubFetch?: number | null };
 type Batch = { emails: string[]; enable: boolean; requestId: string };
 type ItemResult = { email: string; ok: boolean; error?: string };
 export function useCustomerMetadata(scope: 'admin' | 'reseller', users: Customer[], onDeleted?: () => void) {
@@ -35,6 +35,7 @@ export function CustomerRowTools({ user, meta, checked, onCheck, online, onResum
       {onCheck && <input type="checkbox" aria-label={`انتخاب ${user.email}`} checked={checked || false} onChange={onCheck} className="h-4 w-4 accent-teal-500" />}
       <span className="text-[11px] text-muted-foreground">{online ? 'اکنون آنلاین' : meta?.lastOnline == null ? 'آخرین اتصال: نامشخص' : meta.lastOnline === 0 ? 'اتصالی ثبت نشده' : `آخرین اتصال: ${faDate(meta.lastOnline)}`}</span>
     </div>
+    <p className="text-[11px] text-muted-foreground" title="دریافت موفق از پنل مبدأ، شامل دریافت برای نمایش کانفیگ نیز می‌شود.">{user.lastSubFetch ? "آخرین دریافت ساب " + faDate(user.lastSubFetch) : user.lastSubFetch === 0 ? "دریافت ساب ثبت نشده" : "آخرین دریافت ساب نامشخص"}</p>
     <div className="flex flex-wrap gap-1">{meta?.labels.map(label => <Badge variant="outline" className="text-[10px] border-violet-500/30 text-violet-600 dark:text-violet-300" key={label}>{label}</Badge>)}</div>
     {meta?.pendingCreate && <Badge variant="outline" className="text-[10px] text-muted-foreground">حساب ثبت‌شده؛ برخی لوکیشن‌ها در انتظار آماده‌سازی</Badge>}
     {meta?.pendingRenewal && <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-300">تمدید در انتظار تأیید لوکیشن‌ها</Badge>}

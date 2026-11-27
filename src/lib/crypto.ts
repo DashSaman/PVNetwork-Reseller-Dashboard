@@ -49,7 +49,7 @@ export function decryptSecret(payload: string): string {
 
 // ---------- توکن نشست (HMAC امضاشده) ----------
 export type SessionPayload = {
-  role: "ADMIN" | "RESELLER";
+  role: "ADMIN" | "RESELLER" | "SUPPORT";
   uid: string; // شناسه در دیتابیس
   username: string;
   exp: number; // timestamp میلی‌ثانیه
@@ -102,7 +102,7 @@ export function verifySession(token: string | undefined | null): SessionPayload 
   try {
     const payload = JSON.parse(b64urlDecode(body).toString("utf8")) as SessionPayload;
     if (!Number.isSafeInteger(payload.exp) || payload.exp < Date.now()
-      || !["ADMIN", "RESELLER"].includes(payload.role)
+      || !["ADMIN", "RESELLER", "SUPPORT"].includes(payload.role)
       || typeof payload.uid !== "string" || !payload.uid || payload.uid.length > 128
       || typeof payload.username !== "string" || !payload.username || payload.username.length > 128) return null;
     return payload;

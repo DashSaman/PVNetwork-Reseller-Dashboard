@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { verifyPassword, signAccountSession, decryptSecret, type SessionAccount } from "@/lib/crypto";
 import { SESSION_COOKIE, sessionExpiry, setDashboardSessionCookie } from "@/lib/session";
 import { RESELLER_DISABLED_NOTICE } from "@/lib/auth-state";
+import { getSupportMember } from "@/lib/support-members";
+import { isAdminManagedReseller } from "@/lib/reseller-ownership";
 import { getSupportContact } from "@/lib/support-contact";
 import { verifyTotp } from "@/lib/totp";
 import { logActivity } from "@/lib/logger";
@@ -75,7 +77,7 @@ export async function POST(req: NextRequest) {
     }
 
     /** صدور نشست مشترک */
-    const issue = (role: "ADMIN" | "RESELLER", account: SessionAccount) => {
+    const issue = (role: "ADMIN" | "RESELLER" | "SUPPORT", account: SessionAccount) => {
       const token = signAccountSession(role, account, "dashboard", sessionExpiry());
       const res = NextResponse.json({ role, username: account.username });
       setDashboardSessionCookie(res, token);
@@ -157,6 +159,19 @@ export async function POST(req: NextRequest) {
         resellerId: reseller.id,
       });
       return issued.res;
+    }
+
+    const helper = await getSupportMember(username.trim().toLowerCase());
+    if (helper && verifyPassword(password, helper.password)) {
+      const owner = await db.reseller.findUnique({ where: { id: helper.resellerId }, select: { active: true } });
+      if (!owner?.active || await isAdminManagedReseller(helper.resellerId)) {
+        const { url: supportUrl } = await getSupportContact();
+        return NextResponse.json({ error: RESELLER_DISABLED_NOTICE, supportUrl }, { status: 403 });
+      }
+      clearFailures(unameKey);
+      clearFailures(ipKey);
+      await logActivity({ actorType: "RESELLER", actorName: helper.username, action: "ورود همکار پشتیبانی", resellerId: helper.resellerId });
+      return issue("SUPPORT", helper).res;
     }
 
     // ---- ثبت تلاش ناموفق (ضد بشکن) ----

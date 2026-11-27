@@ -2,7 +2,7 @@ import { db } from './db';
 import { renewUserByJournal } from './accounting-ops';
 import { getAllPanelInboundsFresh } from './panel-manager';
 import { canonicalUserUsage } from './reseller-helpers';
-import { AUTO_RENEWAL_PREFIX, readAutoRenewal, readRenewalJournal } from './renewal-plan';
+import { AUTO_RENEWAL_PREFIX, readAutoRenewal, readRenewalJournal, renewalCap } from './renewal-plan';
 import { operationInstallation } from './operation-installation';
 import { updateMetadata } from './queued-update';
 
@@ -23,7 +23,10 @@ export async function recoverCustomerRenewals() {
     catch { /* Retry the same durable checkpoint on the next scan. */ }
   }
   const rows = await db.setting.findMany({ where: { key: { startsWith: AUTO_RENEWAL_PREFIX } }, select: { key: true, value: true } });
-  const ids = rows.flatMap(row => readAutoRenewal(row.value, installation) ? [row.key.slice(AUTO_RENEWAL_PREFIX.length)] : []).filter(id => !recovering.has(id));
+  const ids = rows.flatMap(row => {
+    const plan = readAutoRenewal(row.value, installation);
+    return plan && !renewalCap(plan, 0) ? [row.key.slice(AUTO_RENEWAL_PREFIX.length)] : [];
+  }).filter(id => !recovering.has(id));
   if (!ids.length) return;
   const candidates = await db.resellerUser.findMany({ where: { id: { in: ids }, reseller: { active: true } }, select: { id: true, resellerId: true, email: true, subId: true, trafficGB: true } });
   if (!candidates.length) return;

@@ -11,6 +11,8 @@ import { AdminUsersTab } from "./admin-users-tab";
 import { PanelSettingsTab, LogsTab } from "./settings-logs";
 import { ThemeToggle } from "./theme";
 import { BackupsTab } from "./backups-tab";
+import { OperationsTab } from "./operations-tab";
+import { EventWebhook } from "./event-webhook";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 import type { InboundInfo, ActivityLogRow, Session } from "./types";
 import {
@@ -44,7 +46,7 @@ import {
   Legend,
 } from "recharts";
 
-type Tab = "overview" | "resellers" | "users" | "settings" | "logs" | "backups";
+type Tab = "overview" | "resellers" | "users" | "settings" | "logs" | "backups" | "operations";
 
 type OverviewData = {
   stats: {
@@ -173,6 +175,7 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
     { id: "users", label: "کاربران", icon: <UserCheck className="h-4 w-4" /> },
     { id: "settings", label: "تنظیمات و پنل‌ها", icon: <Plug className="h-4 w-4" /> },
     { id: "logs", label: "گزارش‌ها", icon: <History className="h-4 w-4" /> },
+    { id: "operations", label: "پیگیری عملیات", icon: <History className="h-4 w-4" /> },
     { id: "backups", label: "بکاپ", icon: <Download className="h-4 w-4" /> },
   ];
 
@@ -229,8 +232,9 @@ export function AdminView({ session, onLogout }: { session: Session; onLogout: (
         {tab === "overview" && <OverviewTab inbounds={inbounds} panelConnected={panelConnected} reloadInbounds={loadInbounds} />}
         {tab === "resellers" && <ResellersTab inbounds={inbounds} panelConnected={panelConnected} />}
         {tab === "users" && <AdminUsersTab />}
-        {tab === "settings" && <PanelSettingsTab />}
+        {tab === "settings" && <div className="space-y-5"><PanelSettingsTab /><EventWebhook /></div>}
         {tab === "logs" && <LogsTab />}
+        {tab === "operations" && <OperationsTab scope="admin" />}
         {tab === "backups" && <BackupsTab />}
       </main>
 

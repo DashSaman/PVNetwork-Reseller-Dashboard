@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/session";
 import { adminManagedResellers } from "@/lib/reseller-ownership";
 import { buildSubLink, getAllPanelInboundsForUi, getPrimaryPanel } from "@/lib/panel-manager";
 import { canonicalUserUsage, parseInboundRefs } from "@/lib/reseller-helpers";
+import { subscriptionFetchTimes } from "@/lib/subscription-fetch-time";
 
 export async function GET(req: NextRequest) {
   if (!await requireAdmin()) return NextResponse.json({ error: "دسترسی غیرمجاز" }, { status: 401 });
@@ -13,6 +14,7 @@ export async function GET(req: NextRequest) {
   ]);
   // Bootstrap is local only. A separate live request never fabricates missing counters.
   const snapshot = req.nextUrl.searchParams.get("live") === "1" ? await getAllPanelInboundsForUi() : null;
+  const fetchTimes = subscriptionFetchTimes(snapshot?.panels || [], tracked);
   const users = await Promise.all(tracked.map(async user => {
     const refs = parseInboundRefs(user.inboundIds, user.panelId || primary?.id || "");
     const required = new Set(refs.map(r => r.panelId || primary?.id || ""));
@@ -32,6 +34,7 @@ export async function GET(req: NextRequest) {
       usedGB: complete ? Math.round(canonicalUserUsage(panels, user.email).usedBytes / 1073741824 * 100) / 100 : null,
       expiryTime: complete ? Math.max(...stats.map(s => s.expiryTime || 0)) : null,
       enable: complete ? stats.every(s => s.enable ?? true) : null,
+      lastSubFetch: fetchTimes.get(user.email) ?? null,
     };
   }));
   return NextResponse.json({ users, live: snapshot !== null, pending: snapshot?.pending || false, stale: snapshot?.stale || false }, { headers: { "Cache-Control": "private, no-store, max-age=0" } });

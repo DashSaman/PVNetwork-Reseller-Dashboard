@@ -13,7 +13,7 @@ import { toast } from "@/hooks/use-toast";
 type UserRow = {
   id: string; email: string; name: string | null; ownerId: string; ownerName: string;
   sourceUsername: string; adminManaged: boolean; trafficGB: number; subLink: string;
-  usedGB: number | null; expiryTime: number | null; enable: boolean | null;
+  usedGB: number | null; expiryTime: number | null; enable: boolean | null; lastSubFetch?: number | null;
 };
 type Result = { users: UserRow[]; pending: boolean; stale: boolean };
 
@@ -41,7 +41,8 @@ export function AdminUsersTab() {
           const cache = new Map(previous.map(u => [u.id, u]));
           return next.map(u => ({ ...u, usedGB: u.usedGB ?? cache.get(u.id)?.usedGB ?? null,
             expiryTime: u.expiryTime ?? cache.get(u.id)?.expiryTime ?? null,
-            enable: u.enable ?? cache.get(u.id)?.enable ?? null }));
+            enable: u.enable ?? cache.get(u.id)?.enable ?? null,
+            lastSubFetch: u.lastSubFetch ?? (u.subLink === cache.get(u.id)?.subLink ? cache.get(u.id)?.lastSubFetch : null) }));
         });
         setError(r.data.pending || r.data.stale ? "آمار زنده در حال به‌روزرسانی است؛ آخرین مقدار دریافت‌شده نمایش داده می‌شود." : "");
       } finally { running = false; if (!disposed) setLoading(false); }

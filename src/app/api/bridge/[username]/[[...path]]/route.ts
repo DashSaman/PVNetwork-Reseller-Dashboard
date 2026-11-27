@@ -18,6 +18,8 @@ import {
 } from "@/lib/reseller-helpers";
 import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota, confirmAcknowledgedDeletion } from "@/lib/accounting-ops";
 import { createResellerUserCore } from "@/lib/user-create";
+import { listResellerPlans, readResellerPlan, checkResellerPlan } from "@/lib/reseller-plans";
+import { expiryFromInput } from "@/lib/customer-model";
 import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
 import { attachBridgeClient, readBridgeClient } from '@/lib/bridge-client';
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
@@ -55,6 +57,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   const emailFromPath = decodeURIComponent(parts.split("/").pop() || "");
 
+  if (parts === 'panel/api/pvnetwork/plans/create') return createFromSavedPlan(req, auth.reseller);
   if (parts === "panel/api/clients/add") return bridgeAddClient(req, auth.reseller);
   if (parts === "panel/api/clients/onlines") return bridgeOnlines(auth.reseller);
   if (parts.startsWith("panel/api/clients/update/")) return bridgeUpdateClient(req, auth.reseller, emailFromPath);
@@ -96,6 +99,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!auth.ok) return xui(false, auth.error);
 
   if (parts === "panel/api/inbounds/list") return bridgeInboundList(auth.reseller);
+  if (parts === 'panel/api/pvnetwork/plans') {
+    const plans = await listResellerPlans(auth.reseller.id);
+    return xui(true, '', plans.map(({ id, name, trafficGB, days, expiryMode }) => ({ id, name, trafficGB, days, expiryMode })));
+  }
   if (parts === "panel/api/clients/list") return bridgeClientList(auth.reseller);
   if (parts.startsWith('panel/api/clients/get/')) {
     const result = await readBridgeClient(auth.reseller, decodeURIComponent(parts.slice('panel/api/clients/get/'.length)));
@@ -112,6 +119,27 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (parts === "panel/setting" || parts === "panel/api/setting") return bridgeSetting();
 
   return xui(false, "مسیر پشتیبانی نمی‌شود");
+}
+
+async function createFromSavedPlan(req: NextRequest, reseller: ResellerWithInbounds) {
+  const body = await req.json().catch(() => null);
+  const email = typeof body?.email === 'string' ? body.email.trim() : '';
+  if (!/^[a-z0-9._-]{3,32}$/i.test(email) || typeof body?.requestId !== 'string' || !/^[a-z0-9-]{12,64}$/i.test(body.requestId)) {
+    return xui(false, 'شناسهٔ کاربر یا درخواست نامعتبر است');
+  }
+  const plan = await readResellerPlan(reseller.id, body.planId);
+  if (!plan) return xui(false, 'بسته پیدا نشد');
+  const error = await checkResellerPlan(reseller, plan);
+  if (error) return xui(false, error);
+  const result = await createResellerUserCore(reseller, {
+    name: email, exactEmail: email, requestId: body.requestId, trafficGB: plan.trafficGB,
+    expiryTime: expiryFromInput({ expiryMode: plan.expiryMode, expiryDays: plan.days }),
+    expiryDays: plan.days, ipLimit: plan.ipLimit, refs: plan.refs,
+  });
+  return result.ok ? xui(true, '', {
+    email: result.email, subId: result.subId, subLink: result.subLink,
+    trafficGB: plan.trafficGB, nodePending: !!result.pending,
+  }) : xui(false, result.error);
 }
 
 // ============================================================ login

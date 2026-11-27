@@ -10,6 +10,12 @@ export function parseSupportTelegramUsername(value: unknown): string | null {
   return /^[a-z0-9_]{5,32}$/i.test(username) ? username : null;
 }
 
+export async function resellerSupportContact(resellerId: string) {
+  const row = await db.setting.findUnique({ where: { key: `resellerSupport:${resellerId}` } });
+  const username = parseSupportTelegramUsername(row?.value) || '';
+  return { username, url: username ? `https://t.me/${username}` : undefined };
+}
+
 export async function getSupportContact() {
   const setting = await db.setting.findUnique({ where: { key }, select: { value: true } });
   const username = parseSupportTelegramUsername(setting?.value) ?? "";

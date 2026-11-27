@@ -11,7 +11,7 @@ export async function api<T, E = unknown>(url: string, init?: RequestInit): Prom
     if (!res.ok) {
       // Login failures belong to the login form. A dashboard rejection must
       // re-read the actual cookie session, including a change of account/role.
-      if (res.status === 401 && /^\/api\/(admin|reseller)(\/|\?)/.test(url) && typeof window !== "undefined") {
+      if (res.status === 401 && /^\/api\/(admin|reseller|support)(\/|\?)/.test(url) && typeof window !== "undefined") {
         window.dispatchEvent(new Event(SESSION_RECHECK_EVENT));
       }
       return { ok: false, status: res.status, error: (json as { error?: string }).error || "خطای نامشخص", errorData: json as E };

@@ -12,6 +12,9 @@ import type { Prisma } from '@prisma/client';
 import { operationInstallation } from './operation-installation';
 import { canCancelUnstartedOperation, canFinalizeAcknowledgedDeletion, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
 import { deletionRefundPolicy, deletionSettlement, readDeletionSettlement } from './deletion-refund';
+import { completedAutoRenewals, renewalStatusKey } from './renewal-status';
+import { queueAccountingEvents } from './event-webhooks';
+import { renewalCap } from './renewal-plan';
 import { getForfeitedGB } from './deletion-refund-ledger';
 import { isTrafficQuotaGB } from './traffic-quota';
 import { parseRenewalPlan, readAutoRenewal, readRenewalJournal, renewalSettingKey, type RenewalPlan } from './renewal-plan';
@@ -530,8 +533,15 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
       }
       const stillThere = await tx.resellerUser.findUnique({ where: { id: tracked.id } });
       if (stillThere) await tx.resellerUser.delete({ where: { id: tracked.id } });
-      await tx.setting.deleteMany({ where: { key: renewalSettingKey(tracked.id) } });
+      await tx.setting.deleteMany({ where: { key: { in: [renewalSettingKey(tracked.id), renewalStatusKey(tracked.id)] } } });
       await tx.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", accountingCommitted: true, reservedGB: 0, completedPanels: JSON.stringify(completed), failedPanels: "[]", metadata: JSON.stringify({ ...meta, deletionSettlement: next }) } });
+      if (!current.accountingCommitted) {
+        await queueAccountingEvents(tx, { id: journal.id, resellerId, customerId: tracked.id }, [
+          { event: 'subscription.deleted', data: { usedGB: usageGB, forfeitedGB: next.forfeitedGB } },
+          ...(next.refundedGB > 0 && reseller.trafficPoolGB > 0
+            ? [{ event: 'quota.refunded' as const, data: { refundedGB: next.refundedGB } }] : []),
+        ]);
+      }
       return next;
     });
     const message = settlement.forfeitedGB > 0 ? 'حجم مصرف‌نشده به‌دلیل ورود به هفتهٔ آخر اعتبار، انقضا یا نامشخص‌بودن تاریخ قابل برگشت نیست.' : undefined;
@@ -647,7 +657,11 @@ export async function renewUserByJournal(
       return { ok: false, status: 409, msg: 'لوکیشن‌های تمدید با درخواست ثبت‌شده مطابقت ندارند' };
     }
     const saved = request.automatic && !journal ? await db.setting.findUnique({ where: { key: renewalSettingKey(tracked.id) } }) : null;
-    const plan = renewal ?? (request.automatic ? readAutoRenewal(saved?.value, installation) : parseRenewalPlan(request.plan));
+    const autoPlan = saved ? readAutoRenewal(saved.value, installation) : null;
+    if (autoPlan && renewalCap(autoPlan, autoPlan.maxRenewals ? await completedAutoRenewals(resellerId, tracked.id, autoPlan) : 0)) {
+      return { ok: true, debitedGB: 0 };
+    }
+    const plan = renewal ?? (request.automatic ? autoPlan : parseRenewalPlan(request.plan));
     if (!plan) return request.automatic ? { ok: true, debitedGB: 0 } : { ok: false, status: 400, msg: 'حجم و مدت دورهٔ جدید نامعتبر است' };
     if (!journal) {
       const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
@@ -679,15 +693,20 @@ export async function renewUserByJournal(
       }
       const usage = Object.values(usageByPanel).reduce((a, b) => a + b, 0);
       const now = Date.now();
+      if (autoPlan && renewalCap(autoPlan, 0, now)) return { ok: true, debitedGB: 0 };
       if (!(tracked.trafficGB > 0 && usage >= tracked.trafficGB) && !targets.every(t => t.expiry > 0 && t.expiry <= now)) {
         return request.automatic ? { ok: true, debitedGB: 0 } : { ok: false, status: 409, msg: 'دورهٔ فعلی هنوز حجم و اعتبار دارد' };
       }
       const quota = await getQuotaState(resellerId);
       const additional = usage + plan.trafficGB - tracked.trafficGB;
       if (!quota.unlimited && additional > quota.pool - quota.allocated - quota.reserved - quota.consumed - quota.forfeited) {
+        if (autoPlan) {
+          const key = renewalStatusKey(tracked.id), value = JSON.stringify({ cycleId: autoPlan.cycleId, reason: 'balance' });
+          await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
+        }
         return { ok: false, status: 403, msg: 'موجودی پول ترافیک برای شروع دورهٔ جدید کافی نیست' };
       }
-      renewal = { ...plan, previousGB: tracked.trafficGB, expiryTime: 0, automatic: !!request.automatic };
+      renewal = { trafficGB: plan.trafficGB, days: plan.days, previousGB: tracked.trafficGB, expiryTime: 0, automatic: !!request.automatic, cycleId: autoPlan?.cycleId };
       metadata = { renewal, operationInstallation: installation, usageByPanel, identities: Object.fromEntries(targets.map(t => [t.id, t.identity])) };
       journal = await db.operationJournal.create({ data: { idempotencyKey: key || opKey('renew',tracked.id), resellerId, userId: tracked.id, email,
         type: 'RESET', status: 'RUNNING', usageSnapshotGB: usage, reservedGB: Math.max(0, additional), targetPanels: JSON.stringify(required.panelIds), metadata: JSON.stringify(metadata) } });
@@ -727,7 +746,14 @@ export async function renewUserByJournal(
       const activated = await updateClient(target.conn, email, '', { id: target.identity, subId: tracked.subId, enable: true, totalGB: renewal.trafficGB * 1073741824, expiryTime: renewal.expiryTime });
       if (!activated.ok) return pending('دورهٔ جدید ثبت شده؛ فعال‌سازی لوکیشن‌ها در انتظار تأیید است');
     }
-    const settled = await db.operationJournal.update({ where: { id: journalId }, data: { status: 'SUCCESS', failedPanels: '[]', lastError: null } });
+    const settled = await db.$transaction(async tx => {
+      if (renewal.automatic) await tx.setting.deleteMany({ where: { key: renewalStatusKey(tracked.id) } });
+      const current = await tx.operationJournal.update({ where: { id: journalId }, data: { status: 'SUCCESS', failedPanels: '[]', lastError: null } });
+      await queueAccountingEvents(tx, { id: journalId, resellerId, customerId: tracked.id }, [
+        { event: 'subscription.renewed', data: { trafficGB: renewal.trafficGB, days: renewal.days, usedGB: current.usageSnapshotGB || 0, automatic: renewal.automatic } },
+      ]);
+      return current;
+    });
     await logActivity({ actorType: "RESELLER", actorName: loaded.reseller.username, action: renewal.automatic ? "تمدید خودکار" : "شروع دورهٔ جدید", detail: `${email} | بستهٔ تازه: ${renewal.trafficGB} گیگ، ${renewal.days} روز | مصرف قبلی: ${settled.usageSnapshotGB || 0} گیگ`, resellerId });
     return { ok: true, debitedGB: settled.usageSnapshotGB || 0 };
   });
@@ -907,6 +933,11 @@ export async function updateUserByJournal(
         where: { id: jid },
         data: { status: pending ? "PARTIAL" : "SUCCESS", reservedGB: 0, completedPanels: pending ? "[]" : jTargets, failedPanels: "[]", lastError: pending ? "تغییر در مرجع ثبت شده؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند" : null, metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: true, nativePending: pending, intent: desired.intent }) },
       });
+      if (!pending && !quotaBefore.unlimited && reductionGB > 0) {
+        await queueAccountingEvents(tx, { id: jid, resellerId, customerId: loaded.tracked.id }, [
+          { event: 'quota.refunded', data: { refundedGB: reductionGB } },
+        ]);
+      }
     });
     // The smaller allocation releases this volume in getQuotaState after the
     // transaction commits. A separate balance credit would count it twice.

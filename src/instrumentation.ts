@@ -4,5 +4,7 @@ export async function register() {
     initializeInboundGrantRecovery();
     const { initializeCustomerRenewal } = await import('./lib/auto-renewal');
     initializeCustomerRenewal();
+    const { initializeEventWebhooks } = await import('./lib/event-webhooks');
+    initializeEventWebhooks();
   }
 }

@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { getAllPanelInboundsFresh, getPanelById, buildSubLink } from "./panel-manager";
 import type { BuiltLink } from "./links";
+import { resellerSupportContact } from './support-contact';
 import { readNativeSubscription } from './native-subscription';
 
 /**
@@ -17,6 +18,7 @@ export type PortalData = {
   subLink: string | null;
   email?: string;
   brandName: string;
+  supportUrl?: string;
   totalGB: number; // گیگ — ۰ = نامحدود
   usedGB: number;
   expiryTime: number; // ۰ = نامحدود
@@ -107,6 +109,7 @@ export async function getPortalData(subIdRaw: string, _requestHost: string): Pro
     subLink: nativePanelId ? await buildSubLink(subId, null, nativePanelId) : null,
     email,
     brandName: reseller?.brandName || reseller?.name || "PvNetWork",
+    supportUrl: reseller?.active ? (await resellerSupportContact(reseller.id)).url : undefined,
     totalGB,
     usedGB,
     expiryTime,

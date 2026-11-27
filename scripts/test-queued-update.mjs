@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {registerHooks} from 'node:module';
+const hooks=registerHooks({resolve(s,c,next){return next(s.startsWith('./')&&c.parentURL?.includes('/src/lib/')&&!s.endsWith('.ts')?s+'.ts':s,c)}});
 const {isSavedQueuedUpdate,nodesSynchronized}=await import('../src/lib/queued-update.ts');
+hooks.deregister();
 const user={id:'u1',resellerId:'r1',email:'customer',trafficGB:50};
 const meta={newTrafficGB:50,localCommitted:true,nativePending:true};
 const journal={type:'UPDATE',status:'PARTIAL',userId:'u1',resellerId:'r1',email:'customer',reservedGB:0,metadata:JSON.stringify(meta)};

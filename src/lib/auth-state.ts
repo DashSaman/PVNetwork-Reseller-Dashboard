@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "./db";
 import { accountSessionVersion, verifySession, type SessionPayload, type SessionAccount } from "./crypto";
 import { isAdminManagedReseller } from "./reseller-ownership";
+import { getSupportMember } from "./support-members";
 
 export const SESSION_REVOCATION_PREFIX = "sessionRevoked:";
 export const RESELLER_DISABLED_NOTICE = "حساب نمایندگی شما غیرفعال است. برای فعال‌سازی دوباره به پشتیبانی پیام بدهید.";
@@ -17,6 +18,15 @@ export function matchesAccountSession(payload: SessionPayload, account: SessionA
 export async function inspectAccountToken(token: string | undefined, audience: "dashboard" | "bridge") {
   const payload = verifySession(token);
   if (!payload || payload.aud !== audience) return null;
+  if (payload.role === "SUPPORT") {
+    if (audience !== "dashboard") return null;
+    const account = await getSupportMember(payload.uid);
+    if (!account || !matchesAccountSession(payload, account, audience)) return null;
+    const owner = await db.reseller.findUnique({ where: { id: account.resellerId }, select: { active: true } });
+    const resellerDisabled = !owner?.active || await isAdminManagedReseller(account.resellerId);
+    if (await db.setting.findUnique({ where: { key: revokedKey(token!) }, select: { key: true } })) return null;
+    return { payload, resellerDisabled, supportOwnerId: account.resellerId };
+  }
   const account = payload.role === "ADMIN"
     ? await db.adminUser.findUnique({ where: { id: payload.uid } })
     : await db.reseller.findUnique({ where: { id: payload.uid } });

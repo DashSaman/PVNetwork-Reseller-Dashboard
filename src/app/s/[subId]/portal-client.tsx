@@ -24,6 +24,12 @@ import {
   AppWindow,
 } from "lucide-react";
 
+const guides = {
+  android: { label: 'اندروید', text: 'در v2rayNG وارد گروه‌های اشتراک شوید، گروه جدید بسازید و لینک کپی‌شده را در قسمت URL بگذارید. سپس «به‌روزرسانی اشتراک» را بزنید.', app: 'v2rayNG' },
+  ios: { label: 'آیفون و آیپد', text: 'در V2Box از دکمهٔ «افزودن با نام در V2Box» کمک بگیرید. در Streisand از دکمهٔ +، گزینهٔ افزودن اشتراک را انتخاب کنید و لینک را وارد کنید.', app: 'V2Box' },
+  desktop: { label: 'کامپیوتر', text: 'در Hiddify گزینهٔ افزودن پروفایل از کلیپ‌بورد را بزنید. پس از افزودن، پروفایل را انتخاب و متصل کنید.', app: 'Hiddify' },
+};
+
 const APPS = [
   { name: "v2rayNG", platform: "اندروید", icon: <Smartphone className="h-5 w-5" />, url: "https://play.google.com/store/apps/details?id=com.v2ray.ang", note: "پیشنهادی اندروید" },
   { name: "Hiddify", platform: "اندروید / iOS / ویندوز", icon: <MonitorSmartphone className="h-5 w-5" />, url: "https://hiddify.com/download", note: "همه‌کاره" },
@@ -36,6 +42,7 @@ const APPS = [
 export function PortalClient({ data }: { data: PortalData }) {
   const [qr, setQr] = useState<string | null>(null);
   const [copied, setCopied] = useState("");
+  const [device, setDevice] = useState<keyof typeof guides>("android");
 
   if (!data.found) {
     return (
@@ -218,6 +225,20 @@ export function PortalClient({ data }: { data: PortalData }) {
             </CardContent>
           </Card>
         )}
+
+        <Card className="bg-card card-soft">
+          <CardContent className="p-5 space-y-3">
+            <h2 className="font-bold text-sm">راهنمای اتصال</h2>
+            <div className="flex flex-wrap gap-2" aria-label="نوع دستگاه">
+              {(Object.keys(guides) as (keyof typeof guides)[]).map(key => <Button key={key} size="sm" variant={device === key ? 'default' : 'outline'} aria-pressed={device === key} onClick={() => setDevice(key)}>{guides[key].label}</Button>)}
+            </div>
+            <p className="text-sm leading-6 text-muted-foreground">{guides[device].text}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild size="sm" variant="outline"><a href={APPS.find(app => app.name === guides[device].app)?.url} target="_blank" rel="noreferrer">دانلود {guides[device].app}</a></Button>
+              {data.supportUrl && <Button asChild size="sm"><a href={data.supportUrl} target="_blank" rel="noreferrer">پیام به پشتیبانی</a></Button>}
+            </div>
+          </CardContent>
+        </Card>
 
         {/* اپ‌ها */}
         <Card className="bg-card card-soft">

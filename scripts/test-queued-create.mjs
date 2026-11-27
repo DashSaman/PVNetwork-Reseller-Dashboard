@@ -13,6 +13,7 @@ test('queued creation funding requires matching owner, identity, allocation and 
  for(const change of [{trafficGB:30},{subId:'other-sub'},{email:'other'},{refs:refs.slice(0,1)},{localCommitted:false},{nativePending:false},{done:true}])assert.equal(isSavedQueuedCreation(user,{...journal,metadata:JSON.stringify({...m,...change})}),false);
 });
 test('incomplete or malformed legacy metadata cannot qualify for automatic registration',()=>{
- for(const value of ['broken','null','[]',JSON.stringify({...m,uuid:''}),JSON.stringify({...m,trafficGB:0.5}),JSON.stringify({...m,expiryTime:'bad'}),JSON.stringify({...m,refs:[]}),JSON.stringify({...m,refs:[{panelId:'p1',inboundId:'2'}]})])assert.equal(creationMetadata(value),null);
+ for(const value of ['broken','null','[]',JSON.stringify({...m,uuid:''}),JSON.stringify({...m,trafficGB:0.5001}),JSON.stringify({...m,expiryTime:'bad'}),JSON.stringify({...m,refs:[]}),JSON.stringify({...m,refs:[{panelId:'p1',inboundId:'2'}]})])assert.equal(creationMetadata(value),null);
  assert.equal(creationMetadata(JSON.stringify(m)).expiryTime,-30*86400000);
+ assert.equal(creationMetadata(JSON.stringify({...m,trafficGB:0.5})).trafficGB,0.5);
 });

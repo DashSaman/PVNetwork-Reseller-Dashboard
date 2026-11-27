@@ -17,6 +17,8 @@ const ResellerView = dynamic(
   { loading: () => <ViewSpinner /> }
 );
 
+const SupportView = dynamic(() => import("@/components/panel/support-view").then(m => m.SupportView), { loading: () => <ViewSpinner /> });
+
 function ViewSpinner() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -82,5 +84,6 @@ export default function Home() {
   if (session.role === "ADMIN") {
     return <AdminView key={session.uid} session={session} onLogout={() => changeSession(null)} />;
   }
+  if (session.role === "SUPPORT") return <SupportView key={session.uid} session={session} onLogout={() => changeSession(null)} />;
   return <ResellerView key={session.uid} session={session} onLogout={() => changeSession(null)} />;
 }

@@ -1,4 +1,4 @@
-export type Session = { role: "ADMIN" | "RESELLER"; username: string; uid: string };
+export type Session = { role: "ADMIN" | "RESELLER" | "SUPPORT"; username: string; uid: string };
 
 export type DashboardSessionResponse = { user: Session | null; notice?: string; supportUrl?: string };
 export type LoginNotice = { message: string; supportUrl?: string };
@@ -51,6 +51,7 @@ export type ResellerUserRow = {
   trafficGB: number;
   createdAt?: string;
   liveFresh?: boolean;
+  lastSubFetch?: number | null;
 };
 
 export type ResellerPermissions = {

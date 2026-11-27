@@ -7,14 +7,14 @@ import { mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
 import path from 'node:path';
 const root=process.cwd(),dir=path.join(root,'.local-dev','lifecycle-'+Date.now());mkdirSync(dir,{recursive:true});
 writeFileSync(path.join(dir,'test.db'),'');
-process.env.DATABASE_URL='file:../.local-dev/'+path.basename(dir)+'/test.db';process.env.APP_SECRET='isolated-lifecycle-secret';
+process.env.DATABASE_URL='file:'+path.join(dir,'test.db').replaceAll('\\','/');process.env.APP_SECRET='isolated-lifecycle-secret';
 // This unattended, isolated fixture cannot answer interactive CLI upgrade prompts.
 process.env.CI='1';process.env.__NEXT_AGENT_UPGRADE='security';
 const {PrismaClient}=await import('@prisma/client');const {encryptSecret,hashPassword,signAccountSession}=await import('../src/lib/crypto.ts');
 const GB=1024**3,clients=new Map(),mode=new Map();let db,app,server,checks=0,nativeAdds=0,nativeAttaches=0,nativeDeletes=0;const failures=[];
 function check(name,fn){try{fn();checks++;console.log('PASS',name)}catch(e){failures.push(name+': '+e.message);console.error('FAIL',name,e.message)}}
 const key=(p,e)=>p+':'+e;
-function inbound(p,id){const members=[...clients.entries()].filter(([k,c])=>k.startsWith(p+':')&&c.ids.has(id)).map(([,c])=>c);return {id,enable:true,nodeId:mode.get('all-remote')?1:null,tag:'loc-'+id,port:4400+id,protocol:'vless',settings:JSON.stringify({clients:members.map(c=>({...c,uuid:undefined,ids:undefined,used:undefined}))}),clientStats:members.map(c=>({email:c.email,up:c.used,down:0,total:c.totalGB,enable:c.enable,expiryTime:c.expiryTime})),streamSettings:'{}'};}
+function inbound(p,id){const members=[...clients.entries()].filter(([k,c])=>k.startsWith(p+':')&&c.ids.has(id)).map(([,c])=>c);return {id,enable:true,nodeId:mode.get('all-remote')?1:null,tag:'loc-'+id,port:4400+id,protocol:'vless',settings:JSON.stringify({clients:members.map(c=>({...c,uuid:undefined,ids:undefined,used:undefined}))}),clientStats:members.map(c=>({email:c.email,up:c.used,down:0,total:c.totalGB,enable:c.enable,expiryTime:c.expiryTime,lastSubFetch:c.lastSubFetch})),streamSettings:'{}'};}
 async function child(args){await new Promise((resolve,reject)=>{const c=spawn(process.execPath,args,{cwd:root,env:process.env,stdio:'inherit',windowsHide:true});c.on('error',reject);c.on('exit',n=>n===0?resolve():reject(Error('child '+n)))})}
 try{
  await child(['node_modules/prisma/build/index.js','db','push','--skip-generate']);db=new PrismaClient();
@@ -44,6 +44,196 @@ try{
  async function owner(name,pool=100){const r=await db.reseller.create({data:{username:name,password:hashPassword('test'),trafficPoolGB:pool,multiLocation:true}});for(const id of [1,2,3])await db.resellerInbound.create({data:{resellerId:r.id,panelId:panel.id,inboundId:id,inboundTag:'loc-'+id,protocol:'vless',port:4400+id}});return r}
  async function seed(r,email,used=0,extraPanel){const refs=[{panelId:panel.id,inboundId:1},...(extraPanel?[{panelId:extraPanel.id,inboundId:1}]:[])];const v={id:'uuid-'+email,email,subId:'sub-'+email,totalGB:10*GB,expiryTime:Date.now()+86400000*30,enable:true,limitIp:0,flow:'',used:used*GB,ids:new Set([1])};clients.set(key('a',email),v);if(extraPanel)clients.set(key('b',email),{...v,used:2*GB,ids:new Set([1])});await db.resellerUser.create({data:{resellerId:r.id,email,subId:v.subId,trafficGB:10,panelId:panel.id,inboundIds:JSON.stringify(refs)}});return v}
  async function api(r,route,method='GET',body){const cookie='rp_session='+signAccountSession('RESELLER',r,'dashboard',Date.now()+3600000);const response=await fetch(base+route,{method,headers:{Cookie:cookie,'content-type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:response.status,data:await response.json()}}
+ if (process.argv.includes('--features-only')) {
+  const rep = await owner('feature-owner', 100);
+  const outsider = await owner('feature-outsider', 100);
+  const customer = await seed(rep, 'feature-customer', 3);
+  customer.lastSubFetch = Date.now() - 5000;
+  await seed(outsider, 'feature-foreign', 4);
+  const admin = await db.adminUser.create({ data: { username: 'feature-admin', password: hashPassword('fixture-only-admin') } });
+  const adminCookie = 'rp_session=' + signAccountSession('ADMIN', admin, 'dashboard', Date.now() + 3600000);
+  async function request(route, cookie, method='GET', body) {
+    const response = await fetch(base + route, { method, headers: { Cookie: cookie || '', 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body) });
+    return { status: response.status, data: await response.json().catch(() => null),
+      cookie: response.headers.get('set-cookie')?.split(';')[0] };
+  }
+  const ownerCookie = 'rp_session=' + signAccountSession('RESELLER', rep, 'dashboard', Date.now() + 3600000);
+
+  const planBody = { name: 'Fixture 20', trafficGB: 20, days: 30, ipLimit: 1, expiryMode: 'first-use',
+    refs: [{ panelId: panel.id, inboundId: 1 }, { panelId: panel.id, inboundId: 2 }] };
+  const badPlan = await api(rep, '/api/reseller/plans', 'POST', { ...planBody, refs: [{ panelId: panel.id, inboundId: 999 }] });
+  const saved = await api(rep, '/api/reseller/plans', 'POST', planBody);
+  const foreign = await api(outsider, '/api/reseller/plans');
+  check('plan scope uses current grants and stores no foreign plans', () => {
+    assert.equal(badPlan.status, 403); assert.equal(saved.status, 201); assert.deepEqual(foreign.data.plans, []);
+  });
+  await db.reseller.update({ where: { id: rep.id }, data: { mirzaEnabled: true } });
+  const bridgeBase = '/api/bridge/' + rep.username + '/panel/api/pvnetwork/plans';
+  const bridgeCookie = 'pv_bridge=' + signAccountSession('RESELLER', rep, 'bridge', Date.now() + 3600000);
+  // Login with the supported Mirza wire contract and use its scoped cookie.
+  const bridgeLogin = await request('/api/bridge/' + rep.username + '/login', '', 'POST', { username: rep.username, password: 'test' });
+  const credential = bridgeLogin.cookie || bridgeCookie;
+  const bridgeList = await request(bridgeBase, credential);
+  const packageInput = { planId: saved.data.plan.id, email: 'feature-plan-order', requestId: 'feature-plan-request' };
+  const placed = await request(bridgeBase + '/create', credential, 'POST', packageInput);
+  const retried = await request(bridgeBase + '/create', credential, 'POST', packageInput);
+  check('explicit bridge package preserves quota, duration, all locations and idempotency', () => {
+    const created = clients.get(key('a', packageInput.email));
+    assert.equal(bridgeList.data.success, true, JSON.stringify(bridgeList.data));
+    assert.equal(bridgeList.data.obj[0].id, saved.data.plan.id);
+    assert.equal(placed.data.success, true, JSON.stringify(placed.data)); assert.equal(retried.data.success, true);
+    assert.equal(created.totalGB, 20 * GB); assert.equal(created.expiryTime, -30 * 86400000);
+    assert.deepEqual([...created.ids].sort(), [1, 2]);
+  });
+  await db.resellerInbound.deleteMany({ where: { resellerId: rep.id, inboundId: 2 } });
+  const rejected = await request(bridgeBase + '/create', credential, 'POST', { ...packageInput, email: 'feature-rejected', requestId: 'feature-plan-rejected' });
+  check('a revoked location blocks later bridge use of a saved package', () => {
+    assert.equal(rejected.data.success, false); assert.equal(clients.has(key('a', 'feature-rejected')), false);
+  });
+
+  const live = await api(rep, '/api/reseller/live-users');
+  check('native fetch metadata remains distinct and restricted to tracked users', () => {
+    assert.equal(live.data.users.find(user => user.email === customer.email).lastSubFetch, customer.lastSubFetch);
+    assert.equal(live.data.users.some(user => user.email === 'feature-foreign'), false);
+  });
+
+  const contact = await api(rep, '/api/reseller/support-contact', 'PUT', { username: '@fixture_help' });
+  const portal = await request('/api/s/' + customer.subId + '?format=json');
+  check('public customer portal shows scoped support while preserving the original native link', () => {
+    assert.equal(contact.status, 200); assert.equal(portal.data.supportUrl, 'https://t.me/fixture_help');
+    assert.equal(portal.data.subLink, native + '/sub/' + customer.subId);
+  });
+
+  const member = await api(rep, '/api/reseller/support-members', 'POST', { username: 'fixture-helper', password: 'fixture-only-long-password' });
+  const login = await request('/api/auth/login', '', 'POST', { username: member.data.username, password: 'fixture-only-long-password' });
+  const help = await request('/api/support/customers', login.cookie);
+  const denied = await request('/api/reseller/users/' + customer.email, login.cookie, 'DELETE');
+  const deniedAdmin = await request('/api/admin/operations', login.cookie);
+  const deniedOthers = await request('/api/reseller/support-members?username=' + encodeURIComponent(member.data.username), 'rp_session=' +
+    signAccountSession('RESELLER', outsider, 'dashboard', Date.now() + 3600000), 'DELETE');
+  check('helper login is read-only and limited to the owner’s customers', () => {
+    assert.equal(login.status, 200, JSON.stringify(login.data)); assert.equal(denied.status, 401); assert.equal(deniedAdmin.status, 401);
+    assert.equal(deniedOthers.status, 404); assert.equal(help.status, 200);
+    assert.ok(help.data.users.some(user => user.email === customer.email)); assert.ok(!help.data.users.some(user => user.email === 'feature-foreign'));
+    assert.ok(help.data.users.every(user => !('subId' in user) && !('trafficGB' in user) && !('subLink' in user)));
+  });
+
+  const stopped = await seed(rep, 'stop-date', 10);
+  const stopRoute = '/api/reseller/users/' + stopped.email + '/renew';
+  await api(rep, stopRoute, 'PUT', { enabled: true, trafficGB: 5, days: 30, stopAt: Date.now() - 1000 });
+  const stoppedConfig = await api(rep, stopRoute);
+  check('past renewal deadline is reported and leaves the exhausted quota intact', () => {
+    assert.equal(stoppedConfig.data.stopped, 'date'); assert.equal(stopped.used, 10 * GB);
+  });
+
+  const webhook = '/api/admin/event-webhook';
+  const deniedReceiver = await request(webhook, ownerCookie, 'PUT', { enabled: true, url: 'https://receiver.example' });
+  const rejectedTarget = await request(webhook, adminCookie, 'PUT', { enabled: true, url: 'https://127.0.0.1/' });
+  const receiver = await request(webhook, adminCookie, 'PUT', { enabled: true, url: 'https://receiver.example/fixture' });
+  const settings = await request(webhook, adminCookie);
+  check('webhook configuration is admin-only, rejects loopback URLs and never reads the secret back', () => {
+    assert.equal(deniedReceiver.status, 401); assert.equal(rejectedTarget.status, 400);
+    assert.match(receiver.data.secret, /^[a-f0-9]{64}$/); assert.equal(settings.data.secret, undefined);
+  });
+
+  const deleted = await api(rep, '/api/reseller/users/' + customer.email, 'DELETE');
+  await api(rep, '/api/reseller/users/' + customer.email, 'DELETE');
+  const deliveryRows = await db.setting.findMany({ where: { key: { startsWith: 'eventWebhookOutbox:' } } });
+  const events = deliveryRows.map(row => JSON.parse(row.value).event);
+  check('confirmed deletion and verified refund enqueue stable events once without links or passwords', () => {
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.data)); assert.equal(deleted.data.refundedGB, 7);
+    assert.deepEqual(events.map(event => event.event).sort(), ['quota.refunded', 'subscription.deleted']);
+    assert.equal(events.find(event => event.event === 'quota.refunded').data.refundedGB, 7);
+    assert.ok(events.every(event => !JSON.stringify(event).includes(customer.subId)));
+  });
+
+  if (process.env.TEST_WEBHOOK_WORKER === '1') {
+    const { registerHooks } = await import('node:module');
+    const imports = registerHooks({resolve(specifier, context, next) {
+      return next(specifier.startsWith('./') && !/\.[a-z]+$/.test(specifier) && context.parentURL?.includes('/src/lib/') ? specifier + '.ts' : specifier, context);
+    }});
+    try {
+      const { dispatchDueWebhooks } = await import('../src/lib/event-webhooks.ts');
+      const deliveries = [];
+      await dispatchDueWebhooks(async (_url, id, _secret, payload) => {
+        deliveries.push({ id, payload: JSON.parse(payload) });
+        throw new Error('fixture receiver temporarily rejects the request');
+      });
+      const pending = await db.setting.findMany({ where: { key: { startsWith: 'eventWebhookOutbox:' } } });
+      for (const row of pending) {
+        await db.setting.update({ where: { key: row.key }, data: { value: JSON.stringify({ ...JSON.parse(row.value), nextAttempt: 0 }) } });
+      }
+      const replays = [];
+      await dispatchDueWebhooks(async (_url, id, _secret, payload) => { replays.push({ id, payload: JSON.parse(payload) }); });
+      const resulting = await db.setting.findMany({ where: { key: { startsWith: 'eventWebhookOutbox:' } } });
+      check('delivery retries carry the original event IDs and preserve the committed payload', () => {
+        assert.equal(deliveries.length, 2); assert.deepEqual(replays.sort((a,b) => a.id.localeCompare(b.id)), deliveries.sort((a,b) => a.id.localeCompare(b.id)));
+        assert.ok(resulting.every(row => JSON.parse(row.value).status === 'sent'));
+      });
+    } finally { imports.deregister(); }
+  }
+
+  const feed = await api(rep, '/api/reseller/operations?pending=0');
+  const globalFeed = await request('/api/admin/operations?pending=0', adminCookie);
+  check('operations show confirmed accounting and hide private panel details in a reseller session', () => {
+    const row = feed.data.operations.find(op => op.customer === customer.email);
+    assert.equal(row.kind, 'DELETE'); assert.equal(row.status, 'SUCCESS'); assert.equal(row.accounted, true);
+    assert.ok(row.targets.every(target => target.label === undefined && target.status === 'done'));
+    assert.equal(globalFeed.data.operations.find(op => op.customer === customer.email).targets[0].label, 'mock');
+  });
+
+  if (process.env.PLAYWRIGHT_MODULE) {
+    const { pathToFileURL } = await import('node:url');
+    const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
+    const browser = await chromium.launch({ headless: true, channel: 'chrome' });
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      await context.addCookies([{ name: 'rp_session', value: ownerCookie.slice(11), url: base }]);
+      const page = await context.newPage();
+      await page.goto(base);
+      await page.getByRole('button', { name: 'کاربر جدید', exact: true }).click();
+      const selector = page.getByRole('combobox', { name: 'انتخاب بستهٔ آماده' });
+      await selector.selectOption(saved.data.plan.id);
+      await page.getByText('بعضی لوکیشن‌های انتخابی دیگر در دسترس نیستند.', { exact: false }).waitFor();
+      await page.getByRole('button', { name: 'انصراف', exact: true }).click();
+      await page.getByRole('button', { name: 'پیگیری عملیات', exact: true }).click();
+      await page.getByRole('checkbox', { name: 'فقط عملیات باز' }).uncheck();
+      await page.getByText(customer.email, { exact: true }).waitFor();
+      await page.getByRole('button', { name: 'پشتیبانی', exact: true }).click();
+      await page.getByText(member.data.username, { exact: true }).waitFor();
+      await page.goto(base + '/s/' + stopped.subId);
+      await page.getByRole('button', { name: 'کامپیوتر', exact: true }).click();
+      assert.equal(await page.getByRole('link', { name: 'پیام به پشتیبانی', exact: true }).getAttribute('href'), 'https://t.me/fixture_help');
+      check('mobile navigation and customer setup guide work', () => {});
+    } finally { await browser.close(); }
+  }
+
+  const removed = await request('/api/reseller/support-members?username=' + encodeURIComponent(member.data.username), ownerCookie, 'DELETE');
+  const revoked = await request('/api/support/customers', login.cookie);
+  check('revocation invalidates an already logged-in helper immediately', () => {
+    assert.equal(removed.status, 204); assert.equal(revoked.status, 401);
+  });
+
+  const limited = await seed(rep, 'stop-count', 10);
+  const limitedRoute = '/api/reseller/users/' + limited.email + '/renew';
+  await api(rep, limitedRoute, 'PUT', { enabled: true, trafficGB: 5, days: 30, maxRenewals: 1 });
+  let limitedStatus;
+  const deadline = Date.now() + 75000;
+  do {
+    limitedStatus = await api(rep, limitedRoute);
+    if (limitedStatus.data.stopped === 'count') break;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  } while (Date.now() < deadline);
+  check('only a completed and funded auto-renewal consumes the configured count', () => {
+    assert.equal(limitedStatus.data.completed, 1); assert.equal(limitedStatus.data.stopped, 'count');
+    assert.equal(limited.totalGB, 5 * GB); assert.equal(limited.used, 0); assert.equal(stopped.used, 10 * GB);
+  });
+  const atLeastOneRenewalEvent = (await db.setting.findMany({ where: { key: { startsWith: 'eventWebhookOutbox:' } } }))
+    .some(row => JSON.parse(row.value).event.event === 'subscription.renewed');
+  check('confirmed renewal creates a durable delivery event', () => assert.equal(atLeastOneRenewalEvent, true));
+  await request(webhook, adminCookie, 'PUT', { enabled: false });
+ }
  if (process.argv.includes('--renewal-only')) {
   const master=await owner('renewal-owner',60), client=await seed(master,'new-cycle',40);
   client.totalGB=40*GB;client.enable=false;
@@ -221,7 +411,7 @@ try{
   result=await api(legacy,'/api/reseller/users/'+legacyClient.email,'DELETE');const legacyAfter=await db.reseller.findUniqueOrThrow({where:{id:legacy.id}});
   check('legacy deletion committed before ownership removal finishes without a second usage debit or retroactive forfeiture',()=>{assert.equal(result.status,200,JSON.stringify(result));assert.equal(legacyAfter.consumedGB,3);assert.equal(result.data.refundedGB,7);assert.equal(result.data.forfeitedGB,0)});
  }
- if(!process.argv.includes('--availability-only')&&!process.argv.includes('--refund-only')&&!process.argv.includes('--renewal-only')) {
+ if(!process.argv.includes('--availability-only')&&!process.argv.includes('--refund-only')&&!process.argv.includes('--renewal-only')&&!process.argv.includes('--features-only')) {
  const r=await owner('creator');mode.set('partial-add',true);let result=await api(r,'/api/reseller/users','POST',{name:'Partial',trafficGB:10,expiryDays:30,inbounds:[1,2,3].map(inboundId=>({panelId:panel.id,inboundId})),requestId:'partial-create-fixture'});mode.delete('partial-add');
  check('partial native add is completed before create reports ready',()=>{assert.equal(result.status,200);assert.equal(clients.get(key('a',result.data.email)).ids.size,3)});
  const stableEmail=result.data.email;result=await api(r,'/api/reseller/users','POST',{name:'Partial',trafficGB:10,expiryDays:30,inbounds:[1,2,3].map(inboundId=>({panelId:panel.id,inboundId})),requestId:'partial-create-fixture'});check('create retry with relative expiry returns same account',()=>{assert.equal(result.status,200);assert.equal(result.data.email,stableEmail)});
@@ -414,7 +604,7 @@ try{
  result=await api(brieflyDirty,'/api/reseller/users/briefly-dirty-delete','DELETE');clearTimeout(dirtyTimer);mode.delete('node-pending');mode.delete('all-remote');const brieflyDirtyAfter=await db.reseller.findUnique({where:{id:brieflyDirty.id}});
  check('a briefly dirty healthy node settles within the original delete instead of leaving an unstarted queue',()=>{assert.equal(result.status,200);assert.equal(clients.has(key('a','briefly-dirty-delete')),false);assert.equal(brieflyDirtyAfter.consumedGB,3)});
  }
- if(!process.argv.includes('--refund-only')&&!process.argv.includes('--renewal-only')) {
+ if(!process.argv.includes('--refund-only')&&!process.argv.includes('--renewal-only')&&!process.argv.includes('--features-only')) {
   const slowOwner=await owner('slow-healthy-controller',100);await seed(slowOwner,'slow-healthy-reset',3);mode.set('slow-healthy-reset',{});mode.set('catalog-delay',4500);mode.set('options-supported',true);
  let result=await api(slowOwner,'/api/reseller/inbounds');
  check('a healthy large controller snapshot taking over four seconds retains granted choices',()=>{assert.equal(result.status,200);assert.deepEqual(result.data.inbounds.map(i=>i.inboundId),[1,2,3])});
