@@ -117,6 +117,28 @@ try{
  if(process.env.PLAYWRIGHT_MODULE){
   const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE));const browser=await chromium.launch({headless:true,channel:'chrome'});
   try{
+   const narrow=await browser.newContext({viewport:{width:320,height:844},isMobile:true,hasTouch:true});
+   await narrow.addCookies([{name:'rp_session',value:cookie(rep).slice('rp_session='.length),url:base}]);
+   const narrowPage=await narrow.newPage();
+   await narrowPage.goto(base,{waitUntil:'networkidle'});
+   await narrowPage.getByRole('button',{name:'تنظیمات حساب',exact:true}).click();
+   await narrowPage.getByRole('heading',{name:'تنظیمات حساب',exact:true}).waitFor();
+   const widthCheck=()=>narrowPage.evaluate(()=>({
+     viewport:document.documentElement.clientWidth,
+     page:document.documentElement.scrollWidth,
+     browser:innerWidth,
+   }));
+   const closedWidth=await widthCheck();
+   const narrowGuide=narrowPage.getByTestId('mirza-inline-guide');
+   await narrowGuide.locator('summary').first().click();
+   await narrowGuide.getByText('هنوز ربات ندارم — آموزش نصب از صفر',{exact:true}).click();
+   await narrowGuide.getByRole('img',{name:/^تصویر نصب ۴/}).waitFor({state:'visible'});
+   const openWidth=await widthCheck();
+   check('account settings fit a 320px mobile viewport with the Mirza guide closed and open',()=>{
+     assert.deepEqual(closedWidth,{viewport:320,page:320,browser:320});
+     assert.deepEqual(openWidth,{viewport:320,page:320,browser:320});
+   });
+   await narrow.close();
    const context=await browser.newContext({viewport:{width:1280,height:950}});await context.addCookies([{name:'rp_session',value:cookie(rep).slice('rp_session='.length),url:base}]);
    const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.__mirzaCopied=value}}}));

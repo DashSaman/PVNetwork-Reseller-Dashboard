@@ -316,22 +316,22 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
   return (
     <div className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur">
-        <div className="mx-auto max-w-6xl px-4 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <PvLogo size={38} />
-            <div className="leading-tight">
+        <div className="mx-auto flex min-h-16 max-w-6xl items-center justify-between gap-2 px-2 py-2 sm:gap-3 sm:px-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <PvLogo size={38} className="shrink-0" />
+            <div className="min-w-0 leading-tight [overflow-wrap:anywhere]">
               <div className="text-sm font-extrabold">{brandTitle}</div>
-              <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
                 سامانه نمایندگی PvNetWork
                 {whitelabel?.customDomain && whitelabel.domainVerified && (
-                  <Badge variant="outline" className="ms-1 h-4 px-1 text-[9px] tone-ok">
-                    <BadgeCheck className="h-3 w-3 me-0.5" /> وایت‌لیبل فعال
+                  <Badge variant="outline" className="min-h-4 max-w-full whitespace-normal px-1 text-[9px] tone-ok sm:ms-1">
+                    <BadgeCheck className="me-0.5 h-3 w-3" /> وایت‌لیبل فعال
                   </Badge>
                 )}
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <span className="hidden sm:inline text-xs text-muted-foreground">
               <span dir="ltr" className="font-semibold">{session.username}</span>
             </span>
