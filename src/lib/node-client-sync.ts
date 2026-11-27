@@ -22,6 +22,7 @@ export type NodeMutationProgress = {
   load(): Promise<NodeMutationState | undefined>;
   save(state: NodeMutationState): Promise<void>;
   expectedSubId?: string;
+  keepDisabled?: boolean;
   checkpointUsage?(bytes: number): Promise<void>;
 };
 const failure = (reason: string): PanelApiResult => ({ ok: false, msg: `NODE_SYNC_FAILED: ${reason} — عملیات کامل نشده؛ پس از رفع مشکل دوباره ادامه دهید` });
@@ -274,7 +275,7 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
       for (const peer of op === 'delete' ? auth.nodePeers || [] : master ? peersFor(auth, master) : auth.nodePeers || []) {
         const current = await detail(request, peer, email);
         if (!current) continue;
-        if (master) { assertSame(master.client, current.client);if (op === 'delete' && current.client.subId !== master.client.subId) return failure('شناسهٔ اشتراک نود متفاوت است'); }
+        if (master) { assertSame(master.client, current.client);if ((op === 'delete' || progress?.keepDisabled) && current.client.subId !== master.client.subId) return failure('شناسهٔ اشتراک نود متفاوت است'); }
         else if (current.client.subId !== progress?.expectedSubId) return failure("هویت نسخهٔ باقی‌ماندهٔ حساب قابل تأیید نیست");
         steps.push({ key: peer.key, identity: identity(current.client), status: "PENDING" });
       }
@@ -324,7 +325,7 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
       const target = step.key === "master" ? auth : auth.nodePeers?.find(p => p.key === step.key);
       if (!target) return failure("نود ثبت‌شده در ژورنال پیکربندی نشده است");
       if (step.status === "DONE") {
-        if (op === "reset" && (step.wasEnabled || step.reactivateExhausted)) {
+        if (op === "reset" && !progress?.keepDisabled && (step.wasEnabled || step.reactivateExhausted)) {
           const done = await detail(request, target, email);
           if (!done || identity(done.client) !== step.identity) return failure("تأیید بازگشت حساب پس از ریست ممکن نشد");
           if (!done.client.enable) await setEnabled(request, target, email, done, true);
@@ -333,7 +334,7 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
       }
       const current = await detail(request, target, email);
       if (!current && op !== "delete") return failure("حساب نود هنگام ریست در دسترس نیست");
-      if (current && (identity(current.client) !== step.identity || op === 'delete' && progress?.expectedSubId && current.client.subId !== progress.expectedSubId)) return failure("هویت حساب پس از ثبت عملیات عوض شده است");
+      if (current && (identity(current.client) !== step.identity || (op === 'delete' || progress?.keepDisabled) && progress?.expectedSubId && current.client.subId !== progress.expectedSubId)) return failure("هویت حساب پس از ثبت عملیات عوض شده است");
       if (current) {
         if (progress?.checkpointUsage) {
           // Persist the original enable state before freezing, so retries preserve it.
@@ -365,7 +366,7 @@ export async function mutateWithNodePeers(auth: PanelAuth, email: string, op: "d
         if (op === 'reset' && (step.usageBytes || 0) > 0 && await readUsage(request, target, email) >= step.usageBytes!) return failure('صفرشدن مصرف روی نود تأیید نشد؛ درخواست مبهم دوباره اجرا نمی‌شود');
       }
       step.status = "DONE"; await progress?.save(state);
-      if (op === "reset" && (step.wasEnabled || step.reactivateExhausted)) {
+      if (op === "reset" && !progress?.keepDisabled && (step.wasEnabled || step.reactivateExhausted)) {
         const after = await detail(request, target, email);
         if (!after || identity(after.client) !== step.identity) return failure("تأیید حساب پس از ریست ممکن نشد");
         await setEnabled(request, target, email, after, true);

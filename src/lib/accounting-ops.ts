@@ -3,7 +3,7 @@ import { withResellerLock, canonicalUserUsage, parseInboundRefs, validateInbound
 import { readMembershipState } from './membership-state';
 import { retainDetachedAccounting } from './retained-accounting';
 import { getAllPanelInboundsFresh, getPanelConnection, type PanelBundle } from "./panel-manager";
-import { deleteClient, resetClientTraffic, getVerifiedClientUsage, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, isQueuedClientSaved, readClientCreation, readClientDeletion, type PanelAuth, type PanelNodeSyncSnapshot } from "./panel";
+import { deleteClient, resetClientTraffic, getClientProfile, updateClient, getVerifiedClientUsage, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, isQueuedClientSaved, readClientCreation, readClientDeletion, type PanelAuth, type PanelNodeSyncSnapshot } from "./panel";
 import { isSavedQueuedCreation, creationMetadata } from './queued-create';
 import { isSavedQueuedUpdate, updateMetadata } from './queued-update';
 import { logActivity } from "./logger";
@@ -14,6 +14,7 @@ import { canCancelUnstartedOperation, canFinalizeAcknowledgedDeletion, isCurrent
 import { deletionRefundPolicy, deletionSettlement, readDeletionSettlement } from './deletion-refund';
 import { getForfeitedGB } from './deletion-refund-ledger';
 import { isTrafficQuotaGB } from './traffic-quota';
+import { parseRenewalPlan, readAutoRenewal, readRenewalJournal, renewalSettingKey, type RenewalPlan } from './renewal-plan';
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -185,11 +186,13 @@ function nodeProgress(journalId: string, panelId: string): NodeMutationProgress 
       if (!byPanel) throw new Error("Legacy operation needs accounting review");
       byPanel[panelId] = Math.max(byPanel[panelId] || 0, bytes / 1073741824);
       const usage = Object.values(byPanel).reduce((a, b) => a + b, 0);
+      const renewal = readRenewalJournal(m.renewal);
+      const additional = usage + (renewal ? renewal.trafficGB - renewal.previousGB : 0);
       if (row.type === "RESET" && !row.accountingCommitted) {
         const q = await getQuotaState(row.resellerId);
-        if (!q.unlimited && usage > q.pool - q.allocated - q.consumed - q.forfeited - Math.max(0, q.reserved - row.reservedGB)) throw new Error("Insufficient pool for reset");
+        if (!q.unlimited && additional > q.pool - q.allocated - q.consumed - q.forfeited - Math.max(0, q.reserved - row.reservedGB)) throw new Error("Insufficient pool for reset");
       }
-      await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...m, usageByPanel: byPanel }), usageSnapshotGB: usage, ...(row.type === "RESET" && !row.accountingCommitted ? { reservedGB: usage } : {}) } });
+      await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...m, usageByPanel: byPanel }), usageSnapshotGB: usage, ...(row.type === "RESET" && !row.accountingCommitted ? { reservedGB: Math.max(0, additional) } : {}) } });
     },
     async load() {
       const m = await metadata();
@@ -211,6 +214,7 @@ async function runPanelOp(journalId: string, panelId: string, op: "delete" | "re
   const journal = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
   const tracked = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId: journal.resellerId, email } } });
   progress.expectedSubId = tracked?.subId || undefined;
+  progress.keepDisabled = op === 'reset' && !!readRenewalJournal(updateMetadata(journal.metadata).renewal);
   const r = op === "delete"
     ? await deleteClient(conn.conn as PanelAuth, email, progress)
     : await resetClientTraffic(conn.conn as PanelAuth, email, progress);
@@ -526,6 +530,7 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
       }
       const stillThere = await tx.resellerUser.findUnique({ where: { id: tracked.id } });
       if (stillThere) await tx.resellerUser.delete({ where: { id: tracked.id } });
+      await tx.setting.deleteMany({ where: { key: renewalSettingKey(tracked.id) } });
       await tx.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", accountingCommitted: true, reservedGB: 0, completedPanels: JSON.stringify(completed), failedPanels: "[]", metadata: JSON.stringify({ ...meta, deletionSettlement: next }) } });
       return next;
     });
@@ -564,6 +569,7 @@ export async function resetUserByJournal(resellerId: string, email: string, expe
 
     const quota = await getQuotaState(resellerId);
     const own = journal ? await db.operationJournal.findUniqueOrThrow({ where: { id: journal.id } }) : null;
+    if (own && updateMetadata(own.metadata).renewal) return { ok: false, status: 409, msg: "شروع دورهٔ جدید این حساب در جریان است" };
     if (!own?.accountingCommitted && !quota.unlimited && usageGB > quota.pool - quota.allocated - quota.consumed - quota.forfeited - Math.max(0, quota.reserved - (own?.reservedGB || 0))) {
       return { ok: false, status: 403, msg: "برای ریست ترافیک، موجودی آزاد کافی نیست؛ مصرف قبلی باید از پول نماینده پرداخت شود" };
     }
@@ -599,6 +605,131 @@ export async function resetUserByJournal(resellerId: string, email: string, expe
     await db.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", completedPanels: JSON.stringify(completed), failedPanels: "[]" } });
     await logActivity({ actorType: "RESELLER", actorName: reseller.username, action: "ریست ترافیک کاربر", detail: `${email}${usageGB > 0 ? ` | مصرف قطعی: ${usageGB} گیگ` : ""}`, resellerId });
     return { ok: true, debitedGB: usageGB };
+  });
+}
+
+/** Starts a funded cycle on the same native account. The reset never exposes
+ * the old allowance, and activation happens only after atomic settlement. */
+export async function renewUserByJournal(
+  resellerId: string,
+  email: string,
+  request: { plan?: RenewalPlan; requestId?: string; automatic?: boolean; journalId?: string },
+): Promise<OpResult> {
+  return withResellerLock(resellerId, async () => {
+    const loaded = await loadWithinLock(resellerId, email);
+    if ('err' in loaded) return loaded.err;
+    const { tracked } = loaded;
+    if (!tracked.subId) return { ok: false, status: 409, msg: 'شناسهٔ اشتراک برای شروع دورهٔ جدید قابل تأیید نیست' };
+    const key = request.requestId ? `renew:${tracked.id}:${request.requestId}` : undefined;
+    if (key) {
+      const previous = await db.operationJournal.findUnique({ where: { idempotencyKey: key } });
+      const intent = readRenewalJournal(updateMetadata(previous?.metadata ?? null).renewal);
+      if (previous && (!intent || request.plan?.trafficGB !== intent.trafficGB || request.plan.days !== intent.days)) {
+        return { ok: false, status: 409, msg: 'حجم یا مدت با درخواست ثبت‌شدهٔ قبلی مطابقت ندارد' };
+      }
+      if (previous?.status === 'SUCCESS' && previous.accountingCommitted) return { ok: true, debitedGB: previous.usageSnapshotGB || 0 };
+    }
+    const conflict = await assertNoConflictingOperation(resellerId, email, "RESET");
+    if (conflict) return conflict;
+    let journal = await db.operationJournal.findFirst({ where: { resellerId, email, type: 'RESET', status: { in: ['PENDING','RUNNING','PARTIAL','NEEDS_REPAIR'] } } });
+    if (request.journalId && journal?.id !== request.journalId) return { ok: true, debitedGB: 0 };
+    const installation = operationInstallation(!!request.plan);
+    if (!installation) return { ok: false, status: 409, msg: 'شناسهٔ نصب برای تمدید در دسترس نیست' };
+    let metadata = updateMetadata(journal?.metadata ?? null);
+    let renewal = readRenewalJournal(metadata.renewal);
+    if (journal && (!renewal || metadata.operationInstallation !== installation || journal.userId !== tracked.id || journal.status === 'NEEDS_REPAIR'
+      || request.plan && (request.plan.trafficGB !== renewal.trafficGB || request.plan.days !== renewal.days))) {
+      return { ok: false, status: 409, msg: 'ابتدا عملیات قبلی این کاربر را تکمیل کنید' };
+    }
+    const required = await getRequiredUserPanelIds(tracked);
+    if (!required.ok) return { ok: false, status: 409, msg: required.msg };
+    if (journal && [...parseArr(journal.targetPanels)].sort().join(',') !== [...required.panelIds].sort().join(',')) {
+      return { ok: false, status: 409, msg: 'لوکیشن‌های تمدید با درخواست ثبت‌شده مطابقت ندارند' };
+    }
+    const saved = request.automatic && !journal ? await db.setting.findUnique({ where: { key: renewalSettingKey(tracked.id) } }) : null;
+    const plan = renewal ?? (request.automatic ? readAutoRenewal(saved?.value, installation) : parseRenewalPlan(request.plan));
+    if (!plan) return request.automatic ? { ok: true, debitedGB: 0 } : { ok: false, status: 400, msg: 'حجم و مدت دورهٔ جدید نامعتبر است' };
+    if (!journal) {
+      const refs = parseInboundRefs(tracked.inboundIds, tracked.panelId);
+      const selection = await validateInboundSelection(loaded.reseller, refs);
+      if (!selection.ok) return { ok: false, status: 403, msg: selection.msg || 'لوکیشن مجاز برای دورهٔ جدید وجود ندارد' };
+    }
+    if (!await destructiveTargetsReady(tracked, false)) return journal ? waitingForTargets() : { ok: false, status: 502, msg: 'لوکیشن‌های دورهٔ جدید آماده نیستند' };
+    const targets: { id: string; conn: PanelAuth; identity: string; expiry: number }[] = [];
+    for (const id of required.panelIds) {
+      const connection = await getPanelConnection(id);
+      if (!connection.ok) return { ok: false, status: 502, msg: 'اتصال لوکیشن‌های تمدید قابل تأیید نیست' };
+      const profile = await getClientProfile(connection.conn, email);
+      const client = profile.data?.client;
+      const identity = client?.uuid || client?.id;
+      if (!profile.ok || client?.subId !== tracked.subId || !identity || !Number.isSafeInteger(client.expiryTime) || !Number.isSafeInteger(client.totalGB)) {
+        return { ok: false, status: 502, msg: 'هویت و مشخصات دورهٔ فعلی روی همهٔ لوکیشن‌ها تأیید نشد' };
+      }
+      targets.push({ id, conn: connection.conn, identity, expiry: client.expiryTime! });
+    }
+    if (!journal) {
+      const snapshot = await getAllPanelInboundsFresh();
+      const readable = assertRequiredPanelsReadable(snapshot, required.panelIds);
+      if (!readable.ok) return { ok: false, status: 502, msg: readable.msg };
+      const usageByPanel: Record<string, number> = {};
+      for (const target of targets) {
+        const usage = await getVerifiedClientUsage(target.conn, email, tracked.trafficGB * 1073741824);
+        if (!usage.ok || usage.data === undefined) return { ok: false, status: 502, msg: 'سهمیه و مصرف قبلی روی همهٔ لوکیشن‌ها تأیید نشد' };
+        usageByPanel[target.id] = Math.max(usage.data, canonicalUserUsage(snapshot.panels.filter(p => p.panelId === target.id), email).usedBytes) / 1073741824;
+      }
+      const usage = Object.values(usageByPanel).reduce((a, b) => a + b, 0);
+      const now = Date.now();
+      if (!(tracked.trafficGB > 0 && usage >= tracked.trafficGB) && !targets.every(t => t.expiry > 0 && t.expiry <= now)) {
+        return request.automatic ? { ok: true, debitedGB: 0 } : { ok: false, status: 409, msg: 'دورهٔ فعلی هنوز حجم و اعتبار دارد' };
+      }
+      const quota = await getQuotaState(resellerId);
+      const additional = usage + plan.trafficGB - tracked.trafficGB;
+      if (!quota.unlimited && additional > quota.pool - quota.allocated - quota.reserved - quota.consumed - quota.forfeited) {
+        return { ok: false, status: 403, msg: 'موجودی پول ترافیک برای شروع دورهٔ جدید کافی نیست' };
+      }
+      renewal = { ...plan, previousGB: tracked.trafficGB, expiryTime: 0, automatic: !!request.automatic };
+      metadata = { renewal, operationInstallation: installation, usageByPanel, identities: Object.fromEntries(targets.map(t => [t.id, t.identity])) };
+      journal = await db.operationJournal.create({ data: { idempotencyKey: key || opKey('renew',tracked.id), resellerId, userId: tracked.id, email,
+        type: 'RESET', status: 'RUNNING', usageSnapshotGB: usage, reservedGB: Math.max(0, additional), targetPanels: JSON.stringify(required.panelIds), metadata: JSON.stringify(metadata) } });
+    }
+    if (!renewal || targets.some(t => (metadata.identities as Record<string,string> | undefined)?.[t.id] !== t.identity)) {
+      return { ok: false, status: 409, msg: 'هویت حساب پس از ثبت تمدید تغییر کرده است' };
+    }
+    const journalId = journal.id;
+    const pending = async (message: string): Promise<OpResult> => {
+      await db.operationJournal.update({ where: { id: journalId }, data: { status: 'PARTIAL', lastError: message } });
+      return { ok: true, pending: true, debitedGB: 0, message };
+    };
+    if (!journal.accountingCommitted) {
+      const reset = await executeAcrossPanels(journalId, required.panelIds, parseArr(journal.completedPanels), 'reset', email);
+      if (reset.failed.length) return pending('مصرف دورهٔ قبلی محفوظ است؛ تمدید در انتظار تأیید همهٔ لوکیشن‌هاست');
+      if (!renewal.expiryTime) {
+        renewal = { ...renewal, expiryTime: Date.now() + renewal.days * 86400000 };
+        const row = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
+        await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...updateMetadata(row.metadata), renewal }) } });
+      }
+      const totalGB = renewal.trafficGB * 1073741824;
+      for (const target of targets) {
+        const update = await updateClient(target.conn, email, '', { id: target.identity, subId: tracked.subId, enable: false, totalGB, expiryTime: renewal.expiryTime });
+        if (!update.ok) return pending('بستهٔ جدید روی همهٔ لوکیشن‌ها تأیید نشده است');
+        const usage = await getVerifiedClientUsage(target.conn, email, totalGB);
+        if (!usage.ok || usage.data !== 0) return pending('تأیید مصرف صفر دورهٔ جدید در انتظار همگام‌سازی است');
+      }
+      const trafficGB = renewal.trafficGB;
+      await db.$transaction(async tx => {
+        const row = await tx.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
+        await tx.reseller.update({ where: { id: resellerId }, data: { consumedGB: { increment: row.usageSnapshotGB || 0 } } });
+        await tx.resellerUser.update({ where: { id: tracked.id }, data: { trafficGB } });
+        await tx.operationJournal.update({ where: { id: journalId }, data: { accountingCommitted: true, reservedGB: 0 } });
+      });
+    }
+    for (const target of targets) {
+      const activated = await updateClient(target.conn, email, '', { id: target.identity, subId: tracked.subId, enable: true, totalGB: renewal.trafficGB * 1073741824, expiryTime: renewal.expiryTime });
+      if (!activated.ok) return pending('دورهٔ جدید ثبت شده؛ فعال‌سازی لوکیشن‌ها در انتظار تأیید است');
+    }
+    const settled = await db.operationJournal.update({ where: { id: journalId }, data: { status: 'SUCCESS', failedPanels: '[]', lastError: null } });
+    await logActivity({ actorType: "RESELLER", actorName: loaded.reseller.username, action: renewal.automatic ? "تمدید خودکار" : "شروع دورهٔ جدید", detail: `${email} | بستهٔ تازه: ${renewal.trafficGB} گیگ، ${renewal.days} روز | مصرف قبلی: ${settled.usageSnapshotGB || 0} گیگ`, resellerId });
+    return { ok: true, debitedGB: settled.usageSnapshotGB || 0 };
   });
 }
 

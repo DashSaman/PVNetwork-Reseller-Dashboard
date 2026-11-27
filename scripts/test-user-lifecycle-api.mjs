@@ -30,7 +30,7 @@ try{
   else if(url==='/panel/api/server/status')obj={xray:{state:'running'}};
   else if(url==='/panel/api/clients/add'){nativeAdds++;const v=body.client;clients.set(key(p,v.email),{...v,totalGB:mode.get('bad-create-record')?v.totalGB+GB:v.totalGB,used:0,ids:new Set((mode.get('partial-add')?body.inboundIds.slice(0,1):body.inboundIds))});if(mode.get('node-pending'))obj={nodePending:true};}
   else if(url.endsWith('/attach')){nativeAttaches++;const e=decodeURIComponent(url.split('/').at(-2));const target=clients.get(key(p,e));if(target)body.inboundIds.forEach(id=>target.ids.add(id));else{success=false;msg='client not found'}if(mode.get('node-pending'))obj={nodePending:true};}
-  else if(url.startsWith('/panel/api/clients/update/')){if(c){if(!m.dropUpdate)Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true};if(m.useAfterUpdate!==undefined)c.used=m.useAfterUpdate}else{success=false;msg='client not found'}}
+  else if(url.startsWith('/panel/api/clients/update/')){if(c){if(!m.dropUpdate)Object.assign(c,body);if(m.pendingUpdate)obj={nodePending:true};if(m.useAfterUpdate!==undefined)c.used=m.useAfterUpdate;if(m.enabledQuotas&&body.enable)m.enabledQuotas.push(c.totalGB)}else{success=false;msg='client not found'}}
   else if(url.startsWith('/panel/api/clients/del/')){nativeDeletes++;if(m.deleteAckOnly){}else if(m.badMissing){success=false;msg='API route not found'}else if(m.failB&&p==='b'){success=false;msg='temporarily unavailable'}else clients.delete(key(p,email));if(m.dirtyAfterDelete)mode.set('node-pending',true);}
   else if(url.startsWith('/panel/api/clients/resetTraffic/')){if(c){if(!m.resetAckOnly)c.used=0;m.resets=(m.resets||0)+1;if(m.dirtyAfterReset){mode.set('node-pending',true);setTimeout(()=>mode.delete('node-pending'),750)}if(m.loseResetResponse){m.loseResetResponse=false;success=false;msg='connection closed after reset'}}}
   else if(url==='/panel/api/clients/onlines')obj=[];
@@ -44,6 +44,74 @@ try{
  async function owner(name,pool=100){const r=await db.reseller.create({data:{username:name,password:hashPassword('test'),trafficPoolGB:pool,multiLocation:true}});for(const id of [1,2,3])await db.resellerInbound.create({data:{resellerId:r.id,panelId:panel.id,inboundId:id,inboundTag:'loc-'+id,protocol:'vless',port:4400+id}});return r}
  async function seed(r,email,used=0,extraPanel){const refs=[{panelId:panel.id,inboundId:1},...(extraPanel?[{panelId:extraPanel.id,inboundId:1}]:[])];const v={id:'uuid-'+email,email,subId:'sub-'+email,totalGB:10*GB,expiryTime:Date.now()+86400000*30,enable:true,limitIp:0,flow:'',used:used*GB,ids:new Set([1])};clients.set(key('a',email),v);if(extraPanel)clients.set(key('b',email),{...v,used:2*GB,ids:new Set([1])});await db.resellerUser.create({data:{resellerId:r.id,email,subId:v.subId,trafficGB:10,panelId:panel.id,inboundIds:JSON.stringify(refs)}});return v}
  async function api(r,route,method='GET',body){const cookie='rp_session='+signAccountSession('RESELLER',r,'dashboard',Date.now()+3600000);const response=await fetch(base+route,{method,headers:{Cookie:cookie,'content-type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:response.status,data:await response.json()}}
+ if (process.argv.includes('--renewal-only')) {
+  const master=await owner('renewal-owner',60), client=await seed(master,'new-cycle',40);
+  client.totalGB=40*GB;client.enable=false;
+  await db.resellerUser.update({where:{resellerId_email:{resellerId:master.id,email:client.email}},data:{trafficGB:40}});
+  const renew='/api/reseller/users/'+client.email+'/renew', plan={trafficGB:10,days:30,requestId:'renewal-manual-fixture'};
+  const enabledQuotas=[];mode.set(client.email,{enabledQuotas});
+  const outsider=await owner('renew-outsider');
+  const denied=await api(outsider,renew,'POST',plan);
+  check('another reseller cannot renew this subscription',()=>assert.equal(denied.status,404));
+  const initial=await api(master,renew);
+  check('automatic renewal defaults to off',()=>assert.deepEqual(initial.data,{plan:null}));
+  const manual=await api(master,renew,'POST',plan);
+  const funds=await api(master,'/api/reseller/bootstrap');
+  const updated=await db.reseller.findUniqueOrThrow({where:{id:master.id}});
+  check('fully used 40 GiB becomes a funded 10 GiB cycle on the same subscription',()=>{
+   assert.equal(manual.status,200,JSON.stringify(manual.data));assert.equal(updated.consumedGB,40);
+   assert.equal(funds.data.permissions.remainingGB,10);assert.equal(client.totalGB,10*GB);assert.equal(client.used,0);
+   assert.equal(client.enable,true);assert.equal(client.subId,'sub-new-cycle');assert.equal(client.id,'uuid-new-cycle');
+   assert.deepEqual(enabledQuotas,[10*GB]);
+  });
+  client.used=GB;
+  const replay=await api(master,renew,'POST',plan);
+  check('manual retry does not start or bill a second renewal',()=>{assert.equal(replay.status,200);assert.equal(client.used,GB)});
+  const tooSoon=await api(master,renew,'POST',{...plan,requestId:'renewal-still-active'});
+  check('a usable period cannot be discarded by the start-new-cycle action',()=>assert.equal(tooSoon.status,409));
+  const expiredOwner=await owner('renew-partial-owner',50),expired=await seed(expiredOwner,'renew-partial',3);
+  expired.expiryTime=Date.now()-86400000;expired.enable=false;
+  const partialPlan={trafficGB:7,days:17,requestId:'renewal-retry-fixture'};
+  const behavior={dropUpdate:true};mode.set(expired.email,behavior);
+  const partial=await api(expiredOwner,'/api/reseller/users/renew-partial/renew','POST',partialPlan);
+  let paused=await db.reseller.findUniqueOrThrow({where:{id:expiredOwner.id}});
+  check('an incomplete native update keeps the account disabled and defers settlement',()=>{
+   assert.equal(partial.status,202,JSON.stringify(partial.data));assert.equal(partial.data.pending,true);
+   assert.equal(expired.enable,false);assert.equal(expired.used,0);assert.equal(paused.consumedGB,0);assert.equal(behavior.resets,1);
+  });
+  behavior.dropUpdate=false;
+  const finish=await api(expiredOwner,'/api/reseller/users/renew-partial/renew','POST',partialPlan);
+  paused=await db.reseller.findUniqueOrThrow({where:{id:expiredOwner.id}});
+  check('retry completes the frozen cycle with the original consumption and no repeated reset',()=>{
+   assert.equal(finish.status,200,JSON.stringify(finish.data));assert.equal(expired.totalGB,7*GB);assert.equal(expired.used,0);
+   assert.equal(paused.consumedGB,3);assert.equal(behavior.resets,1);assert.equal(expired.enable,true);
+  });
+  const noFunds=await owner('renew-poor',10),poor=await seed(noFunds,'renew-no-funds',10);
+  const deniedFunds=await api(noFunds,'/api/reseller/users/renew-no-funds/renew','POST',{...plan,trafficGB:2});
+  check('insufficient pool blocks renewal before resetting usage',()=>{assert.equal(deniedFunds.status,403);assert.equal(poor.used,10*GB);assert.equal(poor.totalGB,10*GB)});
+  const autoCases=[];
+  for(const trigger of ['usage','expiry','off']){
+   const rep=await owner('auto-'+trigger,50),nativeClient=await seed(rep,'auto-'+trigger,trigger==='usage'?10:2);
+   if(trigger==='expiry')nativeClient.expiryTime=Date.now()-86400000;
+   const route='/api/reseller/users/'+nativeClient.email+'/renew';
+   const configured=await api(rep,route,'PUT',{enabled:true,trafficGB:5,days:10});
+   check('owner can configure automatic renewal for '+trigger,()=>assert.equal(configured.status,200));
+   if(trigger==='off'){await api(rep,route,'PUT',{enabled:false});nativeClient.used=10*GB;}
+   autoCases.push({trigger,rep,nativeClient});
+  }
+  const deadline=Date.now()+75000;
+  while(Date.now()<deadline && await db.operationJournal.count({where:{resellerId:{in:autoCases.slice(0,2).map(c=>c.rep.id)},type:'RESET',status:'SUCCESS'}})<2) {
+   await new Promise(r=>setTimeout(r,500));
+  }
+  for(const {trigger,rep,nativeClient} of autoCases) {
+   const results=await db.operationJournal.findMany({where:{resellerId:rep.id,type:'RESET',status:'SUCCESS'}});
+   check('automatic renewal trigger '+trigger,()=>{
+    assert.equal(results.length,trigger==='off'?0:1);
+    assert.equal(nativeClient.totalGB,(trigger==='off'?10:5)*GB);
+    assert.equal(nativeClient.used,(trigger==='off'?10:0)*GB);
+   });
+  }
+ }
  if(process.argv.includes('--refund-only')) {
   for(const [name,expiry,used,refund,forfeited] of [
    ['early-delete',Date.now()+8*86400000,3,7,0],
@@ -153,7 +221,7 @@ try{
   result=await api(legacy,'/api/reseller/users/'+legacyClient.email,'DELETE');const legacyAfter=await db.reseller.findUniqueOrThrow({where:{id:legacy.id}});
   check('legacy deletion committed before ownership removal finishes without a second usage debit or retroactive forfeiture',()=>{assert.equal(result.status,200,JSON.stringify(result));assert.equal(legacyAfter.consumedGB,3);assert.equal(result.data.refundedGB,7);assert.equal(result.data.forfeitedGB,0)});
  }
- if(!process.argv.includes('--availability-only')&&!process.argv.includes('--refund-only')) {
+ if(!process.argv.includes('--availability-only')&&!process.argv.includes('--refund-only')&&!process.argv.includes('--renewal-only')) {
  const r=await owner('creator');mode.set('partial-add',true);let result=await api(r,'/api/reseller/users','POST',{name:'Partial',trafficGB:10,expiryDays:30,inbounds:[1,2,3].map(inboundId=>({panelId:panel.id,inboundId})),requestId:'partial-create-fixture'});mode.delete('partial-add');
  check('partial native add is completed before create reports ready',()=>{assert.equal(result.status,200);assert.equal(clients.get(key('a',result.data.email)).ids.size,3)});
  const stableEmail=result.data.email;result=await api(r,'/api/reseller/users','POST',{name:'Partial',trafficGB:10,expiryDays:30,inbounds:[1,2,3].map(inboundId=>({panelId:panel.id,inboundId})),requestId:'partial-create-fixture'});check('create retry with relative expiry returns same account',()=>{assert.equal(result.status,200);assert.equal(result.data.email,stableEmail)});
@@ -346,7 +414,7 @@ try{
  result=await api(brieflyDirty,'/api/reseller/users/briefly-dirty-delete','DELETE');clearTimeout(dirtyTimer);mode.delete('node-pending');mode.delete('all-remote');const brieflyDirtyAfter=await db.reseller.findUnique({where:{id:brieflyDirty.id}});
  check('a briefly dirty healthy node settles within the original delete instead of leaving an unstarted queue',()=>{assert.equal(result.status,200);assert.equal(clients.has(key('a','briefly-dirty-delete')),false);assert.equal(brieflyDirtyAfter.consumedGB,3)});
  }
- if(!process.argv.includes('--refund-only')) {
+ if(!process.argv.includes('--refund-only')&&!process.argv.includes('--renewal-only')) {
   const slowOwner=await owner('slow-healthy-controller',100);await seed(slowOwner,'slow-healthy-reset',3);mode.set('slow-healthy-reset',{});mode.set('catalog-delay',4500);mode.set('options-supported',true);
  let result=await api(slowOwner,'/api/reseller/inbounds');
  check('a healthy large controller snapshot taking over four seconds retains granted choices',()=>{assert.equal(result.status,200);assert.deepEqual(result.data.inbounds.map(i=>i.inboundId),[1,2,3])});

@@ -22,6 +22,7 @@ import { api, StatCard, TrafficBar, ExpiryBadge, StatusBadge, Spinner, faDate, f
 import { ThemeToggle } from "./theme";
 import { BulkExtensionDialog } from "./bulk-extension-dialog";
 import { CustomerToolsBar, CustomerRowTools, useCustomerMetadata } from "./customer-tools";
+import { RenewalDialog } from "./renewal-dialog";
 import { TrafficQuotaChart } from "./traffic-quota-chart";
 import { MirzaSetupGuide } from './mirza-setup-guide';
 import { getCreateAttempt, finishCreateAttempt } from '@/lib/create-attempt';
@@ -38,6 +39,7 @@ import {
   Pencil,
   Trash2,
   RotateCcw,
+  CalendarClock,
   Copy,
   QrCode,
   RefreshCw,
@@ -760,6 +762,7 @@ function UsersTab({
   const [createOpen, setCreateOpen] = useState(false);
   const [extensionOpen, setExtensionOpen] = useState(false);
   const [editing, setEditing] = useState<ResellerUserRow | null>(null);
+  const [renewing, setRenewing] = useState<ResellerUserRow | null>(null);
   const [deleting, setDeleting] = useState<ResellerUserRow | null>(null);
   const [cancellingReset, setCancellingReset] = useState<string | null>(null);
   const [linksUser, setLinksUser] = useState<{ email: string; name: string | null } | null>(null);
@@ -1333,6 +1336,9 @@ function UsersTab({
                           <Button size="icon" variant="ghost" title={tools.data.get(u.email)?.pendingOperation === 'RESET' ? 'ادامهٔ ریست ثبت‌شده' : 'ریست ترافیک'} disabled={tools.data.get(u.email)?.pendingOperation === 'DELETE'} onClick={() => resetTraffic(u)}>
                             <RotateCcw className="h-4 w-4" />
                           </Button>
+                          <Button size="icon" variant="ghost" title="دورهٔ جدید و تمدید خودکار" aria-label={`تمدید ${u.email}`} onClick={() => setRenewing(u)}>
+                            <CalendarClock className="h-4 w-4" />
+                          </Button>
                           <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} title={u.enable === null ? "در انتظار وضعیت زنده" : u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
                             <UserX className={`h-4 w-4 ${u.enable ? "" : "text-[var(--brand)]"}`} />
                           </Button>
@@ -1620,6 +1626,7 @@ function UsersTab({
       </Dialog>
 
       {/* دیالوگ ویرایش */}
+      {renewing && <RenewalDialog email={renewing.email} quota={renewing.trafficGB ?? renewing.totalGB ?? 0} onClose={() => setRenewing(null)} onRenewed={() => { reload(); void tools.reload(); }} />}
       <Dialog open={!!editing && !!editForm} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>

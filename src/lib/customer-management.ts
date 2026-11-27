@@ -11,6 +11,7 @@ import { logActivity } from './logger';
 import { canCancelUnstartedReset, canCancelUnstartedOperation } from './pending-reset';
 import { operationInstallation } from './operation-installation';
 import { isTrafficQuotaGB } from './traffic-quota';
+import { readRenewalJournal } from './renewal-plan';
 
 export const CUSTOMER_ACTIVE = ['PENDING', 'RUNNING', 'PARTIAL', 'NEEDS_REPAIR'];
 const identity = (client: PanelClient) => client.id || client.password || '';
@@ -39,7 +40,8 @@ export async function customerMetadata(users: ResellerUser[]) {
     const pending = parseSetting<{ newTrafficGB?: number; kind?: string; bulkJobId?: string; localCommitted?: boolean } | null>(operation?.metadata, null);
     const pendingUpdate = pending && !pending.kind && !pending.bulkJobId && isTrafficQuotaGB(pending.newTrafficGB) ? { trafficGB: pending.newTrafficGB, localCommitted: !!operation && isSavedQueuedUpdate(u, operation) } : null;
     const destructive = updates.find(j => j.userId === u.id && j.resellerId === u.resellerId && j.email === u.email && ['DELETE', 'RESET'].includes(j.type) && parseSetting<{ explicitDestructive?: boolean }>(j.metadata, {}).explicitDestructive === true);
-    return { email: u.email, labels, deleted: !present.has(u.id), pendingUpdate, pendingCreate: updates.some(j => j.userId === u.id && j.type === 'CREATE' && j.resellerId === u.resellerId && j.email === u.email), pendingOperation: destructive?.type || null, pendingOperationId: destructive?.id || null, canCancelReset: !!destructive && canCancelUnstartedReset(destructive, operationInstallation()), canCancelOperation: !!destructive && canCancelUnstartedOperation(destructive, operationInstallation()) };
+    const pendingRenewal = updates.some(j => j.userId === u.id && j.resellerId === u.resellerId && j.email === u.email && j.type === 'RESET' && !!readRenewalJournal(parseSetting<{ renewal?: unknown }>(j.metadata, {}).renewal));
+    return { email: u.email, labels, deleted: !present.has(u.id), pendingUpdate, pendingRenewal, pendingCreate: updates.some(j => j.userId === u.id && j.type === 'CREATE' && j.resellerId === u.resellerId && j.email === u.email), pendingOperation: destructive?.type || null, pendingOperationId: destructive?.id || null, canCancelReset: !!destructive && canCancelUnstartedReset(destructive, operationInstallation()), canCancelOperation: !!destructive && canCancelUnstartedOperation(destructive, operationInstallation()) };
   });
 }
 

@@ -8,7 +8,7 @@ import { Tags, Bell } from 'lucide-react';
 import { api, faDate, faNum } from './shared';
 import { toast } from '@/hooks/use-toast';
 
-type Metadata = { email: string; labels: string[]; lastOnline: number | null; deleted?: boolean; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null; pendingOperationId?: string | null; canCancelReset?: boolean; canCancelOperation?: boolean };
+type Metadata = { email: string; labels: string[]; lastOnline: number | null; deleted?: boolean; pendingUpdate?: { trafficGB: number; localCommitted: boolean } | null; pendingCreate?: boolean; pendingRenewal?: boolean; pendingOperation?: 'DELETE' | 'RESET' | null; pendingOperationId?: string | null; canCancelReset?: boolean; canCancelOperation?: boolean };
 type Customer = { email: string; name?: string | null; usedGB?: number | null };
 type Batch = { emails: string[]; enable: boolean; requestId: string };
 type ItemResult = { email: string; ok: boolean; error?: string };
@@ -17,14 +17,14 @@ export function useCustomerMetadata(scope: 'admin' | 'reseller', users: Customer
   const [error, setError] = useState('');
   const deletedCallback = useRef(onDeleted);
   useEffect(() => { deletedCallback.current = onDeleted; }, [onDeleted]);
-  const pendingDelete = [...data.values()].some(m => m.pendingOperation === 'DELETE');
+  const pendingRecovery = [...data.values()].some(m => m.pendingOperation === 'DELETE' || m.pendingRenewal);
   const signature = users.map(u => u.email).sort().join('|');
   const reload = useCallback(async () => {
     const r = await api<{ users: Metadata[] }>(scope === 'admin' ? '/api/admin/customer-observations' : '/api/reseller/customer-tools?live=1', { signal: AbortSignal.timeout(20000) });
     if (r.ok && r.data) { setData(new Map(r.data.users.map(u => [u.email, u]))); setError('');if (r.data.users.some(u => u.deleted)) deletedCallback.current?.(); }
     else setError('اطلاعات گروه‌ها و آخرین اتصال فعلاً دریافت نشد.');
   }, [scope]);
-  useEffect(() => { let alive = true; const run = () => { if (alive && document.visibilityState === 'visible') void reload(); };run();const t = setInterval(run, pendingDelete ? 5000 : 60000);return () => { alive = false;clearInterval(t); }; }, [reload, signature, pendingDelete]);
+  useEffect(() => { let alive = true; const run = () => { if (alive && document.visibilityState === 'visible') void reload(); };run();const t = setInterval(run, pendingRecovery ? 5000 : 60000);return () => { alive = false;clearInterval(t); }; }, [reload, signature, pendingRecovery]);
   return { data, reload, error };
 }
 
@@ -37,6 +37,7 @@ export function CustomerRowTools({ user, meta, checked, onCheck, online, onResum
     </div>
     <div className="flex flex-wrap gap-1">{meta?.labels.map(label => <Badge variant="outline" className="text-[10px] border-violet-500/30 text-violet-600 dark:text-violet-300" key={label}>{label}</Badge>)}</div>
     {meta?.pendingCreate && <Badge variant="outline" className="text-[10px] text-muted-foreground">حساب ثبت‌شده؛ برخی لوکیشن‌ها در انتظار آماده‌سازی</Badge>}
+    {meta?.pendingRenewal && <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-300">تمدید در انتظار تأیید لوکیشن‌ها</Badge>}
     {meta?.pendingOperation && <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-300">{meta.pendingOperation === 'DELETE' ? 'حذف' : 'ریست'} در انتظار پاسخ لوکیشن؛ سهمیه محفوظ است</Badge>}
     {(meta?.canCancelOperation || meta?.canCancelReset) && onCancelReset && <div className="space-y-1"><p className="text-[10px] text-muted-foreground">{pendingName} هنوز اجرا نشده؛ می‌توانید لغوش کنید و تمدید را انجام دهید. مصرف و سهمیهٔ فعلی حفظ می‌شوند.</p><Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={cancellingReset} onClick={onCancelReset} aria-label={`لغو ${pendingName} اجرا‌نشدهٔ ${user.email}`}>{cancellingReset ? 'در حال لغو…' : `لغو ${pendingName} اجرا‌نشده`}</Button>{onCancelAndEdit && <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={cancellingReset} onClick={onCancelAndEdit} aria-label={`لغو درخواست و ویرایش ${user.email}`}>لغو درخواست و ویرایش</Button>}</div>}
     {meta?.pendingUpdate && (!meta.pendingUpdate.localCommitted ? <div className="space-y-1"><Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-300">ویرایش در انتظار تکمیل</Badge>{onResume && <Button size="sm" variant="ghost" disabled={resumeDisabled} className="h-6 px-1 text-[11px]" aria-label={`ادامهٔ ویرایش ${user.email}`} onClick={onResume}>ادامهٔ ویرایش ({faNum(meta.pendingUpdate.trafficGB)} گیگ)</Button>}</div> : !onResume && <Badge variant="outline" className="text-[10px] text-muted-foreground">ذخیره‌شده؛ همگام‌سازی خودکار</Badge>)}
