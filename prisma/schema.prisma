@@ -105,7 +105,7 @@ model ResellerUser {
   subId      String?  @unique
   inboundIds String // JSON آرایه‌ای از {panelId, inboundId} — مولتی‌لوکیشن بین پنل‌ها
   panelId    String   @default("") // پنل مرجع کاربر — خالی = پنل اصلی
-  trafficGB  Int      @default(0) // سهمیه تخصیص‌یافته از پول (گیگ) — 0 = نامحدود
+  trafficGB  Float    @default(0) // سهمیه تخصیص‌یافته از پول (گیگ با دقت یک مگ) — 0 = نامحدود
   createdAt  DateTime @default(now())
 
   @@unique([resellerId, email])

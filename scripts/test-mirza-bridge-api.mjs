@@ -83,7 +83,24 @@ try{
  check('Mirza synchronization confirmation never sends a second native delete',()=>assert.equal(writes.filter(x=>x.includes('/clients/del/')).length,deleteWrites+1));mode.remoteTwo=false;mode.dirtyOnDelete=false;mode.dirty=false;mode.dirtyUntil=0;
  const uncertain=await seed(rep,'unverified_delete');mode.deleteAckOnly=true;result=await bridge('panel/api/clients/del/'+uncertain.email,'POST',{});mode.deleteAckOnly=false;const retained=await db.resellerUser.findFirst({where:{resellerId:rep.id,email:uncertain.email}});
  check('Mirza cannot turn an unverified native acknowledgement into deletion or a refund',()=>{assert.equal(result.data.success,false);assert.ok(retained);assert.equal(retained.trafficGB,10);assert.ok(clients.has(uncertain.email))});
- const beforeInvalid=writes.length;result=await bridge('panel/api/clients/add','POST',{...create,client:{...create.client,email:'fractional_trial',subId:'1111111111111111',totalGB:GB/2}});check('unsupported fractional plans fail without charging or creating native users',()=>{assert.equal(result.data.success,false);assert.equal(writes.length,beforeInvalid)});
+ const trialBytes=73*1024**2, trialGB=trialBytes/GB;
+ const beforeTrial=(await own('/api/reseller/bootstrap')).data.permissions.remainingGB;
+ const trial={...create,client:{...create.client,email:'fractional_trial',subId:'1111111111111111',totalGB:trialBytes,expiryTime:-3600000}};
+ result=await bridge('panel/api/clients/add','POST',trial);
+ const afterTrial=(await own('/api/reseller/bootstrap')).data.permissions.remainingGB;
+ check('Mirza can create a 73 MiB trial and charge exactly its quota',()=>{
+  assert.equal(result.data.success,true,JSON.stringify(result.data));
+  assert.equal(clients.get('fractional_trial')?.totalGB,trialBytes);
+  assert.equal(clients.get('fractional_trial')?.expiryTime,-3600000);
+  assert.equal(beforeTrial-afterTrial,trialGB);
+ });
+ const trialWrites=writes.length;
+ await bridge('panel/api/clients/add','POST',trial);
+ const retryBalance=(await own('/api/reseller/bootstrap')).data.permissions.remainingGB;
+ check('identical trial retry keeps the same allocation',()=>{assert.equal(writes.length,trialWrites);assert.equal(retryBalance,afterTrial)});
+ result=await own('/api/reseller/users/fractional_trial','PUT',{name:'73 MiB trial'});
+ check('dashboard metadata edits keep the exact native trial size',()=>{assert.equal(result.status,200);assert.equal(clients.get('fractional_trial')?.totalGB,trialBytes)});
+ const beforeInvalid=writes.length;
  result=await bridge('panel/api/clients/add','POST',{...create,client:{...create.client,email:'fractional_near',subId:'2222222222222222',totalGB:GB+1}});check('fractional bytes are rejected before quota conversion can round them away',()=>{assert.equal(result.data.success,false);assert.equal(writes.length,beforeInvalid)});
  result=await bridge('panel/api/clients/add','POST',{...create,client:{...create.client,email:'mirza.dot',subId:'abcdef0123456789',totalGB:GB}});check('native dotted email stays exact throughout creation',()=>{assert.equal(result.data.success,true);assert.equal(clients.get('mirza.dot')?.email,'mirza.dot')});await bridge('panel/api/clients/del/mirza.dot','POST',{});
  result=await own('/api/reseller/mirza/api-token','POST',{});const rotated=result.data.token;check('owner can rotate the integration API token',()=>{assert.equal(result.status,200);assert.ok(rotated&&rotated!==token)});

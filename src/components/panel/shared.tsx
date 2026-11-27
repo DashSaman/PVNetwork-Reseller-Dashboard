@@ -115,12 +115,14 @@ export function formatUsageGB(gb: number): string {
 }
 
 export function gbLabel(gb: number): string {
+  if (gb > 0 && gb < 1) return `${faNum(Math.round(gb * 1024 * 100) / 100)} مگابایت`;
   return gb > 0 ? `${faNum(Math.round(gb * 100) / 100)} گیگ` : "نامحدود";
 }
 
 export function TrafficBar({ used, total }: { used: number | null; total: number }) {
   if (used === null) return <div className="min-w-32 text-xs text-muted-foreground">در حال دریافت مصرف…</div>;
   const unlimited = total <= 0;
+  const unitsPerGiB = total > 0 && total < 1 ? 1024 : 1;
   const pct = unlimited ? Math.min(100, used * 2) : Math.min(100, (used / total) * 100);
   const tone =
     pct >= 95
@@ -131,9 +133,9 @@ export function TrafficBar({ used, total }: { used: number | null; total: number
   return (
     <div className="min-w-32 space-y-1.5">
       <div className="text-xs text-muted-foreground" dir="ltr">
-        <span className="font-semibold text-foreground">{faNum(Math.round(used * 100) / 100)}</span>
+        <span className="font-semibold text-foreground">{faNum(Math.round(used * unitsPerGiB * 100) / 100)}</span>
         {" / "}
-        {unlimited ? "∞" : faNum(Math.round(total * 100) / 100)} GB
+        {unlimited ? "∞" : faNum(Math.round(total * unitsPerGiB * 100) / 100)} {unitsPerGiB === 1024 ? "MB" : "GB"}
       </div>
       <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
         <div

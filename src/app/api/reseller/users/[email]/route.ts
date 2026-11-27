@@ -136,7 +136,11 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     // سرویس مشترک UPDATE — resumable: retry همان ژورنال PARTIAL را ادامه می‌دهد
 
     // ---- سهمیه و پول ----
-    const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : await pendingUpdateQuota(reseller.id, email, tracked.trafficGB);
+    const savedTrafficGB = await pendingUpdateQuota(reseller.id, email, tracked.trafficGB);
+    const trafficGB = body.trafficGB !== undefined ? Math.max(0, Number(body.trafficGB) || 0) : savedTrafficGB;
+    if (!Number.isSafeInteger(trafficGB) && trafficGB !== savedTrafficGB && trafficGB !== tracked.trafficGB) {
+      return NextResponse.json({ error: "سهمیهٔ جدید از فرم گیگابایت باید عدد صحیح باشد" }, { status: 403 });
+    }
 
     // اعتبارسنجی سهمیه در سرویس مشترک updateUserByJournal انجام می‌شود (شامل رزرو دلتا و رزرو خودِ عملیات resume)
 

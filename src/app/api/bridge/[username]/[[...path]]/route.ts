@@ -12,7 +12,6 @@ import {
   withResellerLock,
   parseInboundRefs,
   refKey,
-  bytesToGB,
   gbToBytes,
   type InboundRef,
   type ResellerWithInbounds,
@@ -25,6 +24,7 @@ import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "
 import { retainDetachedAccounting } from '@/lib/retained-accounting';
 import { readMembershipState } from '@/lib/membership-state';
 import { logActivity } from "@/lib/logger";
+import { BYTES_PER_GIB as GB, quotaGBFromNativeBytes } from "@/lib/traffic-quota";
 
 /**
  * پل 3x-ui برای ربات میرزا — مسیرها:
@@ -39,8 +39,6 @@ import { logActivity } from "@/lib/logger";
  */
 
 type Ctx = { params: Promise<{ username: string; path?: string[] }> };
-
-const GB = 1024 * 1024 * 1024;
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { username, path } = await ctx.params;
@@ -274,9 +272,8 @@ async function createOneViaBridge(
   if (!/^[a-zA-Z0-9._-]{3,32}$/.test(rawEmail)) return xui(false, 'نام کاربر باید ۳ تا ۳۲ حرف انگلیسی، عدد، نقطه، خط تیره یا آندرلاین باشد');
   const displayName = rawEmail.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
   const name = displayName.length >= 2 ? displayName : 'bot-user';
-  const totalBytes = Number(client.totalGB ?? 0);
-  if (!Number.isSafeInteger(totalBytes) || totalBytes < 0 || totalBytes % GB !== 0) return xui(false, 'حجم سرویس باید بر حسب گیگابایت کامل باشد');
-  const trafficGB = totalBytes > 0 ? bytesToGB(totalBytes) : 0;
+  const trafficGB = quotaGBFromNativeBytes(Number(client.totalGB ?? 0));
+  if (trafficGB === null) return xui(false, 'حجم سرویس باید بر حسب مگابایت کامل باشد');
   const expiryTime = Number(client.expiryTime ?? 0);
   const ipLimit = Number(client.limitIp ?? 0);
   const subIdRaw = String(client.subId ?? "").trim();
@@ -521,13 +518,13 @@ async function bridgeUpdateClient(req: NextRequest, reseller: ResellerWithInboun
   if (!tracked) return xui(false, "کاربر یافت نشد");
 
   // سهمیه — با اعتبارسنجی پول (مصرف قطعی لحاظ می‌شود)
-  if (payload.totalGB !== undefined && (!Number.isSafeInteger(Number(payload.totalGB)) || Number(payload.totalGB) < 0 || Number(payload.totalGB) % GB !== 0)) return xui(false, 'حجم سرویس باید بر حسب گیگابایت کامل باشد');
   const trafficGB =
     payload.totalGB !== undefined
-      ? (Math.max(0, Number(payload.totalGB) || 0) > 0 ? bytesToGB(Math.max(0, Number(payload.totalGB) || 0)) : 0)
+      ? quotaGBFromNativeBytes(Number(payload.totalGB))
       : payload.trafficGB !== undefined
-        ? Math.max(0, Number(payload.trafficGB) || 0)
+        ? Number(payload.trafficGB)
         : await pendingUpdateQuota(reseller.id, email, tracked.trafficGB);
+  if (trafficGB === null) return xui(false, 'حجم سرویس باید بر حسب مگابایت کامل باشد');
   // سرویس مشترک UPDATE — resumable
   // اعتبارسنجی سهمیه در سرویس مشترک updateUserByJournal
 

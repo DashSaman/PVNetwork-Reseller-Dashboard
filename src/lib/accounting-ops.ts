@@ -13,6 +13,7 @@ import { operationInstallation } from './operation-installation';
 import { canCancelUnstartedOperation, canFinalizeAcknowledgedDeletion, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
 import { deletionRefundPolicy, deletionSettlement, readDeletionSettlement } from './deletion-refund';
 import { getForfeitedGB } from './deletion-refund-ledger';
+import { isTrafficQuotaGB } from './traffic-quota';
 
 /**
  * سرویس متمرکز عملیات تخریبی/حسابداری (فاز ۱.۲) — داشبورد و پل ربات از همین‌جا عبور می‌کنند.
@@ -43,8 +44,8 @@ export function validateRequestedUserQuota(
   quotaState: QuotaState,
   requestedTrafficGB: number
 ): { ok: true } | { ok: false; msg: string } {
-  if (!Number.isSafeInteger(requestedTrafficGB) || requestedTrafficGB < 0 || requestedTrafficGB > 8388607) {
-    return { ok: false, msg: "سهمیه باید عدد صحیح معتبر و نامنفی بر حسب گیگابایت باشد" };
+  if (!isTrafficQuotaGB(requestedTrafficGB)) {
+    return { ok: false, msg: "سهمیه باید معادل تعداد صحیح مگابایت باشد" };
   }
   if (quotaState.unlimited) return { ok: true }; // نمایندهٔ نامحدود: ۰ = نامحدود مجاز (رفتار قدیمی)
   if (!Number.isFinite(requestedTrafficGB) || requestedTrafficGB <= 0) {
@@ -705,8 +706,11 @@ export async function updateUserByJournal(
     }
     if (desired.trafficGB > 0 && usedBytes > targetBytes && (desired.trafficGB !== previousGB || desired.enable === true)) {
       if (reductionGB > 0) {
-        const availableGB = Math.max(0, previousGB - Math.ceil(usedBytes / 1073741824));
-        return { ok: false, status: 403, msg: `مقدار کسر درخواستی (${reductionGB.toLocaleString("fa-IR")} گیگ) بیشتر از حجم قابل‌کسر بر اساس مصرف واقعی مشتری (${availableGB.toLocaleString("fa-IR")} گیگ) است.` };
+        const unitsPerGib = Number.isInteger(previousGB) && Number.isInteger(desired.trafficGB) ? 1 : 1024;
+        const unit = unitsPerGib === 1 ? "گیگ" : "مگابایت";
+        const requested = reductionGB * unitsPerGib;
+        const available = Math.max(0, previousGB * unitsPerGib - Math.ceil(usedBytes * unitsPerGib / 1073741824));
+        return { ok: false, status: 403, msg: `مقدار کسر درخواستی (${requested.toLocaleString("fa-IR")} ${unit}) بیشتر از حجم قابل‌کسر بر اساس مصرف واقعی مشتری (${available.toLocaleString("fa-IR")} ${unit}) است.` };
       }
       return { ok: false, status: 403, msg: "سهمیهٔ کاربر از مصرف فعلی کمتر است؛ ابتدا حجم کافی اضافه کنید و سپس فعال کنید" };
     }
@@ -786,7 +790,7 @@ export async function pendingUpdateQuota(resellerId: string, email: string, fall
   const row = await db.operationJournal.findUnique({ where: { id: journal.id }, select: { metadata: true } });
   try {
     const meta = JSON.parse(row?.metadata || "{}");
-    return !meta.kind && !meta.bulkJobId && Number.isSafeInteger(meta.newTrafficGB) && meta.newTrafficGB >= fallback ? meta.newTrafficGB : fallback;
+    return !meta.kind && !meta.bulkJobId && isTrafficQuotaGB(meta.newTrafficGB) && meta.newTrafficGB >= fallback ? meta.newTrafficGB : fallback;
   } catch { return fallback; }
 }
 

@@ -59,6 +59,10 @@ def inspect_database(database, template):
                 # Older additive migrations used SQLite 0/1 for Prisma false/true.
                 if typ.upper() == 'BOOLEAN' and default is not None:
                     default={'false':'0','true':'1'}.get(default.lower(),default)
+                # Legacy SQLite INTEGER affinity stores real values as-is.
+                # Both declarations support the exact fractional GiB ledger.
+                if table == 'ResellerUser' and name == 'trafficGB' and typ.upper() in ('INTEGER', 'REAL'):
+                    typ = 'REAL'
                 result.append((name,typ.upper(),required,default,pk))
             return sorted(result)
         for table in expected:

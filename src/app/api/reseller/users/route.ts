@@ -110,8 +110,8 @@ export async function GET() {
       name: tracked.name,
       inboundTags: tagsByEmail.get(email) || [],
       protocol: protoByEmail.get(email) || "-",
-      totalGB: agg.total ? bytesToGB(agg.total) : 0,
-      usedGB: bytesToGB(agg.up + agg.down),
+      totalGB: agg.total > 0 && agg.total < 1073741824 ? agg.total / 1073741824 : bytesToGB(agg.total || 0),
+      usedGB: agg.total > 0 && agg.total < 1073741824 ? (agg.up + agg.down) / 1073741824 : bytesToGB(agg.up + agg.down),
       expiryTime: agg.expiryTime,
       enable: agg.enable,
       subId: tracked.subId || null,
@@ -213,6 +213,7 @@ export async function POST(req: NextRequest) {
     catch (e) { return NextResponse.json({ error: (e as Error).message }, { status: 400 }); }
     const ipLimit = reseller.allowIpLimit ? Math.max(0, Number(body.ipLimit) || 0) : 0;
     const trafficGB = Math.max(0, Number(body.trafficGB) || 0);
+    if (!Number.isSafeInteger(trafficGB)) return NextResponse.json({ error: "سهمیه ساخت از پنل باید تعداد صحیح گیگابایت باشد" }, { status: 403 });
 
     const r = await createResellerUserCore(reseller, { name: body.name || "", trafficGB, expiryTime, expiryDays: !body.expiryDate ? body.expiryDays : undefined, ipLimit, refs, requestId });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });

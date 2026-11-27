@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
     const count = Math.min(MAX_BULK, Math.max(1, Math.floor(Number(body.count) || 1)));
     const requestId = (body.requestId || "").trim().slice(0, 48) || undefined;
     const trafficGB = Math.max(0, Number(body.trafficGB) || 0); // ۰ = نامحدود
+    if (!Number.isSafeInteger(trafficGB)) return NextResponse.json({ error: "سهمیه ساخت از پنل باید تعداد صحیح گیگابایت باشد" }, { status: 403 });
     const ipLimit = reseller.allowIpLimit ? Math.max(0, Number(body.ipLimit) || 0) : 0;
 
     // کل عملیات داخل قفل نماینده — bulk/bulk و bulk/single نمی‌توانند هم‌زمان over-spend کنند

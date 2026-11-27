@@ -975,6 +975,8 @@ function UsersTab({
 
   async function saveEdit() {
     if (!editing || !editForm) return;
+    const originalQuota = tools.data.get(editing.email)?.pendingUpdate?.trafficGB ?? editing.trafficGB ?? editing.totalGB ?? 0;
+    const enteredQuota = parseNumberInput(editForm.trafficGB);
     setBusy(true);
     const r = await api<{ ok: boolean; pending?: boolean; refundedGB?: number }>(`/api/reseller/users/${encodeURIComponent(editing.email)}`, {
       method: "PUT",
@@ -983,7 +985,7 @@ function UsersTab({
         inbounds: JSON.stringify(editForm.inbounds) === JSON.stringify(editing.inboundRefs) ? undefined : editForm.inbounds,
         expiryDate: editForm.expiryDate === (editing.expiryTime && editing.expiryTime > 0 ? new Date(editing.expiryTime).toISOString().slice(0, 10) : "") ? undefined : editForm.expiryDate,
         enable: editForm.enable === editing.enable ? undefined : editForm.enable,
-        trafficGB: Math.max(0, Math.floor(parseNumberInput(editForm.trafficGB) || 0)),
+        trafficGB: enteredQuota === originalQuota ? undefined : Math.max(0, Math.floor(enteredQuota)),
         ipLimit: permissions.allowIpLimit && editForm.ipLimit.trim() !== "" ? Math.max(0, Math.floor(parseNumberInput(editForm.ipLimit) || 0)) : undefined,
       }),
     });
@@ -2423,7 +2425,7 @@ function AccountSettingsTab({ username }: { username: string }) {
                 <li>آدرس بالا و توکن API فروش را وارد کنید؛ اگر نام کاربری هم خواست، نام همین نمایندگی را بگذارید</li>
                 <li>در میرزا «تنظیم پروتکل و اینباند» را بزنید و نام کاربری داخلی یک کاربر نمونهٔ خودتان را ارسال کنید تا لوکیشن‌هایش انتخاب شوند</li>
                 <li>در «دامنه لینک ساب» میرزا، لینک کامل ساب همان کاربر نمونه را بفرستید؛ میرزا پایهٔ ساب را خودش ذخیره می‌کند</li>
-                <li>حجم بسته‌ها را با عدد صحیح گیگابایت و حداقل ۱ گیگ تنظیم کنید</li>
+                <li>حجم بستهٔ پولی را به گیگابایت و حجم اکانت تست را به مگابایت وارد کنید</li>
                 <li>ربات را ذخیره کنید — از این به بعد فروش‌ها از همین پنل انجام می‌شود</li>
               </ol>
               <div className="flex flex-wrap items-center gap-2">
