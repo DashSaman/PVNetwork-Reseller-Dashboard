@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useState, type ReactNode } from 'react';
-import { ArrowDown, Check, ChevronLeft, ChevronRight, Copy, BookOpen } from 'lucide-react';
+import { ArrowDown, BookOpen, Bot, Check, ChevronLeft, ChevronRight, Copy, Server, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const number = (n: number) => String(n).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
@@ -21,7 +21,7 @@ function Picture({ title, label, children }: { title: string; label: string; chi
       <div aria-hidden="true" className="flex items-center justify-between gap-2 border-b border-border bg-muted/50 px-4 py-2.5 text-xs"><span className="font-bold">{title}</span><span className="text-[10px] text-muted-foreground">تصویر آموزشی</span></div>
       <div aria-hidden="true" className="space-y-3 p-4 sm:p-5">{children}</div>
     </div>
-    <figcaption className="border-t border-border px-4 py-2 text-[10px] leading-5 text-muted-foreground">اطلاعات تصویر نمونه است؛ دکمه‌ها را در پنل یا ربات واقعی خودت بزن.</figcaption>
+    <figcaption className="border-t border-border px-4 py-2 text-[11px] leading-5 text-muted-foreground">اطلاعات تصویر نمونه است.</figcaption>
   </figure>;
 }
 function PaintedButton({ children, marked = false }: { children: ReactNode; marked?: boolean }) {
@@ -33,8 +33,88 @@ function Point({ children }: { children: ReactNode }) {
 function Field({ title, value, tone = 'address' }: { title: string; value: string; tone?: Tone }) {
   return <div className={`min-w-0 rounded-xl border-2 p-3 ${tones[tone]}`}><div className="mb-1 flex items-center justify-between gap-2 text-[11px] font-bold"><span>{title}</span><Copy className="h-4 w-4 shrink-0" /></div><div className="break-all text-xs leading-6 [overflow-wrap:anywhere]" dir="ltr">{value}</div></div>;
 }
-function Chat({ ask, answer, tone = 'address' }: { ask: string; answer: string; tone?: Tone }) {
-  return <div className="space-y-2 text-xs leading-6"><div className="me-5 rounded-xl rounded-ss-sm border border-border bg-muted/50 p-2.5">میرزا: {ask}</div><div className={`ms-5 rounded-xl rounded-se-sm border p-2.5 break-all [overflow-wrap:anywhere] ${tones[tone]}`} dir="ltr">{answer}</div></div>;
+function Chat({ ask, answer, tone = 'address', sender = 'میرزا' }: { ask: string; answer: string; tone?: Tone; sender?: string }) {
+  return <div className="space-y-2 text-xs leading-6"><div className="me-5 rounded-xl rounded-ss-sm border border-border bg-muted/50 p-2.5">{sender}: {ask}</div><div className={`ms-5 rounded-xl rounded-se-sm border p-2.5 break-all [overflow-wrap:anywhere] ${tones[tone]}`} dir="ltr">{answer}</div></div>;
+}
+
+const installGuide = 'https://github.com/mahdiMGF2/mirzabot#-installation';
+const idCommand = [
+  "read -rsp 'Bot token: ' BOT_TOKEN; printf '\\n'",
+  'curl -fsS "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?timeout=0"',
+  'unset BOT_TOKEN',
+].join('\n');
+const commandStyle = 'my-2 whitespace-pre-wrap rounded-lg border border-border bg-muted/50 p-2.5 text-left text-xs [overflow-wrap:anywhere]';
+
+function MirzaInstallInstructions() {
+  const linkStyle = 'font-bold text-[var(--brand-deep)] underline underline-offset-4';
+
+  return (
+    <details className="rounded-2xl border border-border bg-card p-4">
+      <summary className="cursor-pointer text-sm font-bold">هنوز ربات ندارم — آموزش نصب از صفر</summary>
+      <p className="mt-3 text-sm leading-7">برای نصب تازه، یک حساب تلگرام، دسترسی SSH به یک سرور اوبونتوی تازه و یک زیردامنه برای ربات لازم داری. اگر رباتت از قبل به <code dir="ltr">/start</code> جواب می‌دهد، مستقیم به مراحل اتصال پایین برو.</p>
+      <ol className="mt-4 space-y-3 text-sm leading-7">
+        <li className="rounded-xl border border-border p-3 sm:p-4">
+          <h4 className="flex items-center gap-2 font-bold"><Bot aria-hidden="true" className="h-4 w-4" />۱. در تلگرام یک ربات بساز</h4>
+          <p className="mt-2">در <a className={linkStyle} href="https://t.me/BotFather" dir="ltr">@BotFather</a> فرمان <code dir="ltr">/newbot</code> را بفرست. اول اسم نمایشی و بعد یک نام کاربری یکتا که به <code dir="ltr">bot</code> ختم می‌شود بده. توکن تلگرام را از پاسخ BotFather بردار و خصوصی نگه دار.</p>
+          <p className="mt-2 text-muted-foreground">نمونهٔ اسم نمایشی «فروشگاه من» و نمونهٔ نام کاربری <code dir="ltr">my_shop_example_bot</code> است. در پایان باید لینک ربات و توکن تلگرام را داشته باشی.</p>
+          <div className="mt-3">
+            <Picture title="گفت‌وگو با BotFather" label="تصویر نصب ۱: فرمان newbot، نام نمایشی و نام کاربری ربات">
+              <PaintedButton marked><code dir="ltr">/newbot</code></PaintedButton>
+              <Chat sender="BotFather" ask="اسم نمایشی ربات را بفرست" answer="فروشگاه من" />
+              <Chat sender="BotFather" ask="نام کاربری ربات را بفرست" answer="my_shop_example_bot" />
+              <Field tone="token" title="توکن تلگرام برای نصب ربات" value="•••••••••:••••••••••••••••" />
+            </Picture>
+          </div>
+        </li>
+        <li className="rounded-xl border border-border p-3 sm:p-4">
+          <h4 className="flex items-center gap-2 font-bold"><Server aria-hidden="true" className="h-4 w-4" />۲. سرور و آدرس ربات را آماده کن</h4>
+          <p className="mt-2">یک سرور جدا با Ubuntu 22.04 یا 24.04 بگیر. در تنظیمات DNS دامنه‌ات، یک رکورد <code dir="ltr">A</code> بساز که زیردامنهٔ ربات را به IPv4 همان سرور وصل کند. نصب‌کننده وب‌سرور و پایگاه داده نصب می‌کند، پس از یک سرور تازه برای ربات استفاده کن.</p>
+          <p className="mt-2">در Windows Terminal یا PowerShell به سرور ربات وصل شو. IP و نام ورود را از شرکت میزبان بگیر و در فرمان نمونه جایگزین کن. اگر نام ورودت <code dir="ltr">root</code> نیست، بعد از اتصال و با دسترسی مجاز <code dir="ltr">sudo -i</code> را بزن.</p>
+          <pre dir="ltr" className={commandStyle}><code>ssh root@203.0.113.10</code></pre>
+          <p className="text-muted-foreground">مثلاً اگر زیردامنه‌ات <code dir="ltr">bot.example.com</code> است، برای نصب همین نام را وارد کن. آدرس پنل نمایندگی را در مرحلهٔ اتصال از داخل حساب خودت کپی می‌کنی.</p>
+          <div className="mt-3">
+            <Picture title="رکورد DNS ربات" label="تصویر نصب ۲: رکورد A زیردامنه با آی‌پی نمونهٔ سرور">
+              <PaintedButton marked><code dir="ltr">A</code></PaintedButton>
+              <Field title="زیردامنهٔ ربات" value="bot.example.com" />
+              <Point>آی‌پی سرور تازه را وارد کن</Point>
+              <Field title="مقدار IPv4" value="203.0.113.10" />
+            </Picture>
+          </div>
+        </li>
+        <li className="rounded-xl border border-border p-3 sm:p-4">
+          <h4 className="flex items-center gap-2 font-bold"><Terminal aria-hidden="true" className="h-4 w-4" />۳. آیدی عددی حساب مدیر را پیدا کن</h4>
+          <p className="mt-2">اگر آیدی عددی حساب تلگرامت را داری، به مرحلهٔ بعد برو. اگر نداری، پیش از نصب، از حسابی که قرار است مدیر شود به ربات تازهٔ خودت <code dir="ltr">/start</code> بفرست. فرمان‌های زیر را در ترمینال همان سرور اجرا کن. خط اول توکن تلگرام را می‌پرسد و هنگام وارد کردن چیزی روی صفحه نمایش داده نمی‌شود.</p>
+          <pre dir="ltr" className={commandStyle}><code>{idCommand}</code></pre>
+          <p>در پاسخ، عددِ <code dir="ltr">message.from.id</code> را بردار. اگر <code dir="ltr">result</code> خالی بود، در چت خصوصی ربات یک پیام تازه بفرست و مراحل را دوباره انجام بده. توکن یا متن کامل پاسخ را برای کسی نفرست. <a className={linkStyle} href="https://core.telegram.org/bots/api#getupdates">مرجع Telegram Bot API</a></p>
+          <div className="mt-3">
+            <Picture title="پاسخ نمونهٔ ترمینال" label="تصویر نصب ۳: عدد آیدی مدیر در message.from.id پاسخ تلگرام">
+              <pre className={commandStyle} dir="ltr"><code>{'{ "message": { "from": { "id": 123456789 } } }'}</code></pre>
+              <Point>فقط عدد را بردار</Point>
+              <Field title="آیدی نمونهٔ مدیر" value="123456789" />
+            </Picture>
+          </div>
+        </li>
+        <li className="rounded-xl border border-border p-3 sm:p-4">
+          <h4 className="flex items-center gap-2 font-bold"><Check aria-hidden="true" className="h-4 w-4" />۴. میرزا را نصب کن و جواب ربات را ببین</h4>
+          <p className="mt-2">در <a className={linkStyle} href={installGuide}>صفحهٔ رسمی نصب میرزا</a> دستور نصب را کپی کن و در ترمینال سرور تازه اجرا کن. در منو گزینهٔ <code dir="ltr">1 (Install)</code> را بزن. هر جا نصب‌کننده خواست، توکن BotFather، آیدی عددی مدیر و زیردامنهٔ آماده را وارد کن.</p>
+          <p className="mt-2">بعد از پایان، با همان حساب مدیر به ربات <code dir="ltr">/start</code> بفرست. وقتی ربات جواب داد، <code dir="ltr">/panel</code> را برای بازکردن منوی مدیریت بفرست و از مرحلهٔ ۱ اتصال در پایین صفحه ادامه بده. اگر <code dir="ltr">/start</code> جواب نداد، از ترمینال سرور دستور <code dir="ltr">mirza</code> را اجرا و وضعیت وب‌هوک و SSL را بررسی کن.</p>
+          <div className="mt-3">
+            <Picture title="منوی نصب و ورود به مدیریت" label="تصویر نصب ۴: انتخاب Install و سپس فرمان‌های start و panel">
+              <div className="flex flex-wrap gap-2">
+                <PaintedButton marked><code dir="ltr">1 (Install)</code></PaintedButton>
+                <PaintedButton><code dir="ltr">2 (Update)</code></PaintedButton>
+              </div>
+              <Point>پس از پایان نصب، به ربات پیام بده</Point>
+              <div className="flex flex-wrap gap-2">
+                <PaintedButton><code dir="ltr">/start</code></PaintedButton>
+                <PaintedButton marked><code dir="ltr">/panel</code></PaintedButton>
+              </div>
+            </Picture>
+          </div>
+        </li>
+      </ol>
+    </details>
+  );
 }
 
 const steps: { title: string; place: string; action: ReactNode; expected: string }[] = [
@@ -46,8 +126,8 @@ const steps: { title: string; place: string; action: ReactNode; expected: string
   { title: 'یک کاربر نمونه از پنل خودت بردار', place: 'پنل نمایندگی ← کاربران من', action: <>کاربر نمونه باید فقط لوکیشن‌های آنلاین و مجازی را داشته باشد که می‌خواهی بفروشی. از یک کاربر موجودِ خودت با همین شرایط استفاده کن؛ وگرنه یک کاربر آزمایشی با حداقل <b>۱ گیگ</b> بساز. حجم کاربر آزمایشی از موجودی تو تخصیص می‌یابد. سپس <b>نام کاربری ریزِ زیر نام</b> و <b>لینک کامل ساب</b> او را کپی کن؛ کاربر قدیمی با لوکیشن آفلاین را نمونه نگذار.</>, expected: 'دو مقدار جدا داری: نام کاربری داخلی و لینک کامل ساب همان کاربر.' },
   { title: 'لوکیشن‌های فروش را از کاربر نمونه بگیر', place: 'میرزا ← مدیریت پنل ← اتصال خودت', action: <>گزینهٔ <b>«⚙️ تنظیم پروتکل و اینباند»</b> را بزن. وقتی نام کاربری کانفیگ خواست، <b>متن ریزِ زیر نام یک مشتریِ خودت</b> را کپی و بفرست؛ نام نمایندگی و نام دلخواه پنل را نفرست. عبارت <b dir="ltr">SAMPLE_CUSTOMER_ID</b> در تصویر فقط مثال است. این مرحله لوکیشن‌های فروش را انتخاب می‌کند.</>, expected: 'میرزا پیام ذخیره‌شدن اینباندها را نشان می‌دهد؛ این پیام هنوز نتیجهٔ ساخت کاربر یا خرید نیست.' },
   { title: 'لینک کامل سابِ نمونه را بفرست', place: 'میرزا ← مدیریت پنل ← اتصال خودت', action: <>روی <b>«🔗 دامنه لینک ساب»</b> بزن و <b>لینک کامل ساب کاربر نمونه</b> را از پنل کپی و ارسال کن. لینک اصلی از پنجرهٔ «لینک‌ها و QR کاربر» کپی می‌شود و باید شناسهٔ اشتراک را در انتها داشته باشد. میرزا لینک را بررسی می‌کند و خودش آدرس پایه را نگه می‌دارد؛ فقط آدرس پایه را به این پیام نفرست.</>, expected: 'میرزا لینک را قبول می‌کند و پایهٔ ساب را ذخیره می‌کند.' },
-  { title: 'حجم و زمان تست را با واحد درست وارد کن', place: 'مدیریت محصولات و تست در میرزا', action: <>حجم بستهٔ پولی به <b>گیگابایت</b> است. در بخش <b>حجم اکانت تست</b>، هر تعداد مگابایت صحیح و مثبت که می‌خواهی وارد کن؛ مثلاً <b>۱۰۰</b>. زمان تست به <b>ساعت</b> و مدت بستهٔ پولی به روز است.</>, expected: 'مثال: بستهٔ ۱۰ گیگ / ۳۰ روز، تستِ ۱۰۰ مگابایت / ۱ ساعت. همان مقدار از موجودی نماینده تخصیص می‌یابد.' },
-  { title: 'نتیجهٔ اتصال را بررسی کن', place: 'پنل نمایندگی و میرزا', action: <>در کارت اتصال نمایندگی <b>«بررسی لوکیشن‌های قابل فروش»</b> را بزن؛ باید فهرست لوکیشن‌های آنلاین خودت را ببینی. در میرزا هم وضعیت همان پنل و لینک ساب را بررسی کن. پس از فروش، کاربر باید در <b>«کاربران من»</b> ظاهر شود و سابش کانفیگ داشته باشد. تست فروش واقعی از موجودی تو استفاده می‌کند.</>, expected: 'میرزا پنل را می‌خواند و لینک ساب کاربر، کانفیگ‌های لوکیشن‌های انتخاب‌شده را دارد.' },
+  { title: 'حجم و زمان تست را با واحد درست وارد کن', place: 'مدیریت محصولات و تست در میرزا', action: <>حجم بستهٔ پولی به <b>گیگابایت</b> است. در بخش <b>حجم اکانت تست</b> یک عدد صحیح مثبت به مگابایت وارد کن؛ مثلاً <b>۱۰۰</b>. ۱۰۲۴ مگابایت برابر ۱ گیگ است. زمان تست به <b>ساعت</b> است (۱ یعنی یک ساعت، ۲۴ یعنی یک روز). مدت بستهٔ پولی را به روز وارد کن.</>, expected: 'مثال: بستهٔ ۱۰ گیگ / ۳۰ روز، تستِ ۱۰۰ مگابایت / ۱ ساعت. همان مقدار از موجودی نماینده تخصیص می‌یابد.' },
+  { title: 'یک اشتراک آزمایشی بساز و نتیجه را بررسی کن', place: 'پنل نمایندگی و میرزا', action: <>در کارت اتصال نمایندگی <b>«بررسی لوکیشن‌های قابل فروش»</b> را بزن. بعد در میرزا یک اشتراک آزمایشی از همین پنل بگیر؛ پرداخت واقعی لازم نیست و حجم تست از موجودی نمایندگی تخصیص می‌یابد. در <b>«کاربران من»</b> دنبال همان حساب تازه بگرد. لینک ساب آن را در برنامهٔ کاربر وارد کن و فهرست لوکیشن‌ها را ببین. اگر پاسخ ساخت نامعلوم بود، قبل از تکرار فهرست کاربران را دوباره بررسی کن.</>, expected: 'یک حساب آزمایشی در پنل ثبت شده و لینک ساب آن کانفیگ‌های مورد انتظار را نشان می‌دهد.' },
 ];
 
 function Illustration({ step }: { step: number }) {
@@ -70,6 +150,7 @@ export function MirzaSetupGuide() {
   const titleId = useId();
   const current = steps[step];
   return <section data-testid="mirza-setup-guide" className="min-w-0 space-y-5 text-foreground" dir="rtl" aria-label="آموزش تصویری اتصال میرزا">
+    <MirzaInstallInstructions />
     <div className="rounded-2xl border border-[var(--brand)]/30 bg-[var(--brand-soft)] p-4 text-xs leading-6"><div className="mb-1 flex items-center gap-2 text-sm font-bold"><BookOpen className="h-4 w-4" />اتصال تازه است یا قبلاً وصلش کرده‌ای؟</div>برای اتصال تازه از مرحلهٔ ۱ شروع کن. اگر میرزا قبلاً پنلت را می‌خواند، همان اتصال و توکن را نگه دار؛ از انتخاب کاربر نمونه ادامه بده. تصاویر نمونه‌اند و تنظیمی را خودکار تغییر نمی‌دهند.<div className="mt-3"><Button type="button" size="sm" variant="outline" onClick={() => setStep(5)}>اتصال دارم؛ ادامه از کاربر نمونه</Button></div></div>
     <div className="grid gap-2 text-xs leading-6 sm:grid-cols-3" aria-label="تفاوت نام‌ها"><div className="rounded-xl border border-sky-500/40 p-3"><b>نام پنل در میرزا</b><p>یک عنوان دلخواه، مثلاً «فروش من».</p></div><div className="rounded-xl border border-emerald-500/40 p-3"><b>نام حساب نمایندگی</b><p>داخل آدرس Panel URL حساب خودت است.</p></div><div className="rounded-xl border border-violet-500/40 p-3"><b>نام کاربری کانفیگ نمونه</b><p>متن ریز زیر نام مشتری؛ فقط این را در «تنظیم پروتکل و اینباند» بفرست.</p></div></div>
     <nav className="grid grid-cols-5 gap-2 sm:grid-cols-10" aria-label="انتخاب مرحله آموزش">
@@ -87,7 +168,7 @@ export function MirzaSetupGuide() {
       <div><dt className="font-bold">لینک ساب فعال نیست یا قبول نمی‌شود</dt><dd>مرحلهٔ ۸: لینک کامل یک کاربر معتبر را بفرست؛ آدرس پایه به‌تنهایی کافی نیست. شناسهٔ کاربر باید انتهای لینک باشد.</dd></div>
       <div><dt className="font-bold">هیچ لوکیشن قابل فروشی ندارم</dt><dd>لوکیشن باید هم آنلاین و هم از طرف مدیر برایت مجاز باشد. با مدیر بررسی کن؛ شناسهٔ تصادفی وارد نکن.</dd></div>
       <div><dt className="font-bold">ساخت اکانت تست یا بسته خطا می‌دهد</dt><dd>در مرحلهٔ ۹، واحد حجم، عدد مثبت و موجودی نمایندگی را بررسی کن. در فیلد مگابایتِ تست، ۱۰۲۴ برابر ۱ گیگ است.</dd></div>
-      <div><dt className="font-bold">فقط کد ۴۰۰ می‌بینم</dt><dd>این کد به‌تنهایی علت را مشخص نمی‌کند. اتصال تکراری نساز و کلید معتبر را عوض نکن. نام داخلیِ مشتری، موجودی، حجم کامل گیگ و لوکیشن‌های قابل فروش را بررسی کن. اگر پیام جدید علت دقیق داشت، همان علت را رفع کن.</dd></div>
+      <div><dt className="font-bold">فقط کد ۴۰۰ می‌بینم</dt><dd>نام داخلیِ مشتری، موجودی، واحد حجم و لوکیشن‌های قابل فروش را بررسی کن. اگر پیام علت دقیق را نشان می‌دهد، همان مورد را رفع کن. همین اتصال و کلید معتبر را نگه دار.</dd></div>
       <div><dt className="font-bold">اینباندها ذخیره شدند؛ آیا فروش هم آماده است؟</dt><dd>این پیام فقط انتخاب لوکیشن‌ها را تأیید می‌کند. مرحلهٔ ۸ و ۹ را انجام بده؛ در پایان ساخت تست باید یک کاربر در «کاربران من» و یک ساب دارای کانفیگ بدهد. در پاسخ نامعلوم، پیش از تکرار ساخت، فهرست کاربران را بررسی کن.</dd></div>
     </dl></details>
   </section>;

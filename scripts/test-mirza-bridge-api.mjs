@@ -124,6 +124,19 @@ try{
    const keyInput=page.getByLabel('توکن API اتصال فروش',{exact:true});await page.getByRole('button',{name:'ساخت توکن API',exact:true}).waitFor();
    const inlineGuide=page.getByTestId('mirza-inline-guide');await inlineGuide.locator('summary').first().click();
    const teaching=inlineGuide.getByTestId('mirza-setup-guide'),beforeTeaching=writes.length;
+   const inlineInstall=teaching.getByText('هنوز ربات ندارم — آموزش نصب از صفر',{exact:true});
+   await page.setViewportSize({width:390,height:844});await inlineInstall.click();
+   const installPictures=teaching.getByRole('img',{name:/^تصویر نصب /});
+   for(let index=0;index<4;index++)await installPictures.nth(index).waitFor({state:'visible'});
+   const mobileGuide=await page.evaluate(()=>({viewport:innerWidth,actual:document.documentElement.scrollWidth}));
+   const mobilePictures=await installPictures.count();
+   check('reseller account settings show all four install illustrations at mobile width',()=>{
+     assert.equal(mobilePictures,4);
+     assert.ok(mobileGuide.actual<=mobileGuide.viewport+1);
+     assert.equal(writes.length,beforeTeaching);
+   });
+   await teaching.screenshot({path:path.join(dir,'mirza-install-reseller-mobile.png')});
+   await inlineInstall.click();await page.setViewportSize({width:1280,height:950});
    for(let index=0;index<10;index++){
     await teaching.getByRole('img',{name:new RegExp('تصویر مرحله '+String(index+1).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)])+':')}).waitFor({state:'visible'});
     if(index<9)await teaching.getByRole('button',{name:'مرحله بعد',exact:true}).click();
@@ -146,6 +159,23 @@ try{
    await guidePage.goto(base+'/guide/mirza-bot',{waitUntil:'networkidle'});const publicGuide=guidePage.getByTestId('mirza-setup-guide');
    const stateBeforeGuide=await db.setting.findUnique({where:{key:'bridgeApiToken:'+rep.id}}),writesBeforeGuide=writes.length;
    const navCount=await publicGuide.getByRole('navigation',{name:'انتخاب مرحله آموزش'}).getByRole('button').count();check('public illustrated guide is accessible with ten step controls',()=>assert.equal(navCount,10));
+   const installSummary=publicGuide.getByText('هنوز ربات ندارم — آموزش نصب از صفر',{exact:true});
+   await guidePage.setViewportSize({width:320,height:844});
+   await installSummary.click();
+   const installSection=publicGuide.getByRole('link',{name:'صفحهٔ رسمی نصب میرزا',exact:true});
+   const installerHref=await installSection.getAttribute('href');
+   const botFatherHref=await publicGuide.getByRole('link',{name:'@BotFather',exact:true}).getAttribute('href');
+   for(const pattern of [/در تلگرام یک ربات بساز/,/سرور و آدرس ربات را آماده کن/,/آیدی عددی حساب مدیر را پیدا کن/,/میرزا را نصب کن/]){
+     await publicGuide.getByRole('heading',{name:pattern}).waitFor({state:'visible'});
+   }
+   const installWidth=await guidePage.evaluate(()=>({viewport:innerWidth,content:document.documentElement.scrollWidth}));
+   check('beginner guide shows all four install steps and fits a 320px viewport',()=>{
+     assert.equal(installerHref,'https://github.com/mahdiMGF2/mirzabot#-installation');
+     assert.equal(botFatherHref,'https://t.me/BotFather');
+     assert.ok(installWidth.content<=installWidth.viewport+1);
+   });
+   await installSummary.click();
+   await guidePage.setViewportSize({width:1280,height:900});
    await publicGuide.getByRole('button',{name:'اتصال دارم؛ ادامه از کاربر نمونه',exact:true}).click();
    await publicGuide.getByRole('heading',{name:'یک کاربر نمونه از پنل خودت بردار',exact:true}).waitFor();
    const namingHelp=await publicGuide.getByLabel('تفاوت نام‌ها').innerText();
@@ -160,7 +190,7 @@ try{
    }}check('every illustrated step fits both 320px and 390px mobile widths',()=>assert.ok(sizes.every(size=>size.content<=size.width+1),JSON.stringify(sizes)));
    await guidePage.setViewportSize({width:390,height:844});await publicGuide.getByRole('button',{name:'رفتن به مرحله ۸',exact:true}).click();await publicGuide.screenshot({path:path.join(dir,'mirza-guide-subscription-mobile.png')});
    await guidePage.evaluate(()=>document.documentElement.classList.add('dark'));await publicGuide.screenshot({path:path.join(dir,'mirza-guide-subscription-dark.png')});
-   await publicGuide.locator('summary').click();const troubleshooting=await publicGuide.innerText();const stateAfterGuide=await db.setting.findUnique({where:{key:'bridgeApiToken:'+rep.id}});
+   await publicGuide.getByText('خطا دیدم؛ کدام مرحله را درست کنم؟',{exact:true}).click();const troubleshooting=await publicGuide.innerText();const stateAfterGuide=await db.setting.findUnique({where:{key:'bridgeApiToken:'+rep.id}});
    check('guide keeps full sample link and internal username instructions readable',()=>{assert.ok(troubleshooting.includes('نام کاربری ریز'));assert.ok(troubleshooting.includes('لینک کامل'));assert.ok(!troubleshooting.includes(tutorialIssued.data.token))});
    check('tutorial navigation never sends API writes or rotates the real sales key',()=>{assert.equal(writes.length,writesBeforeGuide);assert.deepEqual(stateAfterGuide,stateBeforeGuide);assert.deepEqual(guideRequests,[])});
    await guidePage.close();
