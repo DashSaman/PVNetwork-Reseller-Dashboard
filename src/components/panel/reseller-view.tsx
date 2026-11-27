@@ -261,6 +261,10 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
 
 
 
+  function updateRenewalPreference(email: string, enabled: boolean) {
+    setUsers(current => current.map(user => user.email === email ? { ...user, autoRenewalEnabled: enabled } : user));
+  }
+
   // آمار و نمودارها فقط با باز شدن تب «آمار و مصرف» — صفحهٔ کاربران هرگز منتظر آن‌ها نمی‌ماند
   useEffect(() => {
     if (tab !== "stats" || stats !== null) return;
@@ -360,7 +364,7 @@ export function ResellerView({ session, onLogout }: { session: Session; onLogout
       </nav>
 
       <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
-        {tab === "users" && permissions && <UsersTab session={session} users={visibleUsers} inbounds={inbounds} inboundsLoaded={inboundsLoaded} refreshInbounds={refreshInboundCatalog} permissions={permissions} loading={loading} livePending={livePending} panelError={panelError} reload={load} alerts={alerts} />}
+        {tab === "users" && permissions && <UsersTab session={session} users={visibleUsers} inbounds={inbounds} inboundsLoaded={inboundsLoaded} refreshInbounds={refreshInboundCatalog} permissions={permissions} loading={loading} livePending={livePending} panelError={panelError} reload={load} alerts={alerts} onRenewalPreferenceSaved={updateRenewalPreference} />}
         {tab === "stats" && permissions && <StatsTab stats={stats} charts={charts} trafficLedger={trafficLedger} />}
         {tab === "operations" && <OperationsTab scope="reseller" />}
         {tab === "support" && <ResellerSupport />}
@@ -747,6 +751,24 @@ function refKey(r: InboundRefForm): string {
   return `${r.panelId}::${r.inboundId}`;
 }
 
+function RenewalPreferenceButton({ user, onOpen }: { user: ResellerUserRow; onOpen: () => void }) {
+  const status = user.autoRenewalEnabled === true ? 'روشن' : user.autoRenewalEnabled === false ? 'خاموش' : 'نامشخص';
+  const color = user.autoRenewalEnabled === true
+    ? 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+    : user.autoRenewalEnabled === false
+      ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+      : 'text-muted-foreground';
+  return (
+    <Button type="button" size="icon" variant="ghost"
+      className={`border hover:text-current ${color}`}
+      title={`دورهٔ جدید و تمدید خودکار · ${status}`}
+      aria-label={`تمدید خودکار ${status} برای ${user.email}`}
+      onClick={onOpen}>
+      <CalendarClock aria-hidden className="h-4 w-4" />
+    </Button>
+  );
+}
+
 function UsersTab({
   session,
   livePending,
@@ -759,6 +781,7 @@ function UsersTab({
   panelError,
   reload,
   alerts,
+  onRenewalPreferenceSaved,
 }: {
   session: Session;
   livePending: boolean;
@@ -771,6 +794,7 @@ function UsersTab({
   panelError: string;
   reload: () => void;
   alerts: UserAlert[];
+  onRenewalPreferenceSaved: (email: string, enabled: boolean) => void;
 }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [extensionOpen, setExtensionOpen] = useState(false);
@@ -1291,9 +1315,10 @@ function UsersTab({
                               }`}
                             />
                           </button>
-                          <div>
+                          <RenewalPreferenceButton user={u} onOpen={() => setRenewing(u)} />
+                          <div className="min-w-0 max-w-40 sm:max-w-48">
                             <div className="font-semibold flex items-center gap-1" dir="ltr">
-                              {u.name || u.email}
+                              <bdi className="truncate" title={u.name || u.email}>{u.name || u.email}</bdi>
                               {alertMap.get(u.email)?.some((a) => a.type === "usage") && (
                                 <span
                                   className="inline-flex items-center h-4 px-1 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[9px] font-bold"
@@ -1303,7 +1328,7 @@ function UsersTab({
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-muted-foreground" dir="ltr">{u.email}</div>
+                            <div className="truncate text-xs text-muted-foreground" dir="ltr" title={u.email}>{u.email}</div>
                           </div>
                         </div>
                       </TableCell>
@@ -1349,9 +1374,6 @@ function UsersTab({
                           )}
                           <Button size="icon" variant="ghost" title={tools.data.get(u.email)?.pendingOperation === 'RESET' ? 'ادامهٔ ریست ثبت‌شده' : 'ریست ترافیک'} disabled={tools.data.get(u.email)?.pendingOperation === 'DELETE'} onClick={() => resetTraffic(u)}>
                             <RotateCcw className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost" title="دورهٔ جدید و تمدید خودکار" aria-label={`تمدید ${u.email}`} onClick={() => setRenewing(u)}>
-                            <CalendarClock className="h-4 w-4" />
                           </Button>
                           <Button size="icon" variant="ghost" disabled={u.liveFresh === false || u.enable === null || !!tools.data.get(u.email)?.pendingOperation} title={u.enable === null ? "در انتظار وضعیت زنده" : u.enable ? "غیرفعال‌سازی" : "فعال‌سازی"} onClick={() => toggleEnable(u)}>
                             <UserX className={`h-4 w-4 ${u.enable ? "" : "text-[var(--brand)]"}`} />
@@ -1653,7 +1675,7 @@ function UsersTab({
       </Dialog>
 
       {/* دیالوگ ویرایش */}
-      {renewing && <RenewalDialog email={renewing.email} quota={renewing.trafficGB ?? renewing.totalGB ?? 0} onClose={() => setRenewing(null)} onRenewed={() => { reload(); void tools.reload(); }} />}
+      {renewing && <RenewalDialog email={renewing.email} quota={renewing.trafficGB ?? renewing.totalGB ?? 0} onClose={() => setRenewing(null)} onPreferenceSaved={enabled => onRenewalPreferenceSaved(renewing.email, enabled)} onRenewed={() => { reload(); void tools.reload(); }} />}
       <Dialog open={!!editing && !!editForm} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>

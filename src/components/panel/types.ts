@@ -52,6 +52,7 @@ export type ResellerUserRow = {
   createdAt?: string;
   liveFresh?: boolean;
   lastSubFetch?: number | null;
+  autoRenewalEnabled?: boolean;
 };
 
 export type ResellerPermissions = {

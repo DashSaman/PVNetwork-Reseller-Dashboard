@@ -10,7 +10,13 @@ import { toast } from '@/hooks/use-toast';
 import { api, NumberInput, parseNumberInput } from './shared';
 import type { RenewalPlan, AutoRenewalLimits, AutoRenewalStop } from '@/lib/renewal-plan';
 
-export function RenewalDialog({ email, quota, onClose, onRenewed }: { email: string; quota: number; onClose: () => void; onRenewed: () => void }) {
+export function RenewalDialog({ email, quota, onClose, onRenewed, onPreferenceSaved }: {
+  email: string;
+  quota: number;
+  onClose: () => void;
+  onRenewed: () => void;
+  onPreferenceSaved: (enabled: boolean) => void;
+}) {
   const endpoint = `/api/reseller/users/${encodeURIComponent(email)}/renew`;
   const [traffic, setTraffic] = useState(String(quota || 10));
   const [days, setDays] = useState("30");
@@ -76,6 +82,7 @@ export function RenewalDialog({ email, quota, onClose, onRenewed }: { email: str
       toast({ title: result.data?.pending ? 'تمدید در انتظار تکمیل' : 'دورهٔ جدید شروع شد', description: result.data?.message });
       onRenewed();
     } else {
+      onPreferenceSaved(enabled);
       toast({ title: enabled ? 'تمدید خودکار روشن شد' : 'تمدید خودکار خاموش شد' });
     }
     onClose();

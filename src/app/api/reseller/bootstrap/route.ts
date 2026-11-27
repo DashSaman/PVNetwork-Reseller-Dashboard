@@ -4,6 +4,8 @@ import { requireReseller } from "@/lib/session";
 import { getResellerWithAccess, parseInboundRefs } from "@/lib/reseller-helpers";
 import { getQuotaState } from "@/lib/accounting-ops";
 import { buildSubLink } from "@/lib/panel-manager";
+import { operationInstallation } from "@/lib/operation-installation";
+import { readAutoRenewal, renewalSettingKey } from "@/lib/renewal-plan";
 
 /**
  * بوت‌استرپ اولین صفحهٔ نماینده («کاربران من») — فقط دادهٔ لوکال DB، بدون هیچ تماس با 3x-ui.
@@ -20,12 +22,21 @@ export async function GET() {
   const primaryPanelId = primaryPanel?.id || "";
 
   const trackedUsers = await db.resellerUser.findMany({ where: { resellerId: reseller.id } });
+  const installation = trackedUsers.length ? operationInstallation() : null;
+  const renewalSettings = installation ? await db.setting.findMany({
+    where: { key: { in: trackedUsers.map(user => renewalSettingKey(user.id)) } },
+    select: { key: true, value: true },
+  }) : [];
+  const enabledRenewals = new Set(renewalSettings
+    .filter(setting => readAutoRenewal(setting.value, installation))
+    .map(setting => setting.key));
 
   // ساخت ردیف‌ها از دادهٔ DB — locations از refs خود هر کاربر (نه همهٔ اینباندهای نماینده)
   const rows: {
     email: string; name: string | null; inboundTags: string[]; inboundRefs: { panelId: string; inboundId: number }[]; protocol: string;
     totalGB: number; usedGB: number | null; expiryTime: number | null; enable: boolean | null;
     subId: string | null; subLink: string | null; trafficGB: number; createdAt: Date;
+    autoRenewalEnabled: boolean;
   }[] = [];
   for (const tracked of trackedUsers) {
     const subPanelId = tracked.panelId || primaryPanelId;
@@ -41,6 +52,7 @@ export async function GET() {
       usedGB: null,
       expiryTime: null,
       enable: null,
+      autoRenewalEnabled: enabledRenewals.has(renewalSettingKey(tracked.id)),
       subId: tracked.subId || null,
       subLink,
       trafficGB: tracked.trafficGB,

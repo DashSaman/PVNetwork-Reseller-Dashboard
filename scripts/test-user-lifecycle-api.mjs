@@ -61,6 +61,37 @@ try{
   }
   const ownerCookie = 'rp_session=' + signAccountSession('RESELLER', rep, 'dashboard', Date.now() + 3600000);
 
+
+  const indicatorOwner = await owner('indicator-owner', 100);
+  const indicatorClient = await seed(indicatorOwner, 'indicator-current', 3);
+  const indicatorSibling = await seed(indicatorOwner, 'indicator-other', 0);
+  const indicatorEndpoint = '/api/reseller/users/' + indicatorClient.email + '/renew';
+  const indicatorList = async () => (await api(indicatorOwner, '/api/reseller/bootstrap')).data.users;
+  const readIndicator = async () => (await indicatorList()).find(user => user.email === indicatorClient.email)?.autoRenewalEnabled;
+  const initialIndicator = await readIndicator();
+  const configuredIndicator = await api(indicatorOwner, indicatorEndpoint, 'PUT', { enabled: true, trafficGB: 5, days: 30 });
+  const listWithIndicator = await indicatorList();
+  const foreignIndicator = await api(outsider, '/api/reseller/bootstrap');
+  const accountForIndicator = await db.resellerUser.findUniqueOrThrow({ where: { resellerId_email: { resellerId: indicatorOwner.id, email: indicatorClient.email } } });
+  await db.setting.update({ where: { key: 'customerAutoRenewal:' + accountForIndicator.id }, data: {
+    value: JSON.stringify({ trafficGB: 5, days: 30, installation: '0'.repeat(48) }),
+  } });
+  const restoredIndicator = await readIndicator();
+  await api(indicatorOwner, indicatorEndpoint, 'PUT', { enabled: true, trafficGB: 5, days: 30 });
+  await api(indicatorOwner, indicatorEndpoint, 'PUT', { enabled: false });
+  const disabledIndicator = await readIndicator();
+  check('bootstrap reports each owned auto-renewal preference using the same installation checks as the dialog', () => {
+    assert.equal(initialIndicator, false);
+    assert.equal(configuredIndicator.status, 200);
+    assert.equal(listWithIndicator.find(user => user.email === indicatorClient.email).autoRenewalEnabled, true);
+    assert.equal(listWithIndicator.find(user => user.email === indicatorSibling.email).autoRenewalEnabled, false);
+    assert.equal(foreignIndicator.data.users.some(user => user.email === indicatorClient.email), false);
+    assert.equal(restoredIndicator, false);
+    assert.equal(disabledIndicator, false);
+    assert.equal(indicatorClient.totalGB, 10 * GB);
+    assert.equal(indicatorClient.used, 3 * GB);
+  });
+
   const planBody = { name: 'Fixture 20', trafficGB: 20, days: 30, ipLimit: 1, expiryMode: 'first-use',
     refs: [{ panelId: panel.id, inboundId: 1 }, { panelId: panel.id, inboundId: 2 }] };
   const badPlan = await api(rep, '/api/reseller/plans', 'POST', { ...planBody, refs: [{ panelId: panel.id, inboundId: 999 }] });
@@ -244,6 +275,63 @@ try{
       await page.getByRole('button', { name: 'کامپیوتر', exact: true }).click();
       assert.equal(await page.getByRole('link', { name: 'پیام به پشتیبانی', exact: true }).getAttribute('href'), 'https://t.me/fixture_help');
       check('mobile navigation and customer setup guide work', () => {});
+
+      const indicatorContext = await browser.newContext({ viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true, colorScheme: 'light' });
+      const indicatorCookie = signAccountSession('RESELLER', indicatorOwner, 'dashboard', Date.now() + 3600000);
+      await indicatorContext.addCookies([{ name: 'rp_session', value: indicatorCookie, url: base }]);
+      try {
+        await api(indicatorOwner, '/api/reseller/users/' + indicatorSibling.email + '/renew', 'PUT', { enabled: true, trafficGB: 4, days: 30 });
+        const indicatorPage = await indicatorContext.newPage();
+        await indicatorPage.route('**/api/reseller/live-users', route => route.fulfill({ status: 503, json: { error: 'fixture live data unavailable' } }));
+        await indicatorPage.goto(base);
+        const off = indicatorPage.getByRole('button', { name: 'تمدید خودکار خاموش برای ' + indicatorClient.email });
+        const on = indicatorPage.getByRole('button', { name: 'تمدید خودکار روشن برای ' + indicatorClient.email });
+        const otherOn = indicatorPage.getByRole('button', { name: 'تمدید خودکار روشن برای ' + indicatorSibling.email });
+        await off.waitFor();
+        await otherOn.waitFor();
+        const metrics = await off.evaluate(element => ({left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right, width: innerWidth}));
+        assert.ok(metrics.left >= 0 && metrics.right <= metrics.width, JSON.stringify(metrics));
+        assert.ok(await off.locator('xpath=ancestor::td[1]').getByText(indicatorClient.email, { exact: true }).first().isVisible());
+        const red = await off.evaluate(element => getComputedStyle(element).color);
+        const blue = await otherOn.evaluate(element => getComputedStyle(element).color);
+        assert.notEqual(red, blue);
+        assert.match(await off.getAttribute('class'), /text-red-700/);
+        assert.match(await otherOn.getAttribute('class'), /text-blue-700/);
+        check('mobile shows both renewal colors inside the customer name cells even without live panel stats', () => {});
+        await off.tap();
+        const settings = indicatorPage.getByRole('dialog', { name: 'دورهٔ جدید و تمدید خودکار' });
+        const toggle = settings.getByRole('switch', { name: 'تمدید خودکار این کاربر' });
+        await toggle.tap();
+        const save = settings.getByRole('button', { name: 'ذخیرهٔ تنظیم تمدید خودکار' });
+        await indicatorPage.route('**' + indicatorEndpoint, route => route.request().method() === 'PUT'
+          ? route.fulfill({ status: 503, json: { error: 'fixture save unavailable' } }) : route.continue(), { times: 1 });
+        await save.tap();
+        await settings.getByRole('alert').getByText('fixture save unavailable').waitFor();
+        const hiddenOff = indicatorPage.getByRole('button', { name: 'تمدید خودکار خاموش برای ' + indicatorClient.email, includeHidden: true });
+        assert.match(await hiddenOff.getAttribute('class'), /text-red-700/);
+        await save.tap();
+        await settings.waitFor({ state: 'hidden' });
+        await on.waitFor();
+        await otherOn.waitFor();
+        assert.equal(await readIndicator(), true);
+        await on.tap();
+        await toggle.tap();
+        await save.tap();
+        await settings.waitFor({ state: 'hidden' });
+        await off.waitFor();
+        assert.equal(await readIndicator(), false);
+        await indicatorPage.reload();
+        await off.waitFor();
+        await otherOn.waitFor();
+        assert.equal(indicatorClient.used, 3 * GB);
+        assert.equal(indicatorClient.totalGB, 10 * GB);
+        check('mobile renewal icon changes only after saving, persists after reload and leaves other users untouched', () => {});
+        await indicatorPage.getByRole('link', { name: 'راهنما', exact: true }).tap();
+        await indicatorPage.getByRole('heading', { name: 'منوهای پنل نماینده' }).waitFor();
+        await indicatorPage.getByRole('heading', { name: 'آیکون‌های ردیف کاربر' }).waitFor();
+        assert.ok(await indicatorPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        check('mobile guide lists menus and row actions and fits a 360px viewport', () => {});
+      } finally { await indicatorContext.close(); }
       await db.panelConfig.update({ where: { id: panel.id }, data: { name: 'mock' } });
       mode.set('delay', true);
       try {
