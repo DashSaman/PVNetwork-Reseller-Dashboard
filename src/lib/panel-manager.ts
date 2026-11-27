@@ -99,6 +99,8 @@ export type AllPanelsResult = {
   pending?: boolean;
   stale?: boolean;
   observedAt?: number | null;
+  freshPanelIds?: string[];
+  pendingPanelIds?: string[];
 };
 
 /** دریافت اینباندهای همه پنل‌ها — پنل‌های مستقل به‌صورت هم‌زمان خوانده می‌شوند (پنل کند، بقیه را نگه نمی‌دارد) */
@@ -178,6 +180,8 @@ export async function getAllPanelInboundsForUi(): Promise<AllPanelsResult> {
     msg: bundles.length === 0 ? errors[0]?.msg : undefined,
     pending: entries.some(e => e.result.pending),
     stale: entries.some(e => e.result.stale),
+    freshPanelIds: entries.filter(({ result }) => result.value && !result.stale && !result.pending && !result.error).map(({ p }) => p.id),
+    pendingPanelIds: entries.filter(({ result }) => result.pending).map(({ p }) => p.id),
     observedAt: entries.filter(e => e.result.value && e.result.observedAt).reduce<number | null>((t, e) => Math.min(t ?? Infinity, e.result.observedAt!), null),
   };
 }

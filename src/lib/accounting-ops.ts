@@ -12,7 +12,7 @@ import type { Prisma } from '@prisma/client';
 import { operationInstallation } from './operation-installation';
 import { canCancelUnstartedOperation, canFinalizeAcknowledgedDeletion, isCurrentDestructiveRequest, wasCancelledBeforeExecution } from './pending-reset';
 import { deletionRefundPolicy, deletionSettlement, readDeletionSettlement } from './deletion-refund';
-import { completedAutoRenewals, renewalStatusKey } from './renewal-status';
+import { completedAutoRenewals, isRenewalPaused, manualUserStatusKey, renewalStatusKey, saveManualUserStatus } from './renewal-status';
 import { queueAccountingEvents } from './event-webhooks';
 import { renewalCap } from './renewal-plan';
 import { getForfeitedGB } from './deletion-refund-ledger';
@@ -533,7 +533,7 @@ export async function deleteUserByJournal(resellerId: string, email: string, exp
       }
       const stillThere = await tx.resellerUser.findUnique({ where: { id: tracked.id } });
       if (stillThere) await tx.resellerUser.delete({ where: { id: tracked.id } });
-      await tx.setting.deleteMany({ where: { key: { in: [renewalSettingKey(tracked.id), renewalStatusKey(tracked.id)] } } });
+      await tx.setting.deleteMany({ where: { key: { in: [renewalSettingKey(tracked.id), renewalStatusKey(tracked.id), manualUserStatusKey(tracked.id)] } } });
       await tx.operationJournal.update({ where: { id: journal.id }, data: { status: "SUCCESS", accountingCommitted: true, reservedGB: 0, completedPanels: JSON.stringify(completed), failedPanels: "[]", metadata: JSON.stringify({ ...meta, deletionSettlement: next }) } });
       if (!current.accountingCommitted) {
         await queueAccountingEvents(tx, { id: journal.id, resellerId, customerId: tracked.id }, [
@@ -658,7 +658,7 @@ export async function renewUserByJournal(
     }
     const saved = request.automatic && !journal ? await db.setting.findUnique({ where: { key: renewalSettingKey(tracked.id) } }) : null;
     const autoPlan = saved ? readAutoRenewal(saved.value, installation) : null;
-    if (autoPlan && renewalCap(autoPlan, autoPlan.maxRenewals ? await completedAutoRenewals(resellerId, tracked.id, autoPlan) : 0)) {
+    if (autoPlan && (await isRenewalPaused({ ...tracked, resellerId }) || renewalCap(autoPlan, autoPlan.maxRenewals ? await completedAutoRenewals(resellerId, tracked.id, autoPlan) : 0))) {
       return { ok: true, debitedGB: 0 };
     }
     const plan = renewal ?? (request.automatic ? autoPlan : parseRenewalPlan(request.plan));
@@ -747,7 +747,8 @@ export async function renewUserByJournal(
       if (!activated.ok) return pending('دورهٔ جدید ثبت شده؛ فعال‌سازی لوکیشن‌ها در انتظار تأیید است');
     }
     const settled = await db.$transaction(async tx => {
-      if (renewal.automatic) await tx.setting.deleteMany({ where: { key: renewalStatusKey(tracked.id) } });
+      await tx.setting.deleteMany({ where: { key: renewalStatusKey(tracked.id) } });
+      if (!renewal.automatic) await saveManualUserStatus(tx, tracked.id, true);
       const current = await tx.operationJournal.update({ where: { id: journalId }, data: { status: 'SUCCESS', failedPanels: '[]', lastError: null } });
       await queueAccountingEvents(tx, { id: journalId, resellerId, customerId: tracked.id }, [
         { event: 'subscription.renewed', data: { trafficGB: renewal.trafficGB, days: renewal.days, usedGB: current.usageSnapshotGB || 0, automatic: renewal.automatic } },
@@ -929,6 +930,7 @@ export async function updateUserByJournal(
     const jTargets = journal.targetPanels;
     await db.$transaction(async (tx) => {
       await commitLocal(tx);
+      if (desired.enable !== undefined) await saveManualUserStatus(tx, loaded.tracked.id, desired.enable);
       await tx.operationJournal.update({
         where: { id: jid },
         data: { status: pending ? "PARTIAL" : "SUCCESS", reservedGB: 0, completedPanels: pending ? "[]" : jTargets, failedPanels: "[]", lastError: pending ? "تغییر در مرجع ثبت شده؛ برخی لوکیشن‌ها در انتظار همگام‌سازی هستند" : null, metadata: JSON.stringify({ ...meta, newTrafficGB: desired.trafficGB, localCommitted: true, nativePending: pending, intent: desired.intent }) },

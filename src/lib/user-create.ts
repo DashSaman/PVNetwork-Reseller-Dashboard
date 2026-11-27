@@ -3,6 +3,8 @@ import { getPanelConnection, getAllPanelInboundsFresh, buildSubLink, type AllPan
 import { addClient, resumeClientCreation, readClientCreation, arePanelNodesSynchronized, getPanelNodeSyncSnapshot, type PanelAuth, type PanelClient, type PanelNodeSyncSnapshot } from "./panel";
 import { creationMetadata, isSavedQueuedCreation, type CreationMetadata } from './queued-create';
 import { validateAvailableInboundSelection } from './inbound-catalog';
+import { checkResellerPlan, readResellerPlan } from './reseller-plans';
+import { expiryFromInput } from './customer-model';
 import { randomHex, randomUuid } from "./crypto";
 type TypePanelAuth = import("./panel").PanelAuth;
 import { logActivity } from "./logger";
@@ -15,6 +17,7 @@ import {
   type InboundRef,
   type ResellerWithInbounds,
   getResellerWithAccess,
+  withResellerLock,
 } from "./reseller-helpers";
 
 /**
@@ -34,6 +37,7 @@ export type CoreUserParams = {
   exactUuid?: string;
   /** هویت idempotent درخواست (داشبورد/کلاینت) — retry همان عملیات را resume می‌کند */
   requestId?: string;
+  savedPlanId?: string;
   expiryDays?: number;
   /** شناسه سابسکریپشن دلخواه ربات — خالی = تولید خودکار */
   subId?: string;
@@ -225,7 +229,6 @@ export async function createResellerUserCore(
   snapshot?: AllPanelsResult | null
 ): Promise<CoreUserResult> {
   // مسیر عمومی: همیشه قفل + بررسی پول — هیچ مسیری امکان عبور از بررسی سهمیه ندارد
-  const { withResellerLock } = await import("./reseller-helpers");
   return withResellerLock(reseller.id, () => createResellerUserCoreInner(reseller, params, snapshot ?? null, { checkPool: true }));
 }
 
@@ -239,6 +242,52 @@ export async function createResellerUserCoreWithinResellerLock(
   snapshot?: AllPanelsResult | null
 ): Promise<CoreUserResult> {
   return createResellerUserCoreInner(reseller, params, snapshot ?? null, { checkPool: false });
+}
+
+export async function createResellerUserFromSavedPlan(
+  resellerId: string, requested: { planId: string; email: string; requestId: string },
+): Promise<CoreUserResult & { trafficGB?: number }> {
+  return withResellerLock(resellerId, async () => {
+    const reseller = await getResellerWithAccess(resellerId);
+    if (!reseller) return { ok: false, status: 403, error: 'حساب نماینده فعال نیست' };
+    const { planId, email, requestId } = requested;
+    const name = email.replace(/\./g, '-').replace(/^-+|-+$/g, '');
+    const displayName = name.length >= 2 ? name : 'bot-user';
+    const j = await db.operationJournal.findUnique({ where: { idempotencyKey: `create-req:${resellerId}:${requestId}` } });
+    const previous = j && creationMetadata(j.metadata);
+    if (j && (j.resellerId !== resellerId || j.type !== 'CREATE' || j.email !== email || !previous
+      || (previous.savedPlanId ? previous.savedPlanId !== planId : previous.name !== email))) {
+      return { ok: false, status: 409, error: 'این شناسهٔ درخواست قبلاً برای سفارش دیگری استفاده شده است' };
+    }
+
+    // Legacy package orders used the exact customer name as both the display name and the native email.
+    if (j && previous) {
+      if (j.status === 'SUCCESS' || previous.localCommitted === true && j.reservedGB === 0) {
+        const tracked = await db.resellerUser.findUnique({ where: { resellerId_email: { resellerId, email } } });
+        if (!tracked || tracked.subId !== previous.subId || j.userId && tracked.id !== j.userId) {
+          return { ok: false, status: 409, error: 'حساب سفارش قبلی حذف یا تغییر کرده است' };
+        }
+        const subLink = await buildSubLink(previous.subId, reseller, tracked.panelId || previous.refs[0].panelId);
+        return { ok: true, email, subId: previous.subId, subLink, trafficGB: previous.trafficGB, pending: j.status !== 'SUCCESS' };
+      }
+      const result = await createResellerUserCoreInner(reseller, {
+        name: previous.name, exactEmail: email, requestId, savedPlanId: previous.savedPlanId, trafficGB: previous.trafficGB,
+        expiryTime: previous.expiryTime, expiryDays: previous.expiryDays, ipLimit: previous.ipLimit, refs: previous.refs,
+      }, null, { checkPool: true });
+      return { ...result, trafficGB: previous.trafficGB };
+    }
+
+    const plan = await readResellerPlan(resellerId, planId);
+    if (!plan) return { ok: false, status: 404, error: 'بسته پیدا نشد' };
+    const error = await checkResellerPlan(reseller, plan);
+    if (error) return { ok: false, status: 403, error };
+    const result = await createResellerUserCoreInner(reseller, {
+      name: displayName, exactEmail: email, requestId, savedPlanId: planId, trafficGB: plan.trafficGB,
+      expiryTime: expiryFromInput({ expiryMode: plan.expiryMode, expiryDays: plan.days }), expiryDays: plan.days,
+      ipLimit: plan.ipLimit, refs: plan.refs,
+    }, null, { checkPool: true });
+    return { ...result, trafficGB: plan.trafficGB };
+  });
 }
 
 async function createResellerUserCoreInner(
@@ -267,6 +316,8 @@ async function createResellerUserCoreInner(
       // payload متفاوت با عملیات اصلی → تعارض (معنای عملیات عوض نمی‌شود)
       const samePayload =
         meta.name === params.name &&
+        (!params.exactEmail || params.exactEmail === j.email) &&
+        meta.savedPlanId === params.savedPlanId &&
         meta.trafficGB === params.trafficGB &&
         (params.expiryDays ? meta.expiryDays === params.expiryDays && Math.sign(meta.expiryTime || 0) === Math.sign(params.expiryTime) : meta.expiryTime === params.expiryTime) &&
         meta.ipLimit === params.ipLimit &&
@@ -409,7 +460,7 @@ async function createResellerUserCoreInner(
       status: "RUNNING",
       reservedGB: params.trafficGB,
       targetPanels: JSON.stringify(targetPanelIds),
-      metadata: JSON.stringify({ name: params.name, trafficGB: params.trafficGB, expiryTime: params.expiryTime, expiryDays: params.expiryDays, ipLimit: params.ipLimit, refs, subId, uuid }),
+      metadata: JSON.stringify({ name: params.name, savedPlanId: params.savedPlanId, trafficGB: params.trafficGB, expiryTime: params.expiryTime, expiryDays: params.expiryDays, ipLimit: params.ipLimit, refs, subId, uuid }),
     },
   });
 

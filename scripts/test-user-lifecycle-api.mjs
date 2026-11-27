@@ -22,7 +22,8 @@ try{
   const email=decodeURIComponent(url.split('/').at(-1)),c=clients.get(key(p,email)),m=mode.get(email)||{};
   const reappear=mode.get('reappear-on-health');if(url==='/panel/api/nodes/list'&&reappear&&!clients.has(key('a',reappear.email))&&!clients.has(key('b',reappear.email))){clients.set(key('a',reappear.email),{...reappear.client,ids:new Set(reappear.client.ids)});mode.delete('reappear-on-health');}
   if(url.startsWith('/sub/')){const value=[...clients.values()].find(v=>v.subId===email);res.writeHead(value?200:404,{'content-type':'text/plain'});res.end(value?Buffer.from([...value.ids].map(id=>`vless://${value.id}@fixture.example:${4400+id}?encryption=none&type=tcp&security=none#loc-${id}`).join('\n')).toString('base64'):'missing');return;}
-  if(url==='/panel/api/inbounds/list'){if(mode.get('catalog-delay'))await new Promise(r=>setTimeout(r,mode.get('catalog-delay')));if(mode.get('delay'))await new Promise(r=>setTimeout(r,1500));obj=[1,2,3].map(id=>inbound(p,id));}
+  if(url==='/panel/api/inbounds/list'&&p==='b'&&mode.get('panel-b-unavailable')){success=false;msg='fixture panel unavailable'}
+  else if(url==='/panel/api/inbounds/list'){if(mode.get('catalog-delay'))await new Promise(r=>setTimeout(r,mode.get('catalog-delay')));if(mode.get('delay'))await new Promise(r=>setTimeout(r,1500));obj=[1,2,3].map(id=>inbound(p,id));}
   else if(url==='/panel/api/inbounds/options'&&mode.get('options-supported'))obj=[1,2,3].map(id=>({id,nodeId:mode.get('options-invalid-node')?'1':mode.get('all-remote')?1:null,enable:true}));
   else if(url==='/panel/api/clients/list')obj=[...clients.entries()].filter(([k])=>k.startsWith(p+':')).map(([,c])=>c);
   else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}
@@ -86,6 +87,28 @@ try{
     assert.equal(created.totalGB, 20 * GB); assert.equal(created.expiryTime, -30 * 86400000);
     assert.deepEqual([...created.ids].sort(), [1, 2]);
   });
+  const dotted = await request(bridgeBase + '/create', credential, 'POST', { ...packageInput, email: 'feature.plan', requestId: 'feature-dotted-order' });
+  check('package bridge supports the same dotted customer names as the standard bridge', () => {
+    assert.equal(dotted.data.success, true, JSON.stringify(dotted.data));
+    assert.equal(clients.get(key('a', 'feature.plan')).email, 'feature.plan');
+  });
+  const changedPlan = await api(rep, '/api/reseller/plans', 'POST', { ...planBody, trafficGB: 25, days: 45 });
+  assert.equal(changedPlan.status, 200);
+  const afterEdit = await request(bridgeBase + '/create', credential, 'POST', packageInput);
+  check('saved package retry returns the original funded result after the package changes', () => {
+    assert.equal(afterEdit.data.success, true, JSON.stringify(afterEdit.data));
+    assert.equal(afterEdit.data.obj.trafficGB, 20);
+    assert.equal(afterEdit.data.obj.subId, placed.data.obj.subId);
+    assert.equal(clients.get(key('a', packageInput.email)).totalGB, 20 * GB);
+  });
+  const changedOrder = await request(bridgeBase + '/create', credential, 'POST', { ...packageInput, planId: '00000000-0000-0000-0000-000000000001' });
+  check('the same request ID cannot be reused with a different package', () => assert.equal(changedOrder.data.success, false));
+  const originalJournal = await db.operationJournal.findUniqueOrThrow({
+    where: { idempotencyKey: 'create-req:' + rep.id + ':' + packageInput.requestId },
+  });
+  const legacyMetadata = JSON.parse(originalJournal.metadata);
+  delete legacyMetadata.savedPlanId;
+  await db.operationJournal.update({ where: { id: originalJournal.id }, data: { metadata: JSON.stringify(legacyMetadata) } });
   await db.resellerInbound.deleteMany({ where: { resellerId: rep.id, inboundId: 2 } });
   const rejected = await request(bridgeBase + '/create', credential, 'POST', { ...packageInput, email: 'feature-rejected', requestId: 'feature-plan-rejected' });
   check('a revoked location blocks later bridge use of a saved package', () => {
@@ -118,6 +141,21 @@ try{
     assert.ok(help.data.users.some(user => user.email === customer.email)); assert.ok(!help.data.users.some(user => user.email === 'feature-foreign'));
     assert.ok(help.data.users.every(user => !('subId' in user) && !('trafficGB' in user) && !('subLink' in user)));
   });
+
+  const brokenPanel = await db.panelConfig.create({ data: { name: 'feature-unrelated', baseUrl: native+'/b',
+    subBase: native, username: 'mock', password: encryptSecret('mock'), apiToken: encryptSecret('mock'), sortOrder: 42 } });
+  const affected = await seed(rep, 'feature-affected', 0, brokenPanel);
+  mode.set('panel-b-unavailable', true);
+  const duringOutage = await request('/api/support/customers', login.cookie);
+  check('an offline panel only suppresses support status for customers who need it', () => {
+    assert.equal(duringOutage.status, 200);
+    const healthy = duringOutage.data.users.find(row => row.email === customer.email);
+    const unreadable = duringOutage.data.users.find(row => row.email === affected.email);
+    assert.equal(healthy.enabled, true); assert.equal(healthy.expiry, customer.expiryTime);
+    assert.equal(unreadable.enabled, null); assert.equal(unreadable.expiry, null);
+  });
+  await db.panelConfig.update({ where: { id: brokenPanel.id }, data: { active: false } });
+  mode.delete('panel-b-unavailable');
 
   const stopped = await seed(rep, 'stop-date', 10);
   const stopRoute = '/api/reseller/users/' + stopped.email + '/renew';
@@ -206,6 +244,18 @@ try{
       await page.getByRole('button', { name: 'کامپیوتر', exact: true }).click();
       assert.equal(await page.getByRole('link', { name: 'پیام به پشتیبانی', exact: true }).getAttribute('href'), 'https://t.me/fixture_help');
       check('mobile navigation and customer setup guide work', () => {});
+      await db.panelConfig.update({ where: { id: panel.id }, data: { name: 'mock' } });
+      mode.set('delay', true);
+      try {
+        const helperContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+        await helperContext.addCookies([{ name: 'rp_session', value: login.cookie.slice(11), url: base }]);
+        const helperPage = await helperContext.newPage();
+        await helperPage.goto(base);
+        await helperPage.getByRole('heading', { name: 'پشتیبانی نماینده', exact: true }).waitFor();
+        await helperPage.locator('article').filter({ hasText: stopped.email }).getByText('فعال', { exact: true }).waitFor({ timeout: 15000 });
+        check('support status fills itself after a slow first snapshot', () => {});
+        await helperContext.close();
+      } finally { mode.delete('delay'); }
     } finally { await browser.close(); }
   }
 
@@ -215,7 +265,24 @@ try{
     assert.equal(removed.status, 204); assert.equal(revoked.status, 401);
   });
 
+  const removedPlan = await api(rep, '/api/reseller/plans?id=' + saved.data.plan.id, 'DELETE');
+  assert.equal(removedPlan.status, 200);
+  const afterRemoval = await request(bridgeBase + '/create', credential, 'POST', packageInput);
+  check('an already provisioned package is not reported failed after plan removal and grant revocation', () => {
+    assert.equal(afterRemoval.data.success, true, JSON.stringify(afterRemoval.data));
+    assert.equal(afterRemoval.data.obj.subId, placed.data.obj.subId);
+  });
+
+  const pausedOwner = await owner('manual-auto-pause', 100);
+  const pausedClient = await seed(pausedOwner, 'auto-pause-customer', 3);
+  const pausedUser = '/api/reseller/users/' + pausedClient.email;
+  assert.equal((await api(pausedOwner, pausedUser+'/renew', 'PUT', { enabled: true, trafficGB: 5, days: 30 })).status, 200);
+  const pause = await api(pausedOwner, pausedUser, 'PUT', { enable: false });
+  assert.equal(pause.status, 200, JSON.stringify(pause.data));
+  pausedClient.expiryTime = Date.now() - 1000;
+
   const limited = await seed(rep, 'stop-count', 10);
+  limited.enable = false; // A native quota-exhausted state is separate from an operator action.
   const limitedRoute = '/api/reseller/users/' + limited.email + '/renew';
   await api(rep, limitedRoute, 'PUT', { enabled: true, trafficGB: 5, days: 30, maxRenewals: 1 });
   let limitedStatus;
@@ -228,6 +295,11 @@ try{
   check('only a completed and funded auto-renewal consumes the configured count', () => {
     assert.equal(limitedStatus.data.completed, 1); assert.equal(limitedStatus.data.stopped, 'count');
     assert.equal(limited.totalGB, 5 * GB); assert.equal(limited.used, 0); assert.equal(stopped.used, 10 * GB);
+  });
+  const pauseStatus = await api(pausedOwner, pausedUser+'/renew');
+  check('automatic renewal neither charges nor reactivates a manually disabled dashboard customer', () => {
+    assert.equal(pauseStatus.data.stopped, 'disabled'); assert.equal(pausedClient.enable, false);
+    assert.equal(pausedClient.used, 3 * GB); assert.equal(pausedClient.totalGB, 10 * GB);
   });
   const atLeastOneRenewalEvent = (await db.setting.findMany({ where: { key: { startsWith: 'eventWebhookOutbox:' } } }))
     .some(row => JSON.parse(row.value).event.event === 'subscription.renewed');

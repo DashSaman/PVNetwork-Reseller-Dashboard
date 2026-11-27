@@ -17,9 +17,8 @@ import {
   type ResellerWithInbounds,
 } from "@/lib/reseller-helpers";
 import { deleteUserByJournal, resetUserByJournal, updateUserByJournal, getQuotaState, pendingUpdateQuota, confirmAcknowledgedDeletion } from "@/lib/accounting-ops";
-import { createResellerUserCore } from "@/lib/user-create";
-import { listResellerPlans, readResellerPlan, checkResellerPlan } from "@/lib/reseller-plans";
-import { expiryFromInput } from "@/lib/customer-model";
+import { createResellerUserCore, createResellerUserFromSavedPlan } from "@/lib/user-create";
+import { listResellerPlans } from "@/lib/reseller-plans";
 import { getSelectableInboundCatalog } from '@/lib/inbound-catalog';
 import { attachBridgeClient, readBridgeClient } from '@/lib/bridge-client';
 import { updateClient, resetClientTraffic, deleteClient, type PanelAuth } from "@/lib/panel";
@@ -124,21 +123,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 async function createFromSavedPlan(req: NextRequest, reseller: ResellerWithInbounds) {
   const body = await req.json().catch(() => null);
   const email = typeof body?.email === 'string' ? body.email.trim() : '';
-  if (!/^[a-z0-9._-]{3,32}$/i.test(email) || typeof body?.requestId !== 'string' || !/^[a-z0-9-]{12,64}$/i.test(body.requestId)) {
+  if (!/^[a-z0-9._-]{3,32}$/i.test(email) || typeof body?.requestId !== 'string' || !/^[a-z0-9-]{12,64}$/i.test(body.requestId)
+    || typeof body?.planId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.planId)) {
     return xui(false, 'شناسهٔ کاربر یا درخواست نامعتبر است');
   }
-  const plan = await readResellerPlan(reseller.id, body.planId);
-  if (!plan) return xui(false, 'بسته پیدا نشد');
-  const error = await checkResellerPlan(reseller, plan);
-  if (error) return xui(false, error);
-  const result = await createResellerUserCore(reseller, {
-    name: email, exactEmail: email, requestId: body.requestId, trafficGB: plan.trafficGB,
-    expiryTime: expiryFromInput({ expiryMode: plan.expiryMode, expiryDays: plan.days }),
-    expiryDays: plan.days, ipLimit: plan.ipLimit, refs: plan.refs,
-  });
+  const result = await createResellerUserFromSavedPlan(reseller.id, { planId: body.planId, email, requestId: body.requestId });
   return result.ok ? xui(true, '', {
     email: result.email, subId: result.subId, subLink: result.subLink,
-    trafficGB: plan.trafficGB, nodePending: !!result.pending,
+    trafficGB: result.trafficGB, nodePending: !!result.pending,
   }) : xui(false, result.error);
 }
 

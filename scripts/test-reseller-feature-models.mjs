@@ -37,7 +37,12 @@ test('subscription fetch timestamps are bound to each tracked subscription ident
     { clients: [{ email: 'owned', subId: 'different' }], clientStats: [{ email: 'owned', lastSubFetch: now + 1000 }] },
     { clients: [{ email: 'not-found', subId: 'unseen' }], clientStats: [{ email: 'not-found', lastSubFetch: -1 }] },
   ] }];
-  assert.deepEqual([...subscriptionFetchTimes(panels, tracked)], [['owned', now]]);
+  assert.deepEqual([...subscriptionFetchTimes(panels, tracked)], [['correct', now]]);
+  const duplicate = [{ ...panels[0], inbounds: [...panels[0].inbounds, {
+    clients: [{ email: 'owned', subId: 'second' }], clientStats: [{ email: 'owned', lastSubFetch: now + 1000 }],
+  }] }];
+  assert.deepEqual([...subscriptionFetchTimes(duplicate, [...tracked, { email: 'owned', subId: 'second' }])],
+    [['correct', now], ['second', now + 1000]]);
 });
 
 test('webhook only accepts a public HTTPS hostname on the default port', () => {

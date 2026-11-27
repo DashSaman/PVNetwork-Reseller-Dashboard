@@ -3,7 +3,7 @@ import { isTrafficQuotaGB } from './traffic-quota';
 export type RenewalPlan = { trafficGB: number; days: number };
 export type AutoRenewalLimits = { maxRenewals?: number; stopAt?: number };
 export type AutoRenewal = RenewalPlan & AutoRenewalLimits & { installation: string; cycleId?: string };
-export type AutoRenewalStop = 'count' | 'date' | 'balance';
+export type AutoRenewalStop = 'count' | 'date' | 'balance' | 'disabled';
 
 export const AUTO_RENEWAL_PREFIX = 'customerAutoRenewal:';
 export const renewalSettingKey = (userId: string) => AUTO_RENEWAL_PREFIX + userId;

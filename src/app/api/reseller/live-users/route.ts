@@ -63,7 +63,7 @@ export async function GET() {
       totalGB: live ? Math.round((live.totalBytes ?? 0) / GIB * 100) / 100 : null,
       expiryTime: live?.expiryTime ?? null,
       enable: live?.enable ?? null,
-      lastSubFetch: fetchTimes.get(t.email) ?? null,
+      lastSubFetch: t.subId ? fetchTimes.get(t.subId) ?? null : null,
     };
   });
 

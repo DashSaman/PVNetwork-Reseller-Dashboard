@@ -22,6 +22,14 @@ try{
  server=http.createServer(async(req,res)=>{let raw='';for await(const b of req)raw+=b;const body=JSON.parse(raw||'{}');const p=req.url.startsWith('/b/')?'b':'a',url=req.url.replace(/^\/[ab]/,'');let success=true,obj,msg='';
   if(/clients\/(add|update|del|resetTraffic)/.test(url))nativeWrites.push(url);
   const email=decodeURIComponent(url.split('/').at(-1)),c=clients.get(key(p,email)),m=mode.get(email)||{};
+  if (url.startsWith('/sub/')) {
+   const customer = [...clients.values()].find(value => value.subId === email);
+   res.writeHead(customer ? 200 : 404, { 'content-type': 'text/plain' });
+   res.end(customer ? Buffer.from([...customer.ids].map(id =>
+    `vless://${customer.id}@fixture.example:${4400 + id}?encryption=none&type=tcp&security=none#loc-${id}`
+   ).join('\n')).toString('base64') : 'missing');
+   return;
+  }
   if(url==='/panel/api/inbounds/list'){if(mode.get('delay'))await new Promise(r=>setTimeout(r,1500));obj=[1,2,3].map(id=>inbound(p,id));}
   else if(url==='/panel/api/clients/list')obj=[...clients.entries()].filter(([k])=>k.startsWith(p+':')).map(([,c])=>c);
   else if(url.startsWith('/panel/api/clients/get/')){if(c)obj={client:{...c,uuid:c.id,ids:undefined,used:undefined},inboundIds:[...c.ids],usedTraffic:c.used};else{success=false;msg='Obtain (record not found)'}}

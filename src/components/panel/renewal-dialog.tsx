@@ -107,7 +107,7 @@ export function RenewalDialog({ email, quota, onClose, onRenewed }: { email: str
           <label className="space-y-1 text-sm">حداکثر تعداد تمدید<NumberInput aria-label="حداکثر تعداد تمدید" value={maxRenewals} onValueChange={setMaxRenewals} placeholder="بدون سقف" /></label>
           <label className="space-y-1 text-sm">آخرین روز مجاز<Input type="date" aria-label="آخرین روز مجاز تمدید" dir="ltr" value={stopDate} onChange={e => setStopDate(e.target.value)} /></label>
           <p className="col-span-2 text-xs text-muted-foreground">تمدید موفق این دوره {progress.completed ?? 0}
-            {progress.stopped === 'date' ? ' · مهلت تمام شده' : progress.stopped === 'count' ? ' · سقف تمدید پر شده' : progress.stopped === 'balance' ? ' · موجودی کافی برای آخرین تلاش نبوده' : ''}
+            {progress.stopped === 'disabled' ? ' · به‌دلیل غیرفعال‌سازی دستی، تمدید خودکار متوقف است' : progress.stopped === 'date' ? ' · مهلت تمام شده' : progress.stopped === 'count' ? ' · سقف تمدید پر شده' : progress.stopped === 'balance' ? ' · موجودی کافی برای آخرین تلاش نبوده' : ''}
           </p>
         </div>}
         {error && <div role="alert" className="text-sm tone-danger">{error}</div>}

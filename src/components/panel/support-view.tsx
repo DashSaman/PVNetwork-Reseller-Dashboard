@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { api, expiryLabel, PvLogo, StatusBadge } from './shared';
 import type { Session } from './types';
 
-type Customers = { users: { email: string; name: string | null; enabled: boolean | null; expiry: number | null }[]; more: boolean };
+type Customers = { users: { email: string; name: string | null; enabled: boolean | null; expiry: number | null }[]; more: boolean; pending?: boolean };
 
 export function SupportView({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [page, setPage] = useState(0);
@@ -14,14 +14,22 @@ export function SupportView({ session, onLogout }: { session: Session; onLogout:
   const [notice, setNotice] = useState('');
   useEffect(() => {
     let cancelled = false;
-    void api<Customers>('/api/support/customers?page=' + page, { signal: AbortSignal.timeout(10000) }).then(response => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const refreshUntil = Date.now() + 65000;
+    const load = async () => {
+      const response = await api<Customers>('/api/support/customers?page=' + page, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+      });
       if (cancelled) return;
       if (response.ok && response.data) {
         setResult(response.data);
         setNotice('');
+        if (response.data.pending && Date.now() < refreshUntil) timer = setTimeout(() => void load(), 2500);
       } else setNotice(response.error || 'دریافت کاربران ناموفق بود');
-    });
-    return () => { cancelled = true; };
+    };
+    void load();
+    return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
   }, [page, refresh]);
   return <main className="mx-auto max-w-4xl p-4 space-y-4" dir="rtl">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">

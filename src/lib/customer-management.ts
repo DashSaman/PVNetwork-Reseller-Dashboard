@@ -1,4 +1,5 @@
 import { db } from './db';
+import { saveManualUserStatus } from './renewal-status';
 import { normalizedLabels, onlineTimestamp, type UsageHistory } from './customer-model';
 import { getResellerWithAccess, withResellerLock, parseInboundRefs, validateInboundSelection } from './reseller-helpers';
 import { getRequiredUserPanelIds, confirmQueuedUserUpdates, confirmAcknowledgedDeletions } from './accounting-ops';
@@ -130,7 +131,11 @@ export async function setCustomerStatus(resellerId: string, userId: string, emai
         if (!c || identity(c) !== meta.identities[id] || c.enable !== enable) errors.push('وضعیت نهایی تأیید نشد');
       }
     }
-    await db.operationJournal.update({ where: { id: journal.id }, data: { status: errors.length ? 'PARTIAL' : 'SUCCESS', lastError: errors.length ? errors.join(' | ') : null } });
+    const journalId = journal.id;
+    await db.$transaction(async tx => {
+      await tx.operationJournal.update({ where: { id: journalId }, data: { status: errors.length ? 'PARTIAL' : 'SUCCESS', lastError: errors.length ? errors.join(' | ') : null } });
+      if (!errors.length) await saveManualUserStatus(tx, userId, enable);
+    });
     if (errors.length) return fail(errors.join(' | '));
     await logActivity({ actorType: 'RESELLER', actorName: reseller.username, resellerId, action: 'تغییر گروهی وضعیت کاربر', detail: `${email} | ${enable ? 'فعال' : 'غیرفعال'}` });
     return { email, ok: true };

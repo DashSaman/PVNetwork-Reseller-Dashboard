@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
       usedGB: complete ? Math.round(canonicalUserUsage(panels, user.email).usedBytes / 1073741824 * 100) / 100 : null,
       expiryTime: complete ? Math.max(...stats.map(s => s.expiryTime || 0)) : null,
       enable: complete ? stats.every(s => s.enable ?? true) : null,
-      lastSubFetch: fetchTimes.get(user.email) ?? null,
+      lastSubFetch: user.subId ? fetchTimes.get(user.subId) ?? null : null,
     };
   }));
   return NextResponse.json({ users, live: snapshot !== null, pending: snapshot?.pending || false, stale: snapshot?.stale || false }, { headers: { "Cache-Control": "private, no-store, max-age=0" } });

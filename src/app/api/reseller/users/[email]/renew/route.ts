@@ -6,7 +6,7 @@ import { withResellerLock } from '@/lib/reseller-helpers';
 import { operationInstallation } from '@/lib/operation-installation';
 import { parseAutoRenewalLimits, parseRenewalPlan, readAutoRenewal, renewalCap, renewalSettingKey } from '@/lib/renewal-plan';
 import { renewUserByJournal } from '@/lib/accounting-ops';
-import { completedAutoRenewals, renewalStatusKey } from '@/lib/renewal-status';
+import { completedAutoRenewals, isRenewalPaused, renewalStatusKey } from '@/lib/renewal-status';
 
 type Context = { params: Promise<{ email: string }> };
 
@@ -29,7 +29,7 @@ export async function GET(_request: NextRequest, { params }: Context) {
   } catch { /* Ignore malformed restored status. */ }
   return NextResponse.json({
     plan: { trafficGB: plan.trafficGB, days: plan.days, maxRenewals: plan.maxRenewals, stopAt: plan.stopAt },
-    completed, stopped: renewalCap(plan, completed) || (balanceBlocked ? 'balance' : null),
+    completed, stopped: await isRenewalPaused(customer) ? 'disabled' : renewalCap(plan, completed) || (balanceBlocked ? 'balance' : null),
   }, { headers });
 }
 

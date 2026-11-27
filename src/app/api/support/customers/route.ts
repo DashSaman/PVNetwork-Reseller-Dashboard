@@ -1,6 +1,7 @@
 import { db } from '@/lib/db';
 import { inspectDashboardSession } from '@/lib/session';
-import { getAllPanelInboundsForUi } from '@/lib/panel-manager';
+import { getAllPanelInboundsForUi, getPrimaryPanel } from '@/lib/panel-manager';
+import { parseInboundRefs } from '@/lib/reseller-helpers';
 
 export async function GET(request: Request) {
   const session = await inspectDashboardSession();
@@ -9,19 +10,33 @@ export async function GET(request: Request) {
   }
   const page = Number(new URL(request.url).searchParams.get('page') || '0');
   if (!Number.isSafeInteger(page) || page < 0 || page > 5000) return Response.json({ error: 'شماره صفحه نامعتبر است' }, { status: 400 });
+  const headers = { 'Cache-Control': 'private, no-store' };
   const tracked = await db.resellerUser.findMany({
     where: { resellerId: session.supportOwnerId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    take: 26, skip: page * 25, select: { email: true, name: true, subId: true },
+    take: 26, skip: page * 25, select: { email: true, name: true, subId: true, panelId: true, inboundIds: true },
   });
-  const snapshot = await getAllPanelInboundsForUi();
+  if (!tracked.length) return Response.json({ users: [], more: false, pending: false }, { headers });
+
+  const [snapshot, primary] = await Promise.all([getAllPanelInboundsForUi(), getPrimaryPanel()]);
+  const fresh = new Set(snapshot.freshPanelIds);
+  const pendingPanels = new Set(snapshot.pendingPanelIds);
+  const panels = new Map(snapshot.panels.map(panel => [panel.panelId, panel.inbounds]));
+  let pending = false;
   const users = tracked.slice(0, 25).map(user => {
-    const profiles = !user.subId ? [] : snapshot.panels.flatMap(panel => panel.inbounds.flatMap(inbound =>
-      inbound.clients.filter(client => client.email === user.email && client.subId === user.subId)));
-    const fresh = snapshot.ok && !snapshot.pending && !snapshot.stale && !snapshot.errors.length && profiles.length > 0;
+    const refs = parseInboundRefs(user.inboundIds, user.panelId || primary?.id || '');
+    if (refs.some(ref => pendingPanels.has(ref.panelId))) pending = true;
+    const profiles = !user.subId ? [] : refs.flatMap(ref => {
+      if (!fresh.has(ref.panelId)) return [];
+      const profile = panels.get(ref.panelId)?.find(inbound => inbound.id === ref.inboundId)?.clients
+        .find(client => client.email === user.email && client.subId === user.subId);
+      return profile ? [profile] : [];
+    });
+    const confirmed = refs.length > 0 && profiles.length === refs.length
+      && profiles.every(client => typeof client.enable === 'boolean' && Number.isSafeInteger(client.expiryTime));
     return { email: user.email, name: user.name,
-      enabled: fresh ? profiles.every(client => client.enable ?? true) : null,
-      expiry: fresh ? Math.max(...profiles.map(client => client.expiryTime || 0)) : null,
+      enabled: confirmed ? profiles.every(client => client.enable === true) : null,
+      expiry: confirmed ? Math.max(...profiles.map(client => client.expiryTime!)) : null,
     };
   });
-  return Response.json({ users, more: tracked.length > 25 }, { headers: { 'Cache-Control': 'private, no-store' } });
+  return Response.json({ users, more: tracked.length > 25, pending }, { headers });
 }
