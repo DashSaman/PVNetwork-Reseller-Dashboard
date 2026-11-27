@@ -466,6 +466,43 @@ try{
    assert.deepEqual(JSON.parse(journal.metadata).renewal,JSON.parse(beforeJournal.metadata).renewal);
    assert.equal(staged.used,2*GB);assert.equal(staged.totalGB,10*GB);assert.equal(readyFunds.data.permissions.remainingGB,50);
   });
+  const lateOwner=await owner('late-renewal-owner',100),late=await seed(lateOwner,'late-renewal',20);
+  const lateBytes=13*1024**2;
+  late.totalGB=20*GB;late.used=20*GB+14*1024**2;late.enable=false;
+  const previousBytes=late.used;
+  const lateUser=await db.resellerUser.update({where:{resellerId_email:{resellerId:lateOwner.id,email:late.email}},data:{trafficGB:20}});
+  const latePath='/api/reseller/users/'+late.email+'/renew',latePlan={trafficGB:20,days:30,requestId:'renew-late-traffic-fixture'};
+  // Simulate late accounting arriving after a completed reset, during the new quota update.
+  const lateBehavior={dropUpdate:true,useAfterUpdate:lateBytes};
+  mode.set(late.email,lateBehavior);
+  const interrupted=await api(lateOwner,latePath,'POST',latePlan);
+  lateBehavior.dropUpdate=false;
+  const resumed=await api(lateOwner,latePath,'POST',latePlan);
+  const repeated=await api(lateOwner,latePath,'POST',latePlan);
+  const settledLate=await db.operationJournal.findFirstOrThrow({where:{userId:lateUser.id,type:'RESET'}});
+  const lateAccount=await db.reseller.findUniqueOrThrow({where:{id:lateOwner.id}});
+  const lateFunds=await api(lateOwner,'/api/reseller/bootstrap');
+  check('renewal resumes after late usage arrives with one reset and preserves both periods',()=>{
+   assert.equal(interrupted.status,202,JSON.stringify(interrupted.data));
+   assert.equal(resumed.status,200,JSON.stringify(resumed.data));assert.equal(repeated.status,200);
+   assert.equal(late.enable,true);assert.equal(late.used,lateBytes);assert.equal(lateBehavior.resets,1);
+   assert.equal(settledLate.status,'SUCCESS');assert.equal(settledLate.accountingCommitted,true);assert.equal(settledLate.reservedGB,0);
+   assert.equal(settledLate.usageSnapshotGB,previousBytes/GB);assert.equal(lateAccount.consumedGB,previousBytes/GB);
+   assert.equal(lateFunds.data.permissions.remainingGB,100-20-previousBytes/GB);
+  });
+  for(const [name,trafficGB,bytes] of [['stale-renewal-counter',25,20*GB],['full-renewal-counter',10,10*GB]]) {
+   const targetOwner=await owner(name+'-owner',100), account=await seed(targetOwner,name,20);
+   account.totalGB=20*GB;account.enable=false;
+   const tracked=await db.resellerUser.update({where:{resellerId_email:{resellerId:targetOwner.id,email:name}},data:{trafficGB:20}});
+   const counters={useAfterUpdate:bytes};mode.set(name,counters);
+   const response=await api(targetOwner,'/api/reseller/users/'+name+'/renew','POST',{trafficGB,days:30,requestId:name+'-test'});
+   const waiting=await db.operationJournal.findFirstOrThrow({where:{userId:tracked.id,type:'RESET'}});
+   check('renewal with '+name+' keeps the existing reservation and remains disabled',()=>{
+    assert.equal(response.status,202,JSON.stringify(response.data));assert.equal(account.enable,false);
+    assert.equal(account.used,bytes);assert.equal(counters.resets,1);
+    assert.equal(waiting.accountingCommitted,false);assert.equal(waiting.status,'PARTIAL');assert.ok(waiting.reservedGB>0);
+   });
+  }
   const expiredOwner=await owner('renew-partial-owner',50),expired=await seed(expiredOwner,'renew-partial',3);
   expired.expiryTime=Date.now()-86400000;expired.enable=false;
   const partialPlan={trafficGB:7,days:17,requestId:'renewal-retry-fixture'};

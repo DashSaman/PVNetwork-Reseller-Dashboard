@@ -16,7 +16,7 @@ import { completedAutoRenewals, isRenewalPaused, manualUserStatusKey, renewalSta
 import { queueAccountingEvents } from './event-webhooks';
 import { manualRenewalDraftKey, readManualRenewalDraft, renewalCap } from './renewal-plan';
 import { getForfeitedGB } from './deletion-refund-ledger';
-import { isTrafficQuotaGB } from './traffic-quota';
+import { BYTES_PER_GIB, isTrafficQuotaGB } from './traffic-quota';
 import { parseRenewalPlan, readAutoRenewal, readRenewalJournal, renewalSettingKey, type RenewalPlan } from './renewal-plan';
 
 /**
@@ -735,17 +735,31 @@ export async function renewUserByJournal(
     if (!journal.accountingCommitted) {
       const reset = await executeAcrossPanels(journalId, required.panelIds, parseArr(journal.completedPanels), 'reset', email);
       if (reset.failed.length) return pending('مصرف دورهٔ قبلی محفوظ است؛ تمدید در انتظار تأیید همهٔ لوکیشن‌هاست');
+      const checkpoint = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId }, select: { metadata: true } });
+      const resetMetadata = updateMetadata(checkpoint.metadata);
       if (!renewal.expiryTime) {
         renewal = { ...renewal, expiryTime: Date.now() + renewal.days * 86400000 };
-        const row = await db.operationJournal.findUniqueOrThrow({ where: { id: journalId } });
-        await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...updateMetadata(row.metadata), renewal }) } });
+        await db.operationJournal.update({ where: { id: journalId }, data: { metadata: JSON.stringify({ ...resetMetadata, renewal }) } });
       }
-      const totalGB = renewal.trafficGB * 1073741824;
+      const totalBytes = renewal.trafficGB * BYTES_PER_GIB;
+      const priorUsage = resetMetadata.usageByPanel as Record<string, number> | undefined;
+      let usedAfterReset = 0;
       for (const target of targets) {
-        const update = await updateClient(target.conn, email, '', { id: target.identity, subId: tracked.subId, enable: false, totalGB, expiryTime: renewal.expiryTime });
+        const update = await updateClient(target.conn, email, '', { id: target.identity, subId: tracked.subId, enable: false, totalGB: totalBytes, expiryTime: renewal.expiryTime });
         if (!update.ok) return pending('بستهٔ جدید روی همهٔ لوکیشن‌ها تأیید نشده است');
-        const usage = await getVerifiedClientUsage(target.conn, email, totalGB);
-        if (!usage.ok || usage.data !== 0) return pending('تأیید مصرف صفر دورهٔ جدید در انتظار همگام‌سازی است');
+        const used = await getVerifiedClientUsage(target.conn, email, totalBytes);
+        if (!used.ok || used.data === undefined || !Number.isSafeInteger(used.data) || used.data < 0) {
+          return pending('تأیید مصرف دورهٔ جدید در انتظار همگام‌سازی است');
+        }
+        // A completed reset may be followed by late counter writes. Keep those
+        // bytes on the new quota. A stale pre-reset reading still blocks activation.
+        const previousGB = priorUsage?.[target.id];
+        if (used.data > 0 && (typeof previousGB !== 'number' || !Number.isFinite(previousGB)
+          || previousGB < 0 || (previousGB > 0 && used.data >= previousGB * BYTES_PER_GIB))) {
+          return pending('تأیید کاهش شمارنده پس از ریست در انتظار همگام‌سازی است');
+        }
+        usedAfterReset += used.data;
+        if (usedAfterReset >= totalBytes) return pending('مصرف ثبت‌شده به سقف بستهٔ جدید رسیده است');
       }
       const trafficGB = renewal.trafficGB;
       await db.$transaction(async tx => {
